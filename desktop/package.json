@@ -1,0 +1,44 @@
+{
+  "name": "musictoolkit-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop shell for the Personal Music Toolkit — spawns the Python backend and displays its existing dashboard in a native window.",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.cblasingame.musictoolkit",
+    "productName": "Music Toolkit",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/main/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "resources/mtk-backend.exe", "to": "mtk-backend.exe" }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Music Toolkit"
+    }
+  }
+}

@@ -47,6 +47,14 @@ Commands are introduced incrementally as each build phase lands:
 Every destructive operation (tag writes, file moves, device sync) defaults to
 a dry-run; pass `--apply` to actually execute.
 
+## Desktop app (Windows)
+
+A double-click installer is available — a minimal Electron shell spawns
+this same backend as a bundled executable and displays its dashboard in a
+native window. See [`desktop/README.md`](desktop/README.md) for the build
+steps (must be built on Windows). It packages the dashboard only; scan/tag/
+organize/dedupe/sync/import-spotify/recommend remain CLI-only for now.
+
 ## Development
 
 ```bash
