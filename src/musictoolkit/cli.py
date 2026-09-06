@@ -50,11 +50,6 @@ def _configure_musicbrainz() -> None:
     musicbrainz_client.configure(cfg.musicbrainz.app_name, cfg.musicbrainz.app_version, cfg.musicbrainz.contact)
 
 
-def _not_implemented(command: str, phase: str) -> None:
-    typer.echo(f"'{command}' is not implemented yet — arriving in {phase}.")
-    raise typer.Exit(code=1)
-
-
 @app.command()
 def scan(path: str = typer.Argument(..., help="Library root to scan")) -> None:
     """Scan a library root and populate the tracks table."""
@@ -347,9 +342,20 @@ def review() -> None:
 
 
 @app.command()
-def dashboard() -> None:
+def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127.0.0.1")) -> None:
     """Launch the optional local-only web dashboard (127.0.0.1 only)."""
-    _not_implemented("dashboard", "Phase 5")
+    # Imported lazily: FastAPI/uvicorn are only needed for this one optional
+    # command, so every other subcommand stays fast to start and doesn't
+    # require them to even be installed.
+    import uvicorn
+
+    from musictoolkit.dashboard import app as dashboard_module
+
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    db_path = state["db_path"] or cfg.database.path
+    dashboard_module.configure(Path(db_path))
+    typer.echo(f"Starting dashboard at http://127.0.0.1:{port} (Ctrl+C to stop)")
+    uvicorn.run(dashboard_module.app, host="127.0.0.1", port=port)
 
 
 if __name__ == "__main__":

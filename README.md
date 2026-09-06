@@ -42,7 +42,7 @@ Commands are introduced incrementally as each build phase lands:
 | `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History | Done |
 | `mtk recommend [--source listenbrainz\|lastfm\|both] [--limit N]` | Fetch new-music recommendations | Done |
 | `mtk review` | Triage pending recommendations | Done |
-| `mtk dashboard` | Optional local-only web dashboard (127.0.0.1 only) | Phase 5 |
+| `mtk dashboard [--port N]` | Optional local-only web dashboard (127.0.0.1 only) | Done |
 
 Every destructive operation (tag writes, file moves, device sync) defaults to
 a dry-run; pass `--apply` to actually execute.

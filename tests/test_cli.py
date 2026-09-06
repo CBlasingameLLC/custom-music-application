@@ -22,18 +22,11 @@ EXPECTED_COMMANDS = [
 ]
 
 
-def test_help_lists_all_stubbed_commands() -> None:
+def test_help_lists_all_commands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     for command in EXPECTED_COMMANDS:
         assert command in result.output
-
-
-def test_unimplemented_command_exits_nonzero_with_message() -> None:
-    result = runner.invoke(app, ["dashboard"])
-    assert result.exit_code == 1
-    assert "not implemented yet" in result.output
-    assert "Phase 5" in result.output
 
 
 def test_review_command_applies_chosen_statuses(tmp_path: Path) -> None:
