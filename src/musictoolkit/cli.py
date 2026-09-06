@@ -1,6 +1,14 @@
+from pathlib import Path
 from typing import Optional
 
 import typer
+
+from musictoolkit.config import Config, load_config
+from musictoolkit.db.connection import connect
+from musictoolkit.ingest import dedupe as dedupe_ops
+from musictoolkit.ingest import organizer, scanner, tagger
+from musictoolkit.integrations import musicbrainz_client
+from musictoolkit.logging_setup import setup_logging
 
 app = typer.Typer(
     name="mtk",
@@ -8,7 +16,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-state: dict[str, object] = {"config_path": "config.toml", "db_path": None, "verbose": False}
+state: dict[str, object] = {"config_path": "config.toml", "db_path": None, "verbose": False, "config": Config()}
 
 
 @app.callback()
@@ -17,9 +25,23 @@ def main(
     db: Optional[str] = typer.Option(None, "--db", help="Override database path"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
 ) -> None:
+    cfg = load_config(config)
     state["config_path"] = config
     state["db_path"] = db
     state["verbose"] = verbose
+    state["config"] = cfg
+    setup_logging(cfg.logging.dir, "DEBUG" if verbose else cfg.logging.level)
+
+
+def _connection():
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    db_path = state["db_path"] or cfg.database.path
+    return connect(db_path)
+
+
+def _configure_musicbrainz() -> None:
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    musicbrainz_client.configure(cfg.musicbrainz.app_name, cfg.musicbrainz.app_version, cfg.musicbrainz.contact)
 
 
 def _not_implemented(command: str, phase: str) -> None:
@@ -30,7 +52,13 @@ def _not_implemented(command: str, phase: str) -> None:
 @app.command()
 def scan(path: str = typer.Argument(..., help="Library root to scan")) -> None:
     """Scan a library root and populate the tracks table."""
-    _not_implemented("scan", "Phase 1")
+    conn = _connection()
+    result = scanner.scan_library(conn, Path(path))
+    conn.close()
+    typer.echo(
+        f"Added: {result.added}  Updated: {result.updated}  Unchanged: {result.unchanged}  "
+        f"Missing: {result.missing}  Errors: {result.errors}"
+    )
 
 
 @app.command()
@@ -39,7 +67,24 @@ def tag(
     apply: bool = typer.Option(False, "--apply", help="Write changes; default is dry-run"),
 ) -> None:
     """Enrich sparse tags via MusicBrainz lookups."""
-    _not_implemented("tag", "Phase 1")
+    conn = _connection()
+    _configure_musicbrainz()
+    result = tagger.propose_tags(conn, Path(path))
+
+    typer.echo(f"Proposed: {len(result.proposals)}  No match: {result.skipped_no_match}  Errors: {result.errors}")
+    for p in result.proposals:
+        typer.echo(f"  {p.file_path}")
+        typer.echo(
+            f"    -> title={p.proposed.get('title')!r} artist={p.proposed.get('artist')!r} "
+            f"album={p.proposed.get('album')!r} (confidence={p.mb_confidence:.2f})"
+        )
+
+    if apply:
+        tagger.apply_tags(conn, result.proposals)
+        typer.echo(f"Applied {len(result.proposals)} tag updates.")
+    elif result.proposals:
+        typer.echo("Dry run — pass --apply to write these changes.")
+    conn.close()
 
 
 @app.command()
@@ -48,15 +93,51 @@ def organize(
     apply: bool = typer.Option(False, "--apply", help="Write changes; default is dry-run"),
 ) -> None:
     """Move/rename files into the canonical folder scheme."""
-    _not_implemented("organize", "Phase 1")
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    conn = _connection()
+    result = organizer.propose_organization(conn, Path(path), cfg.library.canonical_scheme)
+
+    typer.echo(
+        f"To move: {len(result.proposals)}  Unchanged: {result.unchanged}  Collisions: {len(result.collisions)}"
+    )
+    for p in result.proposals:
+        typer.echo(f"  {p.old_path} -> {p.new_path}")
+    for old, new in result.collisions:
+        typer.echo(f"  COLLISION (skipped): {old} -> {new}")
+
+    if apply:
+        moved = organizer.apply_organization(conn, result.proposals)
+        typer.echo(f"Moved {moved} files.")
+    elif result.proposals:
+        typer.echo("Dry run — pass --apply to write these changes.")
+    conn.close()
 
 
 @app.command()
 def dedupe(
+    use_content_hash: bool = typer.Option(
+        False, "--content-hash", help="Also compare by content hash (slower, most thorough)"
+    ),
     apply: bool = typer.Option(False, "--apply", help="Quarantine losers; default is dry-run"),
 ) -> None:
     """Detect likely-duplicate tracks."""
-    _not_implemented("dedupe", "Phase 1")
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    conn = _connection()
+    library_root = Path(cfg.library.roots[0]) if cfg.library.roots else Path(".")
+    groups = dedupe_ops.find_duplicate_groups(conn, library_root, use_content_hash)
+
+    typer.echo(f"Duplicate groups found: {len(groups)}")
+    for group in groups:
+        typer.echo(f"  [{group.reason}] {group.key}")
+        for file_path in group.file_paths:
+            typer.echo(f"    {file_path}")
+
+    if apply:
+        moved = dedupe_ops.apply_quarantine(conn, groups, library_root)
+        typer.echo(f"Quarantined {moved} duplicate files into _duplicates_review/.")
+    elif groups:
+        typer.echo("Dry run — pass --apply to quarantine losers into _duplicates_review/.")
+    conn.close()
 
 
 @app.command()

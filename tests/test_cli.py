@@ -26,7 +26,7 @@ def test_help_lists_all_stubbed_commands() -> None:
 
 
 def test_unimplemented_command_exits_nonzero_with_message() -> None:
-    result = runner.invoke(app, ["scan", "/some/path"])
+    result = runner.invoke(app, ["devices"])
     assert result.exit_code == 1
     assert "not implemented yet" in result.output
-    assert "Phase 1" in result.output
+    assert "Phase 2" in result.output
