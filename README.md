@@ -39,7 +39,7 @@ Commands are introduced incrementally as each build phase lands:
 | `mtk devices` | List detected removable volumes | Done |
 | `mtk import-playlist <path> [--name NAME]` | Import an M3U/M3U8 playlist | Done |
 | `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Sync a selection onto a device | Done |
-| `mtk import-spotify <zip_or_folder>` | Import Spotify's Extended Streaming History | Phase 3 |
+| `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History | Done |
 | `mtk recommend` | Fetch new-music recommendations | Phase 4 |
 | `mtk review` | Triage pending recommendations | Phase 4 |
 | `mtk dashboard` | Optional local-only web dashboard (127.0.0.1 only) | Phase 5 |

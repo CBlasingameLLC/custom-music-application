@@ -1,4 +1,5 @@
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -6,6 +7,7 @@ import typer
 
 from musictoolkit.config import Config, load_config
 from musictoolkit.db.connection import connect
+from musictoolkit.history import spotify_import
 from musictoolkit.ingest import dedupe as dedupe_ops
 from musictoolkit.ingest import organizer, scanner, tagger
 from musictoolkit.integrations import musicbrainz_client
@@ -227,7 +229,41 @@ def import_spotify(
     ),
 ) -> None:
     """Import Spotify's Extended Streaming History export."""
-    _not_implemented("import-spotify", "Phase 3")
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    conn = _connection()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            summary = spotify_import.import_history(conn, Path(zip_or_folder), Path(tmp))
+        except ValueError as exc:
+            typer.echo(str(exc))
+            conn.close()
+            raise typer.Exit(code=1)
+
+    typer.echo(
+        f"Rows seen: {summary.total_rows_seen}  Music: {summary.music_rows}  "
+        f"Podcast/other skipped: {summary.podcast_rows_skipped}"
+    )
+    if summary.date_range:
+        typer.echo(f"Date range: {summary.date_range[0]} to {summary.date_range[1]}")
+    if summary.top_artists:
+        typer.echo("Top artists by play count:")
+        for artist, count in summary.top_artists:
+            typer.echo(f"  {artist}: {count}")
+    typer.echo(
+        f"Inserted: {summary.inserted}  Already imported: {summary.duplicates_skipped}  "
+        f"Matched to library: {summary.matched_to_library}"
+    )
+
+    if submit_listenbrainz:
+        if not cfg.listenbrainz.user_token:
+            typer.echo("No ListenBrainz user token configured — set listenbrainz.user_token in config.toml first.")
+            conn.close()
+            raise typer.Exit(code=1)
+        submitted = spotify_import.backfill_to_listenbrainz(conn, cfg.listenbrainz.user_token)
+        typer.echo(f"Submitted {submitted} listens to ListenBrainz.")
+
+    conn.close()
 
 
 @app.command()
