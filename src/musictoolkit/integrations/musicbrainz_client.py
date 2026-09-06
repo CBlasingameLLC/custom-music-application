@@ -28,3 +28,15 @@ def best_match(artist: str, title: str) -> dict | None:
     if not candidates:
         return None
     return max(candidates, key=lambda rec: int(rec.get("ext:score", 0)))
+
+
+def get_recording(mbid: str) -> dict | None:
+    """Resolve a bare recording MBID (e.g. from a ListenBrainz recommendation)
+    to its title and artist-credit. Returns None if the MBID doesn't resolve."""
+    if not _configured:
+        raise RuntimeError("musicbrainz_client.configure() must be called first")
+    try:
+        result = musicbrainzngs.get_recording_by_id(mbid, includes=["artists"])
+    except musicbrainzngs.ResponseError:
+        return None
+    return result.get("recording")

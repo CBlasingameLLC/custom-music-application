@@ -24,3 +24,22 @@ def submit_listens(user_token: str, listens: list[dict]) -> None:
     response = requests.post(f"{_BASE_URL}/submit-listens", json=payload, headers=headers, timeout=30)
     if response.status_code != 200:
         raise ListenBrainzError(f"submit-listens failed ({response.status_code}): {response.text}")
+
+
+def get_cf_recommendations(user_name: str, user_token: str | None, count: int = 50, offset: int = 0) -> list[dict]:
+    """Fetch this user's collaborative-filtering recording recommendations —
+    raw recording MBIDs + scores generated server-side by ListenBrainz, not
+    a from-scratch recommender. Each entry needs a follow-up MusicBrainz
+    lookup to resolve into an artist/track name."""
+    headers = {}
+    if user_token:
+        headers["Authorization"] = f"Token {user_token}"
+    response = requests.get(
+        f"{_BASE_URL}/cf/recommendation/user/{user_name}/recording",
+        params={"count": count, "offset": offset},
+        headers=headers,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise ListenBrainzError(f"recommendation fetch failed ({response.status_code}): {response.text}")
+    return response.json().get("payload", {}).get("mbids", [])

@@ -10,8 +10,9 @@ from musictoolkit.db.connection import connect
 from musictoolkit.history import spotify_import
 from musictoolkit.ingest import dedupe as dedupe_ops
 from musictoolkit.ingest import organizer, scanner, tagger
-from musictoolkit.integrations import musicbrainz_client
+from musictoolkit.integrations import lastfm_client, musicbrainz_client
 from musictoolkit.logging_setup import setup_logging
+from musictoolkit.recommend import engine, review_queue
 from musictoolkit.sync import device_detect, mirror, playlist_import
 from musictoolkit.sync import selector as selector_ops
 
@@ -272,13 +273,77 @@ def recommend(
     limit: int = typer.Option(20, help="Max recommendations to fetch"),
 ) -> None:
     """Fetch new-music recommendations not already in the library."""
-    _not_implemented("recommend", "Phase 4")
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    conn = _connection()
+    candidates: list[engine.Candidate] = []
+
+    if source in ("listenbrainz", "both"):
+        if not cfg.listenbrainz.enabled:
+            typer.echo("ListenBrainz is disabled in config.")
+        elif not cfg.listenbrainz.username:
+            typer.echo("No ListenBrainz username configured — set listenbrainz.username in config.toml.")
+        else:
+            _configure_musicbrainz()
+            try:
+                candidates.extend(
+                    engine.fetch_listenbrainz_candidates(
+                        cfg.listenbrainz.username, cfg.listenbrainz.user_token or None, limit
+                    )
+                )
+            except Exception as exc:
+                typer.echo(f"ListenBrainz fetch failed: {exc}")
+
+    if source in ("lastfm", "both"):
+        if not cfg.lastfm.enabled:
+            typer.echo("Last.fm is disabled in config (it's secondary/optional by default).")
+        elif not cfg.lastfm.api_key:
+            typer.echo("No Last.fm API key configured — set lastfm.api_key in config.toml.")
+        else:
+            lastfm_client.configure(cfg.lastfm.api_key, cfg.lastfm.api_secret)
+            seed_artists = engine.top_played_artists(conn, limit=10)
+            try:
+                candidates.extend(engine.fetch_lastfm_candidates(seed_artists, limit_per_artist=5))
+            except Exception as exc:
+                typer.echo(f"Last.fm fetch failed: {exc}")
+
+    new_candidates = engine.filter_owned(conn, candidates)
+    weights = engine.compute_play_history_weights(conn)
+    ranked = engine.rank(new_candidates, weights)
+    saved = engine.save_recommendations(conn, ranked)
+
+    typer.echo(
+        f"Fetched: {len(candidates)}  Already owned (filtered): {len(candidates) - len(new_candidates)}  "
+        f"New: {len(new_candidates)}  Saved: {saved}"
+    )
+    for c in ranked[:limit]:
+        label = c.artist_name + (f" - {c.track_name}" if c.track_name else "")
+        typer.echo(f"  [{c.source}] {label}  (score={c.score:.2f})  {c.reason}")
+
+    conn.close()
 
 
 @app.command()
 def review() -> None:
     """Triage pending recommendations (owned / dismissed / accepted)."""
-    _not_implemented("review", "Phase 4")
+    conn = _connection()
+    pending = review_queue.list_pending(conn)
+    if not pending:
+        typer.echo("No pending recommendations. Run `mtk recommend` first.")
+        conn.close()
+        return
+
+    for row in pending:
+        label = row["artist_name"] + (f" - {row['track_name']}" if row["track_name"] else "")
+        typer.echo(f"\n[{row['id']}] {label}  (source={row['source']}, score={row['score']:.2f})")
+        typer.echo(f"    {row['reason']}")
+        choice = typer.prompt("  (o)wned / (d)ismiss / (a)ccept / (s)kip", default="s")
+        if choice.lower().startswith("o"):
+            review_queue.set_status(conn, row["id"], "owned")
+        elif choice.lower().startswith("d"):
+            review_queue.set_status(conn, row["id"], "dismissed")
+        elif choice.lower().startswith("a"):
+            review_queue.set_status(conn, row["id"], "accepted")
+    conn.close()
 
 
 @app.command()

@@ -21,6 +21,7 @@ class MusicBrainzConfig:
 @dataclass
 class ListenBrainzConfig:
     enabled: bool = True
+    username: str = ""
     user_token: str = ""
 
 

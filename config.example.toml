@@ -9,7 +9,8 @@ app_version = "0.1.0"
 
 [listenbrainz]
 enabled = true
-user_token = ""      # from listenbrainz.org/profile/
+username = ""         # your ListenBrainz username (used to fetch recommendations)
+user_token = ""       # from listenbrainz.org/profile/ (used to submit/backfill listens)
 
 [lastfm]
 enabled = false       # secondary/optional — ListenBrainz is primary
