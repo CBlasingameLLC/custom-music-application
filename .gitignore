@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Runtime data — real user data, never commit
+data/
+logs/
+
+# Real secrets/paths — commit config.example.toml instead
+config.toml
+
+.pytest_cache/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

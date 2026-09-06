@@ -1,0 +1,27 @@
+[library]
+roots = ["/path/to/your/mp3s"]
+canonical_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
+
+[musicbrainz]
+contact = ""        # your email or project URL — required by MusicBrainz API etiquette
+app_name = "custom-music-application"
+app_version = "0.1.0"
+
+[listenbrainz]
+enabled = true
+user_token = ""      # from listenbrainz.org/profile/
+
+[lastfm]
+enabled = false       # secondary/optional — ListenBrainz is primary
+api_key = ""
+api_secret = ""
+
+[sync]
+device_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
+
+[database]
+path = "./data/library.db"
+
+[logging]
+level = "INFO"
+dir = "./logs"
