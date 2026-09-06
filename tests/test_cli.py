@@ -22,8 +22,11 @@ EXPECTED_COMMANDS = [
 ]
 
 
-def test_help_lists_all_commands() -> None:
-    result = runner.invoke(app, ["--help"])
+def test_help_lists_all_commands(tmp_path: Path) -> None:
+    # Explicit --config keeps this test from touching a real ~/.musictoolkit
+    # on whatever machine runs the suite, even though --help may or may not
+    # short-circuit before the callback body runs.
+    result = runner.invoke(app, ["--config", str(tmp_path / "config.toml"), "--help"])
     assert result.exit_code == 0
     for command in EXPECTED_COMMANDS:
         assert command in result.output
@@ -43,7 +46,11 @@ def test_review_command_applies_chosen_statuses(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    result = runner.invoke(app, ["--db", str(db_path), "review"], input="accept\ndismiss\n")
+    result = runner.invoke(
+        app,
+        ["--config", str(tmp_path / "config.toml"), "--db", str(db_path), "review"],
+        input="accept\ndismiss\n",
+    )
     assert result.exit_code == 0
 
     conn2 = connect(db_path)

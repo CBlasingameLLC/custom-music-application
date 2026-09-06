@@ -1,11 +1,12 @@
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from musictoolkit.config import Config, load_config
+from musictoolkit.config import Config, bootstrap_if_missing, load_config, resolve_config_path
 from musictoolkit.db.connection import connect
 from musictoolkit.history import spotify_import
 from musictoolkit.ingest import dedupe as dedupe_ops
@@ -25,14 +26,29 @@ app = typer.Typer(
 state: dict[str, object] = {"config_path": "config.toml", "db_path": None, "verbose": False, "config": Config()}
 
 
+def _find_example_config() -> Optional[Path]:
+    """Locate config.example.toml for the first-run bootstrap — works both
+    from a source checkout and from inside a PyInstaller onefile bundle,
+    where bundled data files are extracted to a temp dir at sys._MEIPASS."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidate = Path(sys._MEIPASS) / "config.example.toml"
+    else:
+        candidate = Path(__file__).resolve().parent.parent.parent / "config.example.toml"
+    return candidate if candidate.exists() else None
+
+
 @app.callback()
 def main(
-    config: str = typer.Option("config.toml", "--config", help="Path to config.toml"),
+    config: Optional[str] = typer.Option(
+        None, "--config", help="Path to config.toml (default: ./config.toml if present, else ~/.musictoolkit/config.toml)"
+    ),
     db: Optional[str] = typer.Option(None, "--db", help="Override database path"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
 ) -> None:
-    cfg = load_config(config)
-    state["config_path"] = config
+    resolved_config_path = resolve_config_path(config)
+    bootstrap_if_missing(resolved_config_path, example_path=_find_example_config())
+    cfg = load_config(resolved_config_path)
+    state["config_path"] = str(resolved_config_path)
     state["db_path"] = db
     state["verbose"] = verbose
     state["config"] = cfg
