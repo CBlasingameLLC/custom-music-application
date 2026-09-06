@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +10,8 @@ from musictoolkit.ingest import dedupe as dedupe_ops
 from musictoolkit.ingest import organizer, scanner, tagger
 from musictoolkit.integrations import musicbrainz_client
 from musictoolkit.logging_setup import setup_logging
+from musictoolkit.sync import device_detect, mirror, playlist_import
+from musictoolkit.sync import selector as selector_ops
 
 app = typer.Typer(
     name="mtk",
@@ -143,7 +146,28 @@ def dedupe(
 @app.command()
 def devices() -> None:
     """List detected removable volumes."""
-    _not_implemented("devices", "Phase 2")
+    candidates = device_detect.list_candidate_devices()
+    if not candidates:
+        typer.echo("No mounted volumes detected.")
+        return
+    for c in candidates:
+        marker = "*" if c.likely_removable else " "
+        typer.echo(
+            f"{marker} {c.mountpoint}  ({c.fstype})  free: {c.free_bytes / 1e9:.2f} GB / {c.total_bytes / 1e9:.2f} GB"
+        )
+    typer.echo("(* = looks removable — always verify this is the right device before syncing)")
+
+
+@app.command(name="import-playlist")
+def import_playlist_cmd(
+    path: str = typer.Argument(..., help="Path to an M3U/M3U8 playlist file"),
+    name: Optional[str] = typer.Option(None, "--name", help="Playlist name (default: filename)"),
+) -> None:
+    """Import an M3U/M3U8 playlist, matching entries to already-scanned tracks."""
+    conn = _connection()
+    matched = playlist_import.import_playlist(conn, Path(path), name)
+    typer.echo(f"Matched {matched} entries to existing tracks.")
+    conn.close()
 
 
 @app.command()
@@ -157,7 +181,42 @@ def sync(
     prune: bool = typer.Option(False, "--prune", help="Remove on-device files no longer selected"),
 ) -> None:
     """Sync a selected subset of the library onto a device."""
-    _not_implemented("sync", "Phase 2")
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    device_root = Path(target)
+    if not device_root.exists():
+        typer.echo(f"Target path does not exist: {target}")
+        raise typer.Exit(code=1)
+    device_root = device_root.resolve()
+
+    conn = _connection()
+    try:
+        selected = selector_ops.resolve_selection(conn, playlist, tag, min_rating, all_)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+
+    device_id = mirror.get_or_create_device(conn, str(device_root))
+    free_bytes = shutil.disk_usage(device_root).free
+    plan = mirror.plan_sync(conn, device_id, device_root, selected, cfg.sync.device_scheme, free_bytes)
+
+    typer.echo(
+        f"To copy: {len(plan.to_copy)}  Unchanged: {plan.unchanged}  "
+        f"To prune: {len(plan.to_prune) if prune else 0} (found: {len(plan.to_prune)})  "
+        f"Size: {plan.total_bytes_to_copy / 1e9:.3f} GB  Free: {plan.free_bytes_on_device / 1e9:.3f} GB"
+    )
+
+    if not mirror.has_sufficient_space(plan):
+        typer.echo("Not enough free space on the device for this selection. Aborting.")
+        conn.close()
+        raise typer.Exit(code=1)
+
+    if apply:
+        copied, pruned = mirror.apply_sync(conn, device_id, device_root, plan, prune)
+        suffix = f" Pruned {pruned} files." if prune else ""
+        typer.echo(f"Copied {copied} files.{suffix}")
+    else:
+        typer.echo("Dry run — pass --apply to write these changes (add --prune to also remove deselected files).")
+    conn.close()
 
 
 @app.command(name="import-spotify")

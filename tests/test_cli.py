@@ -10,6 +10,7 @@ EXPECTED_COMMANDS = [
     "organize",
     "dedupe",
     "devices",
+    "import-playlist",
     "sync",
     "import-spotify",
     "recommend",
@@ -26,7 +27,7 @@ def test_help_lists_all_stubbed_commands() -> None:
 
 
 def test_unimplemented_command_exits_nonzero_with_message() -> None:
-    result = runner.invoke(app, ["devices"])
+    result = runner.invoke(app, ["review"])
     assert result.exit_code == 1
     assert "not implemented yet" in result.output
-    assert "Phase 2" in result.output
+    assert "Phase 4" in result.output

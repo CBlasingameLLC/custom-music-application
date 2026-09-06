@@ -32,12 +32,13 @@ Commands are introduced incrementally as each build phase lands:
 
 | Command | Purpose | Status |
 |---|---|---|
-| `mtk scan <path>` | Scan a library root into the database | Phase 1 |
-| `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz | Phase 1 |
-| `mtk organize <path> [--apply]` | Move/rename into the canonical folder scheme | Phase 1 |
-| `mtk dedupe [--apply]` | Detect and quarantine likely duplicates | Phase 1 |
-| `mtk devices` | List detected removable volumes | Phase 2 |
-| `mtk sync <target> [--apply] [--prune]` | Sync a selection onto a device | Phase 2 |
+| `mtk scan <path>` | Scan a library root into the database | Done |
+| `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz | Done |
+| `mtk organize <path> [--apply]` | Move/rename into the canonical folder scheme | Done |
+| `mtk dedupe [--apply] [--content-hash]` | Detect and quarantine likely duplicates | Done |
+| `mtk devices` | List detected removable volumes | Done |
+| `mtk import-playlist <path> [--name NAME]` | Import an M3U/M3U8 playlist | Done |
+| `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Sync a selection onto a device | Done |
 | `mtk import-spotify <zip_or_folder>` | Import Spotify's Extended Streaming History | Phase 3 |
 | `mtk recommend` | Fetch new-music recommendations | Phase 4 |
 | `mtk review` | Triage pending recommendations | Phase 4 |
