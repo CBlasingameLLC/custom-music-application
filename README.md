@@ -1,88 +1,128 @@
-# Personal Music Toolkit
+# Music Toolkit
 
-A local-only, $0-cost toolkit for organizing a personal MP3 library, importing
-Spotify listening history, generating new-music recommendations via
-ListenBrainz/Last.fm, and syncing curated selections onto MP3 players/DAPs via
-microSD.
+A local-first music player and library manager for Windows. It plays your own
+files (MP3, FLAC, M4A, Ogg, Opus, WAV), organizes them, learns your taste from
+your listening, and suggests new music, with no account, no subscription and no
+cloud. The long-term goal is to replace a streaming subscription with a library
+you own.
 
-This is **not** a streaming server and **not** a player. It operates on files
-and metadata only, and hands off actual playback to whatever desktop player is
-already in use (Strawberry, MusicBee, foobar2000, VLC, etc.). Nothing here
-ever binds a network port except the optional local dashboard, which is
-strictly bound to `127.0.0.1`.
+Desktop app = Electron window + a Python (FastAPI) backend bound to
+`127.0.0.1`. Everything lives under `~/.musictoolkit/`.
 
-## Setup
+## Install (Windows)
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp config.example.toml config.toml
-# edit config.toml: set library.roots, your MusicBrainz contact email,
-# and your ListenBrainz user token (from listenbrainz.org/profile/)
-```
+Download `MusicToolkit-Setup-<version>.exe` from the
+[latest release](https://github.com/CBlasingameLLC/custom-music-application/releases/latest)
+and run it. No Python, Node or build tools needed. The installer is unsigned, so
+SmartScreen shows "unrecognized publisher" once; that is expected.
 
-## Usage
+First launch: **Add music folder**, pick your library, done. The app re-scans your
+folders each time it starts.
 
-```bash
-mtk --help
-```
+## What it does (v0.2.0)
 
-Commands are introduced incrementally as each build phase lands:
+| Area | Features |
+|---|---|
+| **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
+| **Browse** | Home shelves, Songs (virtualized; checked against a synthetic 100,000-song library, every screen answers in well under a second), Albums, Artists, Favorites, Recently played, instant search |
+| **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
+| **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
+| **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded or `.lrc`, synced highlighting), folders added from Settings |
+| **History** | Every listen is logged locally, with top-artist stats |
+| **Discover** | New-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
+| **Devices** | See connected drives and removable media |
+| **Look** | Dark and light themes, responsive down to a narrow window |
 
-| Command | Purpose | Status |
-|---|---|---|
-| `mtk scan <path>` | Scan a library root into the database | Done |
-| `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz | Done |
-| `mtk organize <path> [--apply]` | Move/rename into the canonical folder scheme | Done |
-| `mtk dedupe [--apply] [--content-hash]` | Detect and quarantine likely duplicates | Done |
-| `mtk devices` | List detected removable volumes | Done |
-| `mtk import-playlist <path> [--name NAME]` | Import an M3U/M3U8 playlist | Done |
-| `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Sync a selection onto a device | Done |
-| `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History | Done |
-| `mtk recommend [--source listenbrainz\|lastfm\|both] [--limit N]` | Fetch new-music recommendations | Done |
-| `mtk review` | Triage pending recommendations | Done |
-| `mtk dashboard [--port N]` | Optional local-only web dashboard (127.0.0.1 only) | Done |
+Still command-line only for now (they move or rewrite your files, so they ship
+with proper preview/undo screens next, in 0.3.0): MusicBrainz tag enrichment,
+renaming/organizing, duplicate review, syncing to a player/SD card, importing
+Spotify history, scrobbling. See the table below.
 
-Every destructive operation (tag writes, file moves, device sync) defaults to
-a dry-run; pass `--apply` to actually execute.
+### Keyboard
 
-## Desktop app (Windows)
+| Key | Action | Key | Action |
+|---|---|---|---|
+| `Space` | Play / pause | `M` | Mute |
+| `←` `→` | Seek 5 s | `S` / `R` | Shuffle / repeat |
+| `Shift` + `←` `→` | Previous / next | `Q` | Queue |
+| `Shift` + `↑` `↓` | Volume | `N` | Now playing |
+| `/` | Search | `L` | Favorite the current song |
 
-Download the latest `MusicToolkit-Setup-<version>.exe` from the
-[Releases page](https://github.com/CBlasingameLLC/custom-music-application/releases/latest).
-No Python, Node, or build tools required to use it.
+## Command line
 
-To build it yourself instead: a minimal Electron shell spawns this same
-backend as a bundled executable and displays its dashboard in a native
-window. See [`desktop/README.md`](desktop/README.md) for the build steps
-(must be built on Windows).
+The same backend ships as `mtk` for scripting. Every command that changes files
+defaults to a dry run; pass `--apply` to execute.
 
-Either way, the app keeps its config, library database, and logs under
-`~/.musictoolkit/` (`%USERPROFILE%\.musictoolkit\` on Windows). It can browse
-the library, scan a music folder (read-only), and triage recommendations;
-tag/organize/dedupe/sync/import-spotify/recommend remain CLI-only for now.
+| Command | Purpose |
+|---|---|
+| `mtk dashboard [--port N]` | Start the UI (what the desktop app runs). Prints a URL that includes the per-launch token |
+| `mtk scan <path>` | Scan a folder into the library database |
+| `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz |
+| `mtk organize <path> [--apply]` | Move/rename into the canonical folder scheme |
+| `mtk dedupe [--apply] [--content-hash]` | Detect and quarantine likely duplicates |
+| `mtk devices` | List removable volumes |
+| `mtk import-playlist <path> [--name NAME]` | Import an M3U/M3U8 playlist |
+| `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Copy a selection onto a device |
+| `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History |
+| `mtk recommend [--source listenbrainz\|lastfm\|both] [--limit N]` | Fetch new-music recommendations |
+| `mtk review` | Triage pending recommendations |
+
+## Where things live
+
+`~/.musictoolkit/` (`%USERPROFILE%\.musictoolkit\` on Windows)
+
+- `config.toml`: settings (edited from the app's Settings page)
+- `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
+- `cache/art/`: cached cover thumbnails (safe to delete)
+- `logs/`: `musictoolkit.log` (the app) and `backend.log` (startup output)
+
+## Security model
+
+The backend only listens on `127.0.0.1`. Because it can read your files and
+write tags, every launch generates a random token: the desktop app passes it to
+the backend through the environment and signs the window in with it; `/api/*`
+refuses requests without it, requests whose `Host` is not a loopback name are
+rejected (DNS rebinding), and a Content-Security-Policy confines the page to its
+own origin. The window itself can't navigate away or open other sites; links
+open in your default browser.
 
 ## Development
 
 ```bash
-pytest
+python3 -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e ".[dev,e2e]"
+python -m playwright install chromium                    # only for the browser tests
+mtk dashboard                                            # prints http://127.0.0.1:<port>/?token=...
 ```
 
-Test fixtures under `tests/fixtures/` are tiny synthetic MP3s with known
-baked-in tags — no real library or network access required to run the suite.
+The UI is plain ES modules in `src/musictoolkit/web/static/` (Preact + htm,
+vendored under `vendor/`, no build step, nothing to `npm install`). The API is
+in `src/musictoolkit/web/routers/`.
+
+```bash
+pytest                       # unit + API tests (~10 s); browser tests skip if Playwright is absent
+pytest tests/e2e             # the UI in real Chromium: playback, queue, drag and drop, shortcuts...
+python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend, first-run flow
+```
+
+Fixtures under `tests/fixtures/` are tiny synthetic MP3s with known tags (plus a
+12-second tone for playback tests); no real library or network is needed.
+The desktop shell and its checks are described in
+[`desktop/README.md`](desktop/README.md).
 
 ## Releasing
 
 The version lives in `src/musictoolkit/__init__.py` (`pyproject.toml` reads it)
-and `desktop/package.json`; CI fails if they disagree. To ship a release:
+and `desktop/package.json`; CI fails if they disagree.
 
 ```bash
-python scripts/bump_version.py 0.2.0   # updates every place the version lives
-git commit -am "Release 0.2.0"         # open a PR, merge to main
+python scripts/bump_version.py 0.3.0   # updates every place the version lives
+git commit -am "Release 0.3.0"         # open a PR, merge to main
 ```
 
-Merging to `main` runs `.github/workflows/build.yml`: if no `v0.2.0` tag exists
-yet, it builds and tests on Windows, tags the exact commit it built, and
-publishes the installer with generated release notes. Pull requests build and
-test everything but publish nothing.
+Merging to `main` runs `.github/workflows/build.yml`: unit tests (Windows),
+browser tests (Linux), then it builds the frozen backend and the installer,
+smoke-tests both (the installer is installed and its window driven), and, if no
+`v0.3.0` tag exists yet, tags the exact commit it built and publishes the
+installer with generated release notes. Pull requests run everything but publish
+nothing.

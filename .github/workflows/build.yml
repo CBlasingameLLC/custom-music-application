@@ -58,6 +58,27 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  # The interface in a real Chromium: clicks, keyboard, audio element, drag and drop.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev,e2e]"
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: python -m pytest tests/e2e -q
+
   build:
     needs: version
     runs-on: windows-latest
@@ -84,70 +105,10 @@ jobs:
 
       # --help never touches the database or the web server. This launches the
       # real frozen exe the way a freshly installed app starts: empty user
-      # profile, unrelated working directory, no config, no database.
-      - name: Smoke-test frozen dashboard (first run, then scan)
-        shell: pwsh
-        run: |
-          $fresh = Join-Path $env:RUNNER_TEMP 'fresh-profile'
-          $elsewhere = Join-Path $env:RUNNER_TEMP 'elsewhere'
-          $music = Join-Path $env:RUNNER_TEMP 'music'
-          New-Item -ItemType Directory -Force -Path $fresh, $elsewhere, $music | Out-Null
-          Copy-Item tests\fixtures\*.mp3 $music
-          $env:USERPROFILE = $fresh
-
-          $exe = (Resolve-Path 'dist\mtk-backend.exe').Path
-          $out = Join-Path $env:RUNNER_TEMP 'dashboard.out.log'
-          $err = Join-Path $env:RUNNER_TEMP 'dashboard.err.log'
-          $port = 45873
-          $base = "http://127.0.0.1:$port"
-          $proc = Start-Process -FilePath $exe -ArgumentList 'dashboard', '--port', "$port" `
-            -WorkingDirectory $elsewhere -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $out -RedirectStandardError $err
-
-          function Wait-ForPage([string]$path, [string]$pattern, [int]$seconds = 60) {
-            $last = 'no response'
-            for ($i = 0; $i -lt $seconds; $i++) {
-              try {
-                $r = Invoke-WebRequest -Uri "$base$path" -UseBasicParsing -TimeoutSec 5
-                if ($r.StatusCode -eq 200 -and $r.Content -match $pattern) { return $null }
-                $last = "HTTP $($r.StatusCode), page did not match '$pattern'"
-              } catch {
-                $last = $_.Exception.Message
-              }
-              Start-Sleep -Seconds 1
-            }
-            return "${path}: $last"
-          }
-
-          $problem = $null
-          try {
-            $problem = Wait-ForPage '/' 'tracks in library'
-            if (-not $problem) {
-              try {
-                $null = Invoke-WebRequest -Uri "$base/scan" -Method Post -Body @{ path = $music } -UseBasicParsing -TimeoutSec 30
-              } catch {
-                $problem = "POST /scan failed: $($_.Exception.Message)"
-              }
-            }
-            if (-not $problem) { $problem = Wait-ForPage '/scan' 'Scan finished.*2 added' }
-            if (-not $problem) { $problem = Wait-ForPage '/' '2 tracks in library' 5 }
-          } finally {
-            taskkill /PID $proc.Id /T /F | Out-Null
-          }
-
-          $db = Join-Path $fresh '.musictoolkit\data\library.db'
-          $stray = @(Get-ChildItem $elsewhere -Force)
-          if (-not $problem -and -not (Test-Path $db)) { $problem = "database was not created at $db" }
-          if (-not $problem -and $stray.Count -gt 0) { $problem = "files were written to the working directory: $($stray.Name -join ', ')" }
-
-          if ($problem) {
-            Write-Host '--- backend stdout ---'; Get-Content $out -ErrorAction SilentlyContinue
-            Write-Host '--- backend stderr ---'; Get-Content $err -ErrorAction SilentlyContinue
-            Write-Host "FIRST-RUN CHECK FAILED: $problem"
-            exit 1
-          }
-          Write-Host "First run OK: dashboard served, scan finished, database at $db"
-          exit 0
+      # profile, unrelated working directory, no config, no database. It then
+      # checks the UI files, token gate, scan, cover art, streaming and backup.
+      - name: Smoke-test frozen backend (first run, scan, art, streaming)
+        run: python scripts\smoke_frozen.py dist\mtk-backend.exe tests\fixtures
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -169,6 +130,25 @@ jobs:
         working-directory: desktop
         run: npm run package
 
+      # Installs the installer that was just built and drives the installed
+      # app's real window: backend start, token handoff, bridge, streaming
+      # playback, and that closing the window kills the backend process tree.
+      - name: Smoke-test the installed desktop app
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem desktop\release\MusicToolkit-Setup-*.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:RUNNER_TEMP 'mtk-install'
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$dir" -PassThru
+          $setup.WaitForExit()
+          Get-Process -Name 'Music Toolkit', 'mtk-backend' -ErrorAction SilentlyContinue | Stop-Process -Force
+          $exe = Join-Path $dir 'Music Toolkit.exe'
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem $dir -ErrorAction SilentlyContinue | Out-String | Write-Host
+            throw "the installer did not produce $exe (installer exit code $($setup.ExitCode))"
+          }
+          python -m pip install playwright
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external -- $exe
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
@@ -177,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [version, test, build]
+    needs: [version, test, e2e, build]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.version.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     permissions:
