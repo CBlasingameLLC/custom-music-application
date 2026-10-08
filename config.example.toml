@@ -1,5 +1,5 @@
 [library]
-roots = ["/path/to/your/mp3s"]
+roots = []   # folders of music; add them from the app: Settings > Add music folder
 canonical_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
 
 [musicbrainz]

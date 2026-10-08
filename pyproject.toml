@@ -14,12 +14,17 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "python-multipart",
+    "pillow",
+    "tomli-w",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "responses",
+]
+e2e = [
+    "playwright",
 ]
 packaging = [
     "pyinstaller",
@@ -40,3 +45,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "musictoolkit.db.migrations" = ["*.sql"]
+"musictoolkit.web" = ["static/**/*"]

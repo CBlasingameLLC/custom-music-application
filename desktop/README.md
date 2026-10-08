@@ -1,30 +1,54 @@
-# Music Toolkit — desktop
+# Music Toolkit: desktop shell
 
-A minimal Electron shell around the existing Python backend. Unlike a
-typical Electron app, there's no React/Vite renderer here — the "renderer"
-is just this window pointed at the dashboard the backend already serves
-(`src/musictoolkit/dashboard/app.py`), so there's nothing to build on the
-JS side beyond the main process itself.
+A small Electron shell around the Python backend. There is no React/Vite
+renderer here: the window is pointed at the web UI the backend already serves
+(`src/musictoolkit/web/static/`, plain ES modules, no build step), so the only
+JavaScript to build is the main process itself (`src/main/`).
 
-On launch, the main process spawns the Python backend (in dev, your own
-venv's `python -m musictoolkit.cli dashboard`; in a packaged build, the
-bundled `mtk-backend.exe`) on a free localhost port chosen by the OS, waits
-for it to answer successfully, then opens a window pointed at it. On quit,
-the whole backend process tree is killed (on Windows via `taskkill /T`,
-since a PyInstaller onefile exe is a bootloader plus a child process). A
-single-instance lock prevents a second launch from running a second backend
-against the same database.
+## How it runs
 
-The backend's stdout/stderr go to `%USERPROFILE%\.musictoolkit\logs\backend.log`
-(uvicorn tracebacks, startup errors), next to the app's own
-`musictoolkit.log`. If the backend exits or never becomes healthy, the app
-shows an error dialog naming that file instead of an empty window.
+1. `backend.js` asks the OS for a free port, generates a random per-launch
+   **token**, and spawns the backend (in dev, your venv's
+   `python -m musictoolkit.cli dashboard`; packaged, the bundled
+   `mtk-backend.exe`) with the token in its environment (`MTK_TOKEN`, never on
+   the command line).
+2. It polls `/?token=...` until the backend answers HTTP 200: server up, UI
+   files found, token accepted. If the process exits first, or never becomes
+   healthy, an error dialog names the log file instead of showing a blank window.
+3. `index.js` opens the window on that URL, which signs it in (an HttpOnly,
+   same-site cookie). If the backend later dies, a dialog says so and the app
+   quits.
+4. Closing the window quits the app and kills the whole backend process tree
+   (`taskkill /T` on Windows, because a PyInstaller onefile exe is a bootloader
+   plus a child). A single-instance lock stops a second launch from running a
+   second backend on the same database.
+
+Backend output goes to `%USERPROFILE%\.musictoolkit\logs\backend.log`, next to
+the app's own `musictoolkit.log`.
+
+### The bridge (`preload.js`)
+
+The page sees one object, `window.mtk`, and nothing else from Node/Electron
+(`contextIsolation`, `sandbox`, no `nodeIntegration`). Every call is validated
+in the main process and ignored unless it comes from the backend's own origin.
+
+| Call | Does |
+|---|---|
+| `selectFolder()` / `selectFile({filters})` | Native pickers; resolve to a path or `null` |
+| `showItemInFolder(path)` | Reveal a file in Explorer |
+| `openPath(dir)` | Open a **folder** (never a file: the page cannot launch programs) |
+| `openExternal(url)` | Open an `http(s)` link in the default browser |
+| `onMediaKey(fn)` | Play/pause, next, previous, stop from the keyboard's media keys; returns an unsubscribe function |
+
+The window cannot navigate away from the app or open new windows; `http(s)`
+links go to the default browser instead. Media keys are registered as global
+shortcuts, and Chromium's own media-key handling is switched off so the two
+cannot both fire.
 
 ## Building the Windows installer
 
-This must run on Windows — PyInstaller produces platform-native binaries
-and electron-builder's NSIS target needs Windows to build. From the repo
-root:
+This must run on Windows: PyInstaller produces platform-native binaries and
+electron-builder's NSIS target needs Windows. From the repo root:
 
 ```
 1. python -m venv .venv
@@ -34,14 +58,12 @@ root:
 2. pyinstaller packaging\mtk_backend.spec
    -> dist\mtk-backend.exe
 
-3. Smoke-test the frozen exe alone BEFORE involving Electron — this
-   isolates PyInstaller issues from Electron ones:
-     dist\mtk-backend.exe --help
-     dist\mtk-backend.exe dashboard --port 4533
-     -> open http://127.0.0.1:4533 in a normal browser, confirm the
-        dashboard loads. Give it a few seconds — PyInstaller onefile
-        builds self-extract on every launch (~4s cold-start observed
-        during development is normal, not a hang).
+3. Smoke-test the frozen exe alone BEFORE involving Electron. This isolates
+   PyInstaller problems from Electron ones:
+     python scripts\smoke_frozen.py dist\mtk-backend.exe tests\fixtures
+   It starts the exe on a throwaway profile and checks the bundled UI, the
+   token gate, a scan, cover art, Range streaming and a backup. Give it a few
+   seconds: onefile builds self-extract on every launch.
 
 4. mkdir desktop\resources
    copy dist\mtk-backend.exe desktop\resources\
@@ -49,44 +71,44 @@ root:
 5. cd desktop
    npm ci
 
-6. npm start        (dev mode — runs your venv's Python directly, not
-                      the frozen exe, so there's no rebuild loop while
-                      iterating)
+6. npm start        (dev mode: runs your venv's Python directly, not the
+                      frozen exe, so there is no rebuild loop. MTK_PYTHON
+                      overrides which interpreter it uses.)
 
 7. npm run package  -> desktop\release\MusicToolkit-Setup-<version>.exe
 
-8. Run that installer. Confirm: a Desktop shortcut and Start Menu entry
-   appear, launching shows no visible console window, and the dashboard
-   loads in the app window.
-
-9. Close the app, check Task Manager — mtk-backend.exe should not still
-   be running.
+8. Install it and drive the installed app's window:
+     pip install playwright
+     python scripts\smoke_desktop.py --music tests\fixtures --skip-external -- "<install dir>\Music Toolkit.exe"
+   (the installer accepts /S /D=<dir> for a silent install). This is what CI
+   does on every build. By hand, confirm a Desktop shortcut and Start Menu
+   entry appear, no console window shows, and after closing the app
+   mtk-backend.exe is not left in Task Manager.
 ```
 
-**Expect to iterate at step 3.** A missing PyInstaller hidden-import
-surfaces as a traceback naming the missing module when you actually run
-the frozen exe — not as a build-time error. Add the named module to
-`hiddenimports` in `packaging/mtk_backend.spec` and rebuild. Two warnings
-during the PyInstaller build itself are expected and harmless, not bugs:
-`Hidden import "jinja2" not found` (FastAPI's optional Jinja2Templates
-integration, which this project doesn't use — the dashboard renders plain
-f-string HTML on purpose) and `Library user32/msvcrt required via ctypes
-not found` if you ever build on non-Windows first (the device-detection
-code references these Windows DLLs via `ctypes`, which only resolve on an
-actual Windows build).
+`scripts/smoke_desktop.py` works with any command that launches the app, so
+the same checks run against the dev shell: `python scripts/smoke_desktop.py
+--music tests/fixtures --cwd desktop -- npx electron .` (on Linux CI-style
+runs, put `xvfb-run -a` and `--no-sandbox` in front/behind as needed).
 
-Windows SmartScreen will likely flag both the frozen exe and the installer
-as "unrecognized publisher" on first run, since neither is code-signed.
-That's expected for an unsigned personal build, not a sign anything is
-broken.
+**Expect to iterate at step 3.** A missing PyInstaller hidden import shows up
+as a traceback naming the module when you run the frozen exe, not as a build
+error. Add it to `hiddenimports` in `packaging/mtk_backend.spec` and rebuild.
+Three warnings during the PyInstaller build are expected and harmless:
+`Hidden import "jinja2" not found` (FastAPI's optional template support, which
+this project does not use) and `Library user32/msvcrt required via ctypes not
+found` if you build on a non-Windows machine (the device-detection code
+references Windows DLLs, which only resolve on a real Windows build).
+
+Windows SmartScreen will flag both the exe and the installer as "unrecognized
+publisher" on first run: neither is code-signed. That is expected for an
+unsigned personal build, not a sign that anything is broken.
 
 ## Scope
 
-This packages what the dashboard does: browsing/searching the library,
-scanning a folder into it (the **Scan** page; read-only, it never changes
-your files), and triaging recommendations (accept/owned/dismiss). The
-commands that move or write files or call outside services (tag, organize,
-dedupe, sync, import-spotify, recommend) stay CLI-only, reachable via a
-terminal running the same bundled `mtk-backend.exe <command>` (or your dev
-venv's `mtk` command). Expanding the dashboard to cover those is future
-work.
+The window is the whole app: browsing, searching and playing the library,
+playlists and filters, listening history, recommendations, folders and settings.
+Tag enrichment, organizing, duplicate review, device sync, Spotify import and
+scrobbling are still command-line operations (the same bundled
+`mtk-backend.exe <command>`, or your dev venv's `mtk`) until they get their own
+screens in 0.3.0.

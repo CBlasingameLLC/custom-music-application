@@ -10,14 +10,18 @@ from pathlib import Path
 
 repo_root = Path(SPECPATH).resolve().parent
 migrations_dir = repo_root / "src" / "musictoolkit" / "db" / "migrations"
+static_dir = repo_root / "src" / "musictoolkit" / "web" / "static"
 
 # Non-Python data files: the migrations are read via importlib.resources at
 # runtime, not imported as Python, so PyInstaller's static import analysis
 # won't find them on its own — same reasoning for config.example.toml,
 # needed for the first-run config bootstrap (see musictoolkit/cli.py's
 # _find_example_config, which checks sys._MEIPASS for exactly this file).
+# The whole web UI (HTML/CSS/JS, vendored libraries) is plain files served by
+# musictoolkit.web.app from <package dir>/static, so it ships as a data tree.
 datas = [
     (str(migrations_dir / "*.sql"), "musictoolkit/db/migrations"),
+    (str(static_dir), "musictoolkit/web/static"),
     (str(repo_root / "config.example.toml"), "."),
 ]
 
