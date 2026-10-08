@@ -1,0 +1,75 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - claude/custom-music-server-13qp0j
+    paths:
+      - 'src/**'
+      - 'packaging/**'
+      - 'desktop/**'
+      - 'pyproject.toml'
+      - '.github/workflows/build-windows-installer.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -e ".[dev,packaging]"
+
+      - name: Build backend executable
+        run: .venv\Scripts\pyinstaller.exe packaging\mtk_backend.spec
+
+      - name: Smoke-test frozen backend
+        run: dist\mtk-backend.exe --help
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Stage backend into desktop resources
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop\resources | Out-Null
+          Copy-Item dist\mtk-backend.exe desktop\resources\mtk-backend.exe
+
+      - name: Install Electron dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Build installer
+        working-directory: desktop
+        run: npm run package
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: music-toolkit-installer
+          path: desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: installer-${{ github.run_number }}
+          name: Music Toolkit Installer (build ${{ github.run_number }})
+          prerelease: true
+          files: desktop/release/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

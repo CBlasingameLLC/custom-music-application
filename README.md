@@ -49,11 +49,17 @@ a dry-run; pass `--apply` to actually execute.
 
 ## Desktop app (Windows)
 
-A double-click installer is available — a minimal Electron shell spawns
-this same backend as a bundled executable and displays its dashboard in a
-native window. See [`desktop/README.md`](desktop/README.md) for the build
-steps (must be built on Windows). It packages the dashboard only; scan/tag/
-organize/dedupe/sync/import-spotify/recommend remain CLI-only for now.
+Prebuilt installers are published automatically by GitHub Actions — see the
+[Releases page](https://github.com/CBlasingameLLC/custom-music-application/releases)
+for the latest `Music Toolkit Setup *.exe`. No Python, Node, or build tools
+required to use it.
+
+To build it yourself instead: a minimal Electron shell spawns this same
+backend as a bundled executable and displays its dashboard in a native
+window. See [`desktop/README.md`](desktop/README.md) for the build steps
+(must be built on Windows). Either way, it packages the dashboard only;
+scan/tag/organize/dedupe/sync/import-spotify/recommend remain CLI-only for
+now.
 
 ## Development
 
