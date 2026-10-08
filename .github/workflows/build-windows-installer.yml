@@ -9,6 +9,7 @@ on:
       - 'src/**'
       - 'packaging/**'
       - 'desktop/**'
+      - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/build-windows-installer.yml'
 

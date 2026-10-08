@@ -15,11 +15,17 @@ def test_parse_m3u_resolves_relative_entries(tmp_path: Path) -> None:
     music_dir.mkdir()
     (music_dir / "song.mp3").write_bytes(b"x")
 
+    # Built from tmp_path so it is absolute on every platform: a bare "/x" has
+    # no drive letter, which Windows does not treat as absolute.
+    absolute_entry = tmp_path / "elsewhere" / "other.mp3"
+
     m3u_path = tmp_path / "playlist.m3u"
-    m3u_path.write_text("#EXTM3U\n#EXTINF:180,Some Artist - Some Song\nmusic/song.mp3\n/absolute/other.mp3\n")
+    m3u_path.write_text(
+        f"#EXTM3U\n#EXTINF:180,Some Artist - Some Song\nmusic/song.mp3\n{absolute_entry}\n", encoding="utf-8"
+    )
 
     entries = playlist_import.parse_m3u(m3u_path)
-    assert entries == [(music_dir / "song.mp3").resolve(), Path("/absolute/other.mp3")]
+    assert entries == [(music_dir / "song.mp3").resolve(), absolute_entry]
 
 
 def test_import_playlist_matches_existing_tracks_and_skips_missing(tmp_path: Path) -> None:
