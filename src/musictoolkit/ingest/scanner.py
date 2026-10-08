@@ -12,6 +12,8 @@ import mutagen
 
 logger = logging.getLogger("musictoolkit")
 
+COMMIT_EVERY = 250  # files; keeps write transactions short and a cancelled scan's progress intact
+
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".wav", ".wma", ".aiff", ".ape"}
 
 
@@ -113,6 +115,8 @@ def scan_library(
     for done, path in enumerate(audio_files):
         if on_progress is not None:
             on_progress(done, total)
+        if done and done % COMMIT_EVERY == 0:
+            conn.commit()
         seen_paths.add(str(path))
         try:
             stat = path.stat()

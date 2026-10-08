@@ -13,7 +13,8 @@ from musictoolkit.ingest import dedupe as dedupe_ops
 from musictoolkit.ingest import organizer, scanner, tagger
 from musictoolkit.integrations import lastfm_client, musicbrainz_client
 from musictoolkit.logging_setup import setup_logging
-from musictoolkit.recommend import engine, review_queue
+from musictoolkit.recommend import review_queue
+from musictoolkit.recommend import service as recommend_service
 from musictoolkit.sync import device_detect, mirror, playlist_import
 from musictoolkit.sync import selector as selector_ops
 
@@ -286,50 +287,16 @@ def recommend(
     """Fetch new-music recommendations not already in the library."""
     cfg: Config = state["config"]  # type: ignore[assignment]
     conn = _connection()
-    candidates: list[engine.Candidate] = []
-
-    if source in ("listenbrainz", "both"):
-        if not cfg.listenbrainz.enabled:
-            typer.echo("ListenBrainz is disabled in config.")
-        elif not cfg.listenbrainz.username:
-            typer.echo("No ListenBrainz username configured — set listenbrainz.username in config.toml.")
-        else:
-            _configure_musicbrainz()
-            try:
-                candidates.extend(
-                    engine.fetch_listenbrainz_candidates(
-                        cfg.listenbrainz.username, cfg.listenbrainz.user_token or None, limit
-                    )
-                )
-            except Exception as exc:
-                typer.echo(f"ListenBrainz fetch failed: {exc}")
-
-    if source in ("lastfm", "both"):
-        if not cfg.lastfm.enabled:
-            typer.echo("Last.fm is disabled in config (it's secondary/optional by default).")
-        elif not cfg.lastfm.api_key:
-            typer.echo("No Last.fm API key configured — set lastfm.api_key in config.toml.")
-        else:
-            lastfm_client.configure(cfg.lastfm.api_key, cfg.lastfm.api_secret)
-            seed_artists = engine.top_played_artists(conn, limit=10)
-            try:
-                candidates.extend(engine.fetch_lastfm_candidates(seed_artists, limit_per_artist=5))
-            except Exception as exc:
-                typer.echo(f"Last.fm fetch failed: {exc}")
-
-    new_candidates = engine.filter_owned(conn, candidates)
-    weights = engine.compute_play_history_weights(conn)
-    ranked = engine.rank(new_candidates, weights)
-    saved = engine.save_recommendations(conn, ranked)
-
+    result = recommend_service.refresh(conn, cfg, source, limit)
+    for message in result.messages:
+        typer.echo(message)
     typer.echo(
-        f"Fetched: {len(candidates)}  Already owned (filtered): {len(candidates) - len(new_candidates)}  "
-        f"New: {len(new_candidates)}  Saved: {saved}"
+        f"Fetched: {result.fetched}  Already owned (filtered): {result.already_owned}  "
+        f"New: {result.new}  Saved: {result.saved}"
     )
-    for c in ranked[:limit]:
+    for c in result.top:
         label = c.artist_name + (f" - {c.track_name}" if c.track_name else "")
         typer.echo(f"  [{c.source}] {label}  (score={c.score:.2f})  {c.reason}")
-
     conn.close()
 
 
@@ -359,19 +326,30 @@ def review() -> None:
 
 @app.command()
 def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127.0.0.1")) -> None:
-    """Launch the optional local-only web dashboard (127.0.0.1 only)."""
-    # Imported lazily: FastAPI/uvicorn are only needed for this one optional
-    # command, so every other subcommand stays fast to start and doesn't
-    # require them to even be installed.
+    """Run the Music Toolkit app's local server (127.0.0.1 only) and print its address."""
+    # Imported lazily: FastAPI/uvicorn are only needed for this command, so every
+    # other subcommand stays fast to start.
+    import os
+    import secrets
+
     import uvicorn
 
-    from musictoolkit.dashboard import app as dashboard_module
+    from musictoolkit.web.app import create_app
 
     cfg: Config = state["config"]  # type: ignore[assignment]
     db_path = state["db_path"] or cfg.database.path
-    dashboard_module.configure(Path(db_path), log_dir=Path(cfg.logging.dir))
-    typer.echo(f"Starting dashboard at http://127.0.0.1:{port} (Ctrl+C to stop)")
-    uvicorn.run(dashboard_module.app, host="127.0.0.1", port=port)
+    # The desktop app supplies its own token so it can open the window; a bare
+    # `mtk dashboard` makes one and prints the address that includes it.
+    token = os.environ.get("MTK_TOKEN") or secrets.token_urlsafe(24)
+    web_app = create_app(
+        db_path=Path(str(db_path)),
+        config_path=Path(str(state["config_path"])),
+        config=cfg,
+        token=token,
+        rescan_on_start=True,
+    )
+    typer.echo(f"Music Toolkit is running at http://127.0.0.1:{port}/?token={token}  (Ctrl+C to stop)")
+    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
 
 
 if __name__ == "__main__":

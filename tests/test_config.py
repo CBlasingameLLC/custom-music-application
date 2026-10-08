@@ -144,3 +144,17 @@ def test_bootstrap_if_missing_handles_no_example_gracefully(tmp_path: Path) -> N
     bootstrap_if_missing(target, example_path=None)
     assert not target.exists()
     assert target.parent.exists()
+
+
+def test_the_old_placeholder_library_folder_is_dropped(tmp_path: Path) -> None:
+    """Configs bootstrapped by 0.1.x contain a fake "/path/to/your/mp3s"; it must not show up as a real folder."""
+    (tmp_path / "config.toml").write_text(
+        '[library]\nroots = ["/path/to/your/mp3s", "D:\\\\Music"]\n', encoding="utf-8"
+    )
+    assert load_config(tmp_path / "config.toml").library.roots == ["D:\\Music"]
+
+
+def test_shipped_example_config_has_no_fake_folder(tmp_path: Path) -> None:
+    example = Path(__file__).resolve().parent.parent / "config.example.toml"
+    assert load_config(example).library.roots == []
+    assert "/path/to/your" not in example.read_text(encoding="utf-8")

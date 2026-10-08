@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from typing import Any, TypeVar
+
+import tomli_w
 
 from musictoolkit import __version__
 
@@ -34,6 +38,7 @@ class ListenBrainzConfig:
     enabled: bool = True
     username: str = ""
     user_token: str = ""
+    scrobble: bool = True  # submit plays from the in-app player as they happen
 
 
 @dataclass
@@ -60,6 +65,12 @@ class LoggingConfig:
 
 
 @dataclass
+class AppConfig:
+    rescan_on_launch: bool = True
+    lyrics_lrclib: bool = False  # look up lyrics on lrclib.net when a file has none
+
+
+@dataclass
 class Config:
     library: LibraryConfig = field(default_factory=LibraryConfig)
     musicbrainz: MusicBrainzConfig = field(default_factory=MusicBrainzConfig)
@@ -68,6 +79,7 @@ class Config:
     sync: SyncConfig = field(default_factory=SyncConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    app: AppConfig = field(default_factory=AppConfig)
 
 
 def resolve_config_path(explicit: str | Path | None) -> Path:
@@ -98,6 +110,19 @@ def bootstrap_if_missing(path: Path, example_path: Path | None = None) -> None:
         shutil.copy(example_path, path)
 
 
+# The example config used to ship this fake folder; configs bootstrapped from it still contain it.
+PLACEHOLDER_ROOTS = {"/path/to/your/mp3s"}
+
+T = TypeVar("T")
+
+
+def _section(cls: type[T], raw: dict[str, Any]) -> T:
+    """Build a config section, ignoring keys this version doesn't know about
+    (a config written by a newer or older release must still load)."""
+    known = {f.name for f in fields(cls)}  # type: ignore[arg-type]
+    return cls(**{key: value for key, value in raw.items() if key in known})  # type: ignore[call-arg]
+
+
 def _anchor_to(base_dir: Path, value: str) -> str:
     """Relative paths in a config file mean "relative to this file", not "to
     whatever the process's working directory happens to be" — a packaged app
@@ -126,17 +151,31 @@ def load_config(path: Path | str | None = None) -> Config:
         raw = tomllib.load(f)
 
     base_dir = resolved.absolute().parent
-    database = DatabaseConfig(**raw.get("database", {}))
+    database = _section(DatabaseConfig, raw.get("database", {}))
     database.path = _anchor_to(base_dir, database.path)
-    logging_cfg = LoggingConfig(**raw.get("logging", {}))
+    logging_cfg = _section(LoggingConfig, raw.get("logging", {}))
     logging_cfg.dir = _anchor_to(base_dir, logging_cfg.dir)
 
+    library = _section(LibraryConfig, raw.get("library", {}))
+    library.roots = [root for root in library.roots if root not in PLACEHOLDER_ROOTS]
+
     return Config(
-        library=LibraryConfig(**raw.get("library", {})),
-        musicbrainz=MusicBrainzConfig(**raw.get("musicbrainz", {})),
-        listenbrainz=ListenBrainzConfig(**raw.get("listenbrainz", {})),
-        lastfm=LastFmConfig(**raw.get("lastfm", {})),
-        sync=SyncConfig(**raw.get("sync", {})),
+        library=library,
+        musicbrainz=_section(MusicBrainzConfig, raw.get("musicbrainz", {})),
+        listenbrainz=_section(ListenBrainzConfig, raw.get("listenbrainz", {})),
+        lastfm=_section(LastFmConfig, raw.get("lastfm", {})),
+        sync=_section(SyncConfig, raw.get("sync", {})),
         database=database,
         logging=logging_cfg,
+        app=_section(AppConfig, raw.get("app", {})),
     )
+
+
+def save_config(path: Path | str, config: Config) -> None:
+    """Write the config as TOML, atomically (a crash mid-write must not leave
+    the user without a config). Comments in a hand-edited file are not kept."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_bytes(tomli_w.dumps(asdict(config)).encode("utf-8"))
+    os.replace(temp, path)

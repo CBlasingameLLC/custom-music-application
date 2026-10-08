@@ -32,6 +32,25 @@ class OrganizeResult:
     collisions: list[tuple[Path, Path]] = field(default_factory=list)
 
 
+SCHEME_FIELDS = ("album_artist", "artist", "album", "title", "track", "year", "ext")
+
+
+def validate_scheme(scheme: str) -> None:
+    """Raise ValueError (with a message fit for the Settings page) if the template can't be filled in."""
+    sample = {"album_artist": "A", "artist": "A", "album": "B", "title": "C", "track": 1, "year": 2000, "ext": "mp3"}
+    try:
+        relative = scheme.format(**sample)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid template ({type(exc).__name__}: {exc}). Available fields: "
+            + ", ".join("{" + name + "}" for name in SCHEME_FIELDS)
+        ) from None
+    if not scheme.strip() or Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise ValueError("The template must be a relative path like {album_artist}/{album}/{track:02d} - {title}.{ext}")
+    if "{ext}" not in scheme:
+        raise ValueError("The template must end with the file extension: {ext}")
+
+
 def compute_target_path(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
     fields = {
         "album_artist": sanitize_path_component(row["album_artist"] or row["artist"] or "Unknown Artist"),
