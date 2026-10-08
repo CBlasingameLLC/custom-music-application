@@ -47,13 +47,13 @@ root:
    copy dist\mtk-backend.exe desktop\resources\
 
 5. cd desktop
-   npm install
+   npm ci
 
 6. npm start        (dev mode — runs your venv's Python directly, not
                       the frozen exe, so there's no rebuild loop while
                       iterating)
 
-7. npm run package  -> desktop\release\Music Toolkit Setup <version>.exe
+7. npm run package  -> desktop\release\MusicToolkit-Setup-<version>.exe
 
 8. Run that installer. Confirm: a Desktop shortcut and Start Menu entry
    appear, launching shows no visible console window, and the dashboard

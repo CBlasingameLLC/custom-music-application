@@ -5,7 +5,6 @@ canonical_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
 [musicbrainz]
 contact = ""        # your email or project URL — required by MusicBrainz API etiquette
 app_name = "custom-music-application"
-app_version = "0.1.0"
 
 [listenbrainz]
 enabled = true

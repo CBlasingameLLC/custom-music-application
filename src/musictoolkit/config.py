@@ -5,6 +5,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from musictoolkit import __version__
+
 
 def default_data_dir() -> Path:
     """Per-user location for config/db/logs when nothing else is specified —
@@ -24,7 +26,7 @@ class LibraryConfig:
 class MusicBrainzConfig:
     contact: str = ""
     app_name: str = "custom-music-application"
-    app_version: str = "0.1.0"
+    app_version: str = __version__
 
 
 @dataclass

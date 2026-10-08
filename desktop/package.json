@@ -38,7 +38,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Music Toolkit"
+      "shortcutName": "Music Toolkit",
+      "artifactName": "MusicToolkit-Setup-${version}.${ext}"
     }
   }
 }

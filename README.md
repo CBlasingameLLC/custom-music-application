@@ -49,10 +49,9 @@ a dry-run; pass `--apply` to actually execute.
 
 ## Desktop app (Windows)
 
-Prebuilt installers are published automatically by GitHub Actions — see the
-[Releases page](https://github.com/CBlasingameLLC/custom-music-application/releases)
-for the latest `Music Toolkit Setup *.exe`. No Python, Node, or build tools
-required to use it.
+Download the latest `MusicToolkit-Setup-<version>.exe` from the
+[Releases page](https://github.com/CBlasingameLLC/custom-music-application/releases/latest).
+No Python, Node, or build tools required to use it.
 
 To build it yourself instead: a minimal Electron shell spawns this same
 backend as a bundled executable and displays its dashboard in a native
@@ -72,3 +71,18 @@ pytest
 
 Test fixtures under `tests/fixtures/` are tiny synthetic MP3s with known
 baked-in tags — no real library or network access required to run the suite.
+
+## Releasing
+
+The version lives in `src/musictoolkit/__init__.py` (`pyproject.toml` reads it)
+and `desktop/package.json`; CI fails if they disagree. To ship a release:
+
+```bash
+python scripts/bump_version.py 0.2.0   # updates every place the version lives
+git commit -am "Release 0.2.0"         # open a PR, merge to main
+```
+
+Merging to `main` runs `.github/workflows/build.yml`: if no `v0.2.0` tag exists
+yet, it builds and tests on Windows, tags the exact commit it built, and
+publishes the installer with generated release notes. Pull requests build and
+test everything but publish nothing.
