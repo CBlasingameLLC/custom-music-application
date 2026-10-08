@@ -140,6 +140,7 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'mtk-install'
           $setup = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$dir" -PassThru
           $setup.WaitForExit()
+          Start-Sleep -Seconds 5   # an installer can start the app a moment after it exits
           Get-Process -Name 'Music Toolkit', 'mtk-backend' -ErrorAction SilentlyContinue | Stop-Process -Force
           $exe = Join-Path $dir 'Music Toolkit.exe'
           if (-not (Test-Path $exe)) {

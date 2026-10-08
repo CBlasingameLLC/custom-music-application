@@ -95,3 +95,16 @@ def test_propose_organization_flags_collisions(tmp_path: Path) -> None:
     assert len(result.proposals) == 1
     assert len(result.collisions) == 1
     conn.close()
+
+
+def test_a_template_that_leaves_the_library_proposes_nothing(tmp_path: Path) -> None:
+    """A rooted template ("/x/...") has no drive letter, so Windows doesn't call it absolute; joined onto the
+    library folder it would still land at the drive root. Nothing may be proposed outside the library."""
+    conn = connect(tmp_path / "test.db")
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "raw.mp3").write_bytes(b"x")
+    _insert_track(conn, str(library / "raw.mp3"), title="Song", artist="Artist")
+
+    for scheme in ("/elsewhere/{title}.{ext}", "\\elsewhere\\{title}.{ext}", "../{title}.{ext}"):
+        assert organizer.propose_organization(conn, library, scheme).proposals == []

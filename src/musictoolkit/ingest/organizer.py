@@ -6,7 +6,7 @@ import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 logger = logging.getLogger("musictoolkit")
 
@@ -35,6 +35,17 @@ class OrganizeResult:
 SCHEME_FIELDS = ("album_artist", "artist", "album", "title", "track", "year", "ext")
 
 
+def _is_plain_relative(relative: str) -> bool:
+    """False for rooted ("/x", "\\x"), drive-qualified ("C:x") and parent-escaping ("../x") paths.
+
+    Judged by both path flavours, whatever the platform: "/x" has no drive letter, so Windows does not
+    call it absolute, yet joined onto a folder it still lands at the drive root, outside the library."""
+    windows = PureWindowsPath(relative)
+    if windows.drive or windows.root or PurePosixPath(relative).is_absolute():
+        return False
+    return ".." not in windows.parts and ".." not in PurePosixPath(relative).parts
+
+
 def validate_scheme(scheme: str) -> None:
     """Raise ValueError (with a message fit for the Settings page) if the template can't be filled in."""
     sample = {"album_artist": "A", "artist": "A", "album": "B", "title": "C", "track": 1, "year": 2000, "ext": "mp3"}
@@ -45,7 +56,7 @@ def validate_scheme(scheme: str) -> None:
             f"Invalid template ({type(exc).__name__}: {exc}). Available fields: "
             + ", ".join("{" + name + "}" for name in SCHEME_FIELDS)
         ) from None
-    if not scheme.strip() or Path(relative).is_absolute() or ".." in Path(relative).parts:
+    if not scheme.strip() or not _is_plain_relative(relative):
         raise ValueError("The template must be a relative path like {album_artist}/{album}/{track:02d} - {title}.{ext}")
     if "{ext}" not in scheme:
         raise ValueError("The template must end with the file extension: {ext}")
@@ -62,6 +73,8 @@ def compute_target_path(row: sqlite3.Row, library_root: Path, scheme: str) -> Pa
         "ext": Path(row["file_path"]).suffix.lstrip(".").lower(),
     }
     relative = scheme.format(**fields)
+    if not _is_plain_relative(relative):
+        raise ValueError(f"template result {relative!r} is not a path inside the library")
     return (library_root / relative).resolve()
 
 

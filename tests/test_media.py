@@ -89,6 +89,7 @@ class TestFolderTemplates:
     @pytest.mark.parametrize("scheme", [
         "{genre}/{title}.{ext}", "{title}", "/{title}.{ext}", "../{title}.{ext}", "{track:zz}/{title}.{ext}",
         "{0}/{title}.{ext}", "", "   ",
+        "\\{title}.{ext}", "C:\\music\\{title}.{ext}", "D:/{title}.{ext}", "D:{title}.{ext}", "{album}/../../{title}.{ext}",
     ])
     def test_invalid(self, scheme: str) -> None:
         with pytest.raises(ValueError):

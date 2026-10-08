@@ -103,29 +103,38 @@ def drive(args, command: list[str]) -> None:
 
     scratch = Path(tempfile.mkdtemp(prefix="mtk-desktop-smoke-"))
     profile, music = scratch / "profile", scratch / "music"
-    profile.mkdir()
-    music.mkdir()
+    for folder in (profile, music):
+        folder.mkdir()
     mp3s = sorted(Path(args.music).glob("*.mp3"))
     if not mp3s:
         sys.exit(f"no .mp3 files in {args.music}")
     for mp3 in mp3s:
         shutil.copy(mp3, music / mp3.name)
 
+    if WINDOWS:
+        stray = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Music Toolkit.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+        print("running before launch:", stray.stdout.strip() or "(nothing)", flush=True)
+        for image in ("Music Toolkit.exe", "mtk-backend.exe"):
+            subprocess.run(["taskkill", "/IM", image, "/T", "/F"], capture_output=True)
+        time.sleep(1)
+
     debug_port = free_port()
     env = {
         **os.environ,
-        "HOME": str(profile),
+        "HOME": str(profile),  # the app keeps its data in ~/.musictoolkit
         "USERPROFILE": str(profile),
-        "APPDATA": str(profile / "AppData" / "Roaming"),
-        "LOCALAPPDATA": str(profile / "AppData" / "Local"),
+        "ELECTRON_ENABLE_LOGGING": "1",  # Chromium's own log lines into the captured output
     }
     log_path = scratch / "app.log"
     stranger, stranger_hits = start_stranger()
     stranger_url = f"http://127.0.0.1:{stranger.server_address[1]}/"
     with open(log_path, "w") as log:
         kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
+        # Electron finds its user-data folder through the OS (not APPDATA), and the single-instance lock lives
+        # there: give this run its own, so an instance already running (the installer may have started one)
+        # cannot make the app quit at once.
         process = subprocess.Popen(
-            [*command, f"--remote-debugging-port={debug_port}"],
+            [*command, f"--remote-debugging-port={debug_port}", f"--user-data-dir={scratch / 'userdata'}"],
             cwd=args.cwd or scratch, env=env, stdout=log, stderr=subprocess.STDOUT, **kwargs,
         )
 
@@ -147,6 +156,15 @@ def drive(args, command: list[str]) -> None:
         page_url = wait_for(app_page_url, args.launch_timeout)
         check(bool(page_url) and page_url != "exited", "the window opened on the backend with a launch token")
         if not page_url or page_url == "exited":
+            print(f"app process: {'exited with code ' + str(process.returncode) if process.poll() is not None else 'still running, no window'}")
+            if WINDOWS:
+                print(subprocess.run(["tasklist", "/FI", "IMAGENAME eq Music Toolkit.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout)
+                events = (
+                    "Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2; StartTime=(Get-Date).AddMinutes(-10)} "
+                    "-MaxEvents 6 -ErrorAction SilentlyContinue | Format-List TimeCreated, ProviderName, Message"
+                )
+                print("recent application errors:")
+                print(subprocess.run(["powershell", "-NoProfile", "-Command", events], capture_output=True, text=True).stdout[-3000:])
             return
         backend_port = int(page_url.split("://", 1)[1].split("/", 1)[0].split(":")[1])
 
