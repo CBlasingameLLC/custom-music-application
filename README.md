@@ -57,9 +57,12 @@ required to use it.
 To build it yourself instead: a minimal Electron shell spawns this same
 backend as a bundled executable and displays its dashboard in a native
 window. See [`desktop/README.md`](desktop/README.md) for the build steps
-(must be built on Windows). Either way, it packages the dashboard only;
-scan/tag/organize/dedupe/sync/import-spotify/recommend remain CLI-only for
-now.
+(must be built on Windows).
+
+Either way, the app keeps its config, library database, and logs under
+`~/.musictoolkit/` (`%USERPROFILE%\.musictoolkit\` on Windows). It can browse
+the library, scan a music folder (read-only), and triage recommendations;
+tag/organize/dedupe/sync/import-spotify/recommend remain CLI-only for now.
 
 ## Development
 

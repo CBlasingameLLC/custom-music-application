@@ -44,6 +44,62 @@ api_key = "key"
     assert cfg.lastfm.api_key == "key"
 
 
+def test_relative_db_and_log_paths_anchor_to_the_config_dir_not_cwd(tmp_path: Path, monkeypatch) -> None:
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (config_dir / "config.toml").write_text(
+        '[database]\npath = "./data/library.db"\n\n[logging]\ndir = "./logs"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(elsewhere)
+
+    cfg = load_config(config_dir / "config.toml")
+
+    assert cfg.database.path == str(config_dir / "data" / "library.db")
+    assert cfg.logging.dir == str(config_dir / "logs")
+
+
+def test_relative_paths_in_a_cwd_config_resolve_against_that_directory(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path("config.toml").write_text('[database]\npath = "./data/library.db"\n', encoding="utf-8")
+
+    cfg = load_config(Path("config.toml"))
+
+    assert cfg.database.path == str(Path.cwd() / "data" / "library.db")
+
+
+def test_absolute_db_path_is_left_alone(tmp_path: Path) -> None:
+    absolute = tmp_path / "somewhere" / "my.db"
+    (tmp_path / "config.toml").write_text(f'[database]\npath = "{absolute.as_posix()}"\n', encoding="utf-8")
+
+    assert load_config(tmp_path / "config.toml").database.path == str(absolute)
+
+
+def test_omitted_db_and_log_keys_keep_the_per_user_defaults(tmp_path: Path) -> None:
+    (tmp_path / "config.toml").write_text("[library]\nroots = []\n", encoding="utf-8")
+
+    cfg = load_config(tmp_path / "config.toml")
+
+    assert cfg.database.path == str(default_data_dir() / "data" / "library.db")
+    assert cfg.logging.dir == str(default_data_dir() / "logs")
+
+
+def test_bootstrapped_example_config_keeps_its_data_beside_itself(tmp_path: Path, monkeypatch) -> None:
+    """Regression: the installed app copies config.example.toml to the per-user
+    folder on first run. Its relative db/log paths used to resolve against the
+    launch directory (the install dir), so the first page load failed."""
+    example = Path(__file__).resolve().parent.parent / "config.example.toml"
+    target = tmp_path / "home" / ".musictoolkit" / "config.toml"
+    bootstrap_if_missing(target, example_path=example)
+    monkeypatch.chdir(tmp_path)  # like a Start Menu shortcut: not the config's folder
+
+    cfg = load_config(target)
+
+    assert Path(cfg.database.path) == target.parent / "data" / "library.db"
+    assert Path(cfg.logging.dir) == target.parent / "logs"
+
+
 def test_resolve_config_path_explicit_always_wins(tmp_path: Path) -> None:
     explicit = tmp_path / "somewhere" / "custom.toml"
     assert resolve_config_path(explicit) == explicit

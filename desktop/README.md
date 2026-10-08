@@ -8,10 +8,17 @@ JS side beyond the main process itself.
 
 On launch, the main process spawns the Python backend (in dev, your own
 venv's `python -m musictoolkit.cli dashboard`; in a packaged build, the
-bundled `mtk-backend.exe`), waits for it to respond on `127.0.0.1:4533`,
-then opens a window pointed at that URL. On quit, the backend process is
-killed. A single-instance lock prevents a second launch from spawning a
-second backend fighting over the same port.
+bundled `mtk-backend.exe`) on a free localhost port chosen by the OS, waits
+for it to answer successfully, then opens a window pointed at it. On quit,
+the whole backend process tree is killed (on Windows via `taskkill /T`,
+since a PyInstaller onefile exe is a bootloader plus a child process). A
+single-instance lock prevents a second launch from running a second backend
+against the same database.
+
+The backend's stdout/stderr go to `%USERPROFILE%\.musictoolkit\logs\backend.log`
+(uvicorn tracebacks, startup errors), next to the app's own
+`musictoolkit.log`. If the backend exits or never becomes healthy, the app
+shows an error dialog naming that file instead of an empty window.
 
 ## Building the Windows installer
 
@@ -75,9 +82,11 @@ broken.
 
 ## Scope
 
-This packages what the dashboard already does: browsing/searching the
-library and triaging recommendations (accept/owned/dismiss). It does
-**not** add a GUI for scan/tag/organize/dedupe/sync/import-spotify/recommend
-— those stay CLI-only, reachable via a terminal running the same bundled
-`mtk-backend.exe <command>` (or your dev venv's `mtk` command). Expanding
-the dashboard to cover those is future work, not part of this pass.
+This packages what the dashboard does: browsing/searching the library,
+scanning a folder into it (the **Scan** page; read-only, it never changes
+your files), and triaging recommendations (accept/owned/dismiss). The
+commands that move or write files or call outside services (tag, organize,
+dedupe, sync, import-spotify, recommend) stay CLI-only, reachable via a
+terminal running the same bundled `mtk-backend.exe <command>` (or your dev
+venv's `mtk` command). Expanding the dashboard to cover those is future
+work.

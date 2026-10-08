@@ -21,7 +21,7 @@ api_secret = ""
 device_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
 
 [database]
-path = "./data/library.db"
+path = "./data/library.db"   # relative paths resolve against this file's folder, not the working directory
 
 [logging]
 level = "INFO"

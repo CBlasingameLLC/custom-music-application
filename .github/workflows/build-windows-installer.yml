@@ -16,6 +16,27 @@ permissions:
   contents: write
 
 jobs:
+  # Runs beside the build, not in front of it: the unit tests have never run on
+  # Windows, and a Windows-only failure in an unrelated module should show up
+  # as its own red check rather than silently blocking an installer whose
+  # first-run behavior the smoke test below already verified.
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -q
+
   build:
     runs-on: windows-latest
     steps:
@@ -38,6 +59,73 @@ jobs:
 
       - name: Smoke-test frozen backend
         run: dist\mtk-backend.exe --help
+
+      # --help never touches the database or the web server. This launches the
+      # real frozen exe the way a freshly installed app starts: empty user
+      # profile, unrelated working directory, no config, no database.
+      - name: Smoke-test frozen dashboard (first run, then scan)
+        shell: pwsh
+        run: |
+          $fresh = Join-Path $env:RUNNER_TEMP 'fresh-profile'
+          $elsewhere = Join-Path $env:RUNNER_TEMP 'elsewhere'
+          $music = Join-Path $env:RUNNER_TEMP 'music'
+          New-Item -ItemType Directory -Force -Path $fresh, $elsewhere, $music | Out-Null
+          Copy-Item tests\fixtures\*.mp3 $music
+          $env:USERPROFILE = $fresh
+
+          $exe = (Resolve-Path 'dist\mtk-backend.exe').Path
+          $out = Join-Path $env:RUNNER_TEMP 'dashboard.out.log'
+          $err = Join-Path $env:RUNNER_TEMP 'dashboard.err.log'
+          $port = 45873
+          $base = "http://127.0.0.1:$port"
+          $proc = Start-Process -FilePath $exe -ArgumentList 'dashboard', '--port', "$port" `
+            -WorkingDirectory $elsewhere -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+
+          function Wait-ForPage([string]$path, [string]$pattern, [int]$seconds = 60) {
+            $last = 'no response'
+            for ($i = 0; $i -lt $seconds; $i++) {
+              try {
+                $r = Invoke-WebRequest -Uri "$base$path" -UseBasicParsing -TimeoutSec 5
+                if ($r.StatusCode -eq 200 -and $r.Content -match $pattern) { return $null }
+                $last = "HTTP $($r.StatusCode), page did not match '$pattern'"
+              } catch {
+                $last = $_.Exception.Message
+              }
+              Start-Sleep -Seconds 1
+            }
+            return "${path}: $last"
+          }
+
+          $problem = $null
+          try {
+            $problem = Wait-ForPage '/' 'tracks in library'
+            if (-not $problem) {
+              try {
+                $null = Invoke-WebRequest -Uri "$base/scan" -Method Post -Body @{ path = $music } -UseBasicParsing -TimeoutSec 30
+              } catch {
+                $problem = "POST /scan failed: $($_.Exception.Message)"
+              }
+            }
+            if (-not $problem) { $problem = Wait-ForPage '/scan' 'Scan finished.*2 added' }
+            if (-not $problem) { $problem = Wait-ForPage '/' '2 tracks in library' 5 }
+          } finally {
+            taskkill /PID $proc.Id /T /F | Out-Null
+          }
+
+          $db = Join-Path $fresh '.musictoolkit\data\library.db'
+          $stray = @(Get-ChildItem $elsewhere -Force)
+          if (-not $problem -and -not (Test-Path $db)) { $problem = "database was not created at $db" }
+          if (-not $problem -and $stray.Count -gt 0) { $problem = "files were written to the working directory: $($stray.Name -join ', ')" }
+
+          if ($problem) {
+            Write-Host '--- backend stdout ---'; Get-Content $out -ErrorAction SilentlyContinue
+            Write-Host '--- backend stderr ---'; Get-Content $err -ErrorAction SilentlyContinue
+            Write-Host "FIRST-RUN CHECK FAILED: $problem"
+            exit 1
+          }
+          Write-Host "First run OK: dashboard served, scan finished, database at $db"
+          exit 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

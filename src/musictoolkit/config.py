@@ -96,6 +96,15 @@ def bootstrap_if_missing(path: Path, example_path: Path | None = None) -> None:
         shutil.copy(example_path, path)
 
 
+def _anchor_to(base_dir: Path, value: str) -> str:
+    """Relative paths in a config file mean "relative to this file", not "to
+    whatever the process's working directory happens to be" — a packaged app
+    launched from a shortcut has an unpredictable one, and the bootstrapped
+    config ships with relative defaults."""
+    path = Path(value).expanduser()
+    return str(path if path.is_absolute() else base_dir / path)
+
+
 def load_config(path: Path | str | None = None) -> Config:
     """Load config.toml, falling back to all-defaults if it doesn't exist.
 
@@ -103,6 +112,9 @@ def load_config(path: Path | str | None = None) -> Config:
     and is completely unaffected by resolve_config_path()/bootstrap_if_missing()
     above, which only run when the caller (cli.py's main callback) resolves
     the path itself and passes None here to mean "use the default resolution."
+
+    A relative `database.path` or `logging.dir` is resolved against the
+    config file's own directory.
     """
     resolved = Path(path) if path is not None else resolve_config_path(None)
     if not resolved.exists():
@@ -111,12 +123,18 @@ def load_config(path: Path | str | None = None) -> Config:
     with resolved.open("rb") as f:
         raw = tomllib.load(f)
 
+    base_dir = resolved.absolute().parent
+    database = DatabaseConfig(**raw.get("database", {}))
+    database.path = _anchor_to(base_dir, database.path)
+    logging_cfg = LoggingConfig(**raw.get("logging", {}))
+    logging_cfg.dir = _anchor_to(base_dir, logging_cfg.dir)
+
     return Config(
         library=LibraryConfig(**raw.get("library", {})),
         musicbrainz=MusicBrainzConfig(**raw.get("musicbrainz", {})),
         listenbrainz=ListenBrainzConfig(**raw.get("listenbrainz", {})),
         lastfm=LastFmConfig(**raw.get("lastfm", {})),
         sync=SyncConfig(**raw.get("sync", {})),
-        database=DatabaseConfig(**raw.get("database", {})),
-        logging=LoggingConfig(**raw.get("logging", {})),
+        database=database,
+        logging=logging_cfg,
     )

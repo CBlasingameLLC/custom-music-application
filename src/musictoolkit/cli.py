@@ -369,7 +369,7 @@ def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127
 
     cfg: Config = state["config"]  # type: ignore[assignment]
     db_path = state["db_path"] or cfg.database.path
-    dashboard_module.configure(Path(db_path))
+    dashboard_module.configure(Path(db_path), log_dir=Path(cfg.logging.dir))
     typer.echo(f"Starting dashboard at http://127.0.0.1:{port} (Ctrl+C to stop)")
     uvicorn.run(dashboard_module.app, host="127.0.0.1", port=port)
 

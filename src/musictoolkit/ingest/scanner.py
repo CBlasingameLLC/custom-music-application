@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,13 +95,24 @@ def compute_content_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def scan_library(conn: sqlite3.Connection, root: Path) -> ScanResult:
+def scan_library(
+    conn: sqlite3.Connection,
+    root: Path,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> ScanResult:
+    """`on_progress(done, total)` is called before each file and once more at
+    the end with done == total, so a UI can show "N of M files"."""
     root = root.resolve()
     result = ScanResult()
     now = datetime.now(timezone.utc).isoformat()
     seen_paths: set[str] = set()
 
-    for path in find_audio_files(root):
+    audio_files = find_audio_files(root)
+    total = len(audio_files)
+
+    for done, path in enumerate(audio_files):
+        if on_progress is not None:
+            on_progress(done, total)
         seen_paths.add(str(path))
         try:
             stat = path.stat()
@@ -162,6 +174,9 @@ def scan_library(conn: sqlite3.Connection, root: Path) -> ScanResult:
                 ),
             )
             result.updated += 1
+
+    if on_progress is not None:
+        on_progress(total, total)
 
     all_tracks = conn.execute("SELECT id, file_path, is_missing FROM tracks").fetchall()
     for row in all_tracks:
