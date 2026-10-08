@@ -14,7 +14,7 @@ logger = logging.getLogger("musictoolkit")
 
 COMMIT_EVERY = 250  # files; keeps write transactions short and a cancelled scan's progress intact
 
-AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".wav", ".wma", ".aiff", ".ape"}
+AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".opus", ".aac", ".wav", ".wma", ".aiff", ".ape"}
 
 
 @dataclass
@@ -86,6 +86,11 @@ def _read_basic_tags(path: Path) -> dict:
         fields["year"] = _parse_leading_int(date_raw[:4])
 
     return fields
+
+
+def read_basic_tags(path: Path) -> dict:
+    """The tag fields the library stores, read from the file itself."""
+    return _read_basic_tags(path)
 
 
 def compute_content_hash(path: Path) -> str:

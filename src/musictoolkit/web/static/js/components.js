@@ -178,6 +178,7 @@ export function ToastHost() {
       (t) => html`<div class="toast ${t.kind}" key=${t.id}>
         <${Icon} name=${t.kind === 'error' ? 'alert' : t.kind === 'success' ? 'check' : 'info'} size=${16} />
         <span>${t.text}</span>
+        ${t.action && html`<button class="toast-action" onClick=${() => { dismissToast(t.id); t.action.onClick(); }}>${t.action.label}</button>`}
         <button class="icon-btn" aria-label="Dismiss" onClick=${() => dismissToast(t.id)}><${Icon} name="x" size=${14} /></button>
       </div>`,
     )}

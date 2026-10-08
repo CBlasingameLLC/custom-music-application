@@ -30,9 +30,10 @@ export function dismissToast(id) {
   toasts.set((s) => ({ items: s.items.filter((t) => t.id !== id) }));
 }
 
-export function toast(text, kind = 'info', ms = 4500) {
+/** `action` is an optional { label, onClick } shown as a button in the toast (e.g. Undo). */
+export function toast(text, kind = 'info', ms = 4500, action = null) {
   const id = ++toastCounter;
-  toasts.set((s) => ({ items: [...s.items.slice(-3), { id, text, kind }] }));
+  toasts.set((s) => ({ items: [...s.items.slice(-3), { id, text, kind, action }] }));
   if (ms) setTimeout(() => dismissToast(id), ms);
   return id;
 }

@@ -6,6 +6,7 @@ import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
 import { desktop, enc, go, notifyError, openMenu, toast } from './state.js';
 import { openAddToPlaylist, openTrackInfo } from './dialogs.js';
+import { openTagEditor } from './tagtools.js';
 
 export const ROW_HEIGHT = 52;
 const HEADER_HEIGHT = 40;
@@ -41,6 +42,7 @@ export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 
       icon: 'heart',
       action: () => setFavorite(tracks, !allFavorite).then(() => onPatched?.(tracks.map((t) => t.id), { favorite: !allFavorite })).catch(notifyError),
     },
+    { label: `Edit tags…`, icon: 'edit', action: () => openTagEditor(tracks.map((t) => t.id)) },
   ];
   if (single) {
     items.push(
@@ -325,6 +327,7 @@ export function TrackTable({
           <button class="chip-btn" onClick=${() => playQueue(selectedTracks, 0)}><${Icon} name="play" size=${14} /> Play</button>
           <button class="chip-btn" onClick=${() => { addToQueue(selectedTracks); toast(`Added ${fmt.plural(selectedTracks.length, 'song')} to the queue`); }}><${Icon} name="queue" size=${14} /> Queue</button>
           <button class="chip-btn" onClick=${() => openAddToPlaylist(selectedTracks)}><${Icon} name="plus" size=${14} /> Playlist</button>
+          <button class="chip-btn" onClick=${() => openTagEditor(selectedTracks.map((t) => t.id))}><${Icon} name="edit" size=${14} /> Edit tags</button>
           <button class="chip-btn" onClick=${() => setFavorite(selectedTracks, true).then(() => patchLoaded(selectedTracks.map((t) => t.id), { favorite: true })).catch(notifyError)}><${Icon} name="heart" size=${14} /> Favorite</button>
           ${onRemove && html`<button class="chip-btn danger" onClick=${() => onRemove(selectedTracks)}><${Icon} name="trash" size=${14} /> Remove</button>`}
           <span class="spacer"></span>

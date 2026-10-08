@@ -3,6 +3,7 @@ import { api, fmt, html, useEffect, useRef, useState, useStore } from './lib.js'
 import { Icon } from './icons.js';
 import { Button, Cover, Rating, Spinner } from './components.js';
 import { bumpLibrary, desktop, go, href, library, loadPlaylists, notifyError, openModal, toast, trackJob } from './state.js';
+import { openTagEditor } from './tagtools.js';
 
 function PromptBody({ label, value, placeholder, confirm, help, onSubmit }) {
   const [text, setText] = useState(value);
@@ -116,7 +117,7 @@ export function openAddToPlaylist(tracks) {
 
 // ------------------------------------------------------------ track details
 
-function TrackInfoBody({ track }) {
+function TrackInfoBody({ track, close }) {
   const [detail, setDetail] = useState(null);
   useEffect(() => {
     Promise.all([api(`/tracks/${track.id}`), api(`/tracks/${track.id}/info`).catch(() => ({}))])
@@ -141,11 +142,12 @@ function TrackInfoBody({ track }) {
     <dl class="info-grid"><dt>File</dt><dd class="path">${detail.path}
       <button class="icon-btn" title="Copy path" aria-label="Copy path" onClick=${() => navigator.clipboard?.writeText(detail.path).then(() => toast('Path copied', 'success', 1800))}><${Icon} name="copy" size=${14} /></button>
       ${desktop?.showItemInFolder && html`<button class="icon-btn" title="Show in folder" aria-label="Show in folder" onClick=${() => desktop.showItemInFolder(detail.path)}><${Icon} name="folder" size=${14} /></button>`}
-    </dd></dl>`;
+    </dd></dl>
+    <div class="modal-actions"><${Button} icon="edit" onClick=${() => { close(); openTagEditor([detail.id]); }}>Edit tags<//></div>`;
 }
 
 export function openTrackInfo(track) {
-  openModal({ title: 'Song details', width: 560, render: () => html`<${TrackInfoBody} track=${track} />` });
+  openModal({ title: 'Song details', width: 560, render: (close) => html`<${TrackInfoBody} track=${track} close=${close} />` });
 }
 
 /** The "Add music folder" button: pick a folder, save it, and start scanning it. */

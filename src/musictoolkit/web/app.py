@@ -23,7 +23,18 @@ from musictoolkit import __version__
 from musictoolkit.config import Config
 from musictoolkit.db.connection import connect
 from musictoolkit.web.context import AppContext
-from musictoolkit.web.routers import devices, discover, history, library, manage, playback, playlists, settings, system
+from musictoolkit.web.routers import (
+    devices,
+    discover,
+    history,
+    library,
+    manage,
+    playback,
+    playlists,
+    settings,
+    system,
+    tags,
+)
 
 logger = logging.getLogger("musictoolkit")
 
@@ -102,7 +113,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)
