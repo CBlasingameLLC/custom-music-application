@@ -1,24 +1,38 @@
 from __future__ import annotations
 
 import html
+import logging
 import sqlite3
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from musictoolkit.db.connection import connect
+from musictoolkit.ingest import scanner
 from musictoolkit.recommend import review_queue
+
+logger = logging.getLogger("musictoolkit")
 
 app = FastAPI(title="Personal Music Toolkit Dashboard")
 
 _db_path: Path | None = None
+_log_dir: Path | None = None
 
 
-def configure(db_path: Path) -> None:
+def configure(db_path: Path, log_dir: Path | None = None) -> None:
     """Must be called once before serving requests — set by `mtk dashboard`
-    to whichever DB the rest of the CLI is already using."""
-    global _db_path
+    to whichever DB the rest of the CLI is already using.
+
+    Opens the DB through connect() once so a first launch (no data directory
+    or database yet — exactly what a freshly installed desktop app sees)
+    creates it and applies migrations, instead of every page failing."""
+    global _db_path, _log_dir
     _db_path = db_path
+    _log_dir = log_dir
+    connect(db_path).close()
 
 
 def _connection() -> sqlite3.Connection:
@@ -29,11 +43,12 @@ def _connection() -> sqlite3.Connection:
     return conn
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, head_extra: str = "") -> str:
     return f"""<!doctype html>
 <html>
 <head>
 <title>{html.escape(title)}</title>
+{head_extra}
 <style>
   body {{ font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }}
   nav a {{ margin-right: 1rem; }}
@@ -49,6 +64,7 @@ def _page(title: str, body: str) -> str:
 <nav>
   <a href="/">Home</a>
   <a href="/library">Library</a>
+  <a href="/scan">Scan</a>
   <a href="/recommendations">Recommendations</a>
   <a href="/devices">Devices</a>
   <a href="/history">History</a>
@@ -59,6 +75,20 @@ def _page(title: str, body: str) -> str:
 </html>"""
 
 
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception) -> HTMLResponse:
+    # Without this a failure is a bare "Internal Server Error" with the
+    # traceback going nowhere a desktop-app user can see.
+    logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
+    where = f"<code>{html.escape(str(_log_dir / 'musictoolkit.log'))}</code>" if _log_dir else "the app's log file"
+    body = f"""
+    <p>Something went wrong while loading this page.</p>
+    <pre>{html.escape(type(exc).__name__)}: {html.escape(str(exc))}</pre>
+    <p>The full traceback was written to {where}.</p>
+    """
+    return HTMLResponse(_page("Something went wrong", body), status_code=500)
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     conn = _connection()
@@ -67,7 +97,13 @@ def home() -> str:
     device_count = conn.execute("SELECT COUNT(*) AS c FROM devices").fetchone()["c"]
     history_count = conn.execute("SELECT COUNT(*) AS c FROM play_history").fetchone()["c"]
     conn.close()
+    empty_hint = (
+        '<p><strong>Your library is empty.</strong> <a href="/scan">Scan a music folder</a> to get started.</p>'
+        if track_count == 0
+        else ""
+    )
     body = f"""
+    {empty_hint}
     <ul>
       <li>{track_count} tracks in library</li>
       <li>{pending_count} recommendations awaiting review</li>
@@ -216,3 +252,127 @@ def history() -> str:
     {bars_html or '<p>No play history imported yet — run <code>mtk import-spotify</code> first.</p>'}
     """
     return _page("Play History", body)
+
+
+@dataclass
+class _ScanState:
+    running: bool = False
+    root: str = ""
+    done: int = 0
+    total: int = 0
+    result: scanner.ScanResult | None = None
+    error: str | None = None
+
+
+_scan_state = _ScanState()
+_scan_lock = threading.Lock()
+_scan_thread: threading.Thread | None = None
+
+
+def _run_scan(root: Path, db_path: Path) -> None:
+    conn = None
+    try:
+        # Own connection: sqlite3 connections can't be shared across threads.
+        conn = connect(db_path)
+
+        def on_progress(done: int, total: int) -> None:
+            _scan_state.done = done
+            _scan_state.total = total
+
+        _scan_state.result = scanner.scan_library(conn, root, on_progress=on_progress)
+    except Exception as exc:
+        logger.exception("Library scan of %s failed", root)
+        _scan_state.error = f"{type(exc).__name__}: {exc}"
+    finally:
+        if conn is not None:
+            conn.close()
+        _scan_state.running = False
+
+
+def _start_scan(root: Path) -> bool:
+    """Returns False, starting nothing, if a scan is already running."""
+    global _scan_thread
+    if _db_path is None:
+        raise RuntimeError("dashboard.configure(db_path) must be called before serving requests")
+    with _scan_lock:
+        if _scan_state.running:
+            return False
+        _scan_state.running = True
+        _scan_state.root = str(root)
+        _scan_state.done = 0
+        _scan_state.total = 0
+        _scan_state.result = None
+        _scan_state.error = None
+        _scan_thread = threading.Thread(target=_run_scan, args=(root, _db_path), daemon=True, name="library-scan")
+        _scan_thread.start()
+    return True
+
+
+def _scan_view(form_error: str = "", last_path: str = "") -> str:
+    state = _scan_state
+
+    if state.running:
+        if state.total:
+            progress = f"{state.done} of {state.total} files ({state.done / state.total * 100:.0f}%)"
+        else:
+            progress = "looking for audio files..."
+        body = f"""
+        <p>Scanning <code>{html.escape(state.root)}</code>: {progress}</p>
+        <p>This page refreshes by itself. The other pages keep working while the scan runs.</p>
+        """
+        return _page("Scan library", body, head_extra='<meta http-equiv="refresh" content="2">')
+
+    notes = ""
+    if state.error:
+        notes = f"<p><strong>The last scan failed:</strong> {html.escape(state.error)}</p>"
+    elif state.result is not None:
+        r = state.result
+        notes = (
+            f"<p><strong>Scan finished</strong> for <code>{html.escape(state.root)}</code>: "
+            f"{r.added} added, {r.updated} updated, {r.unchanged} unchanged, "
+            f"{r.missing} marked missing, {r.errors} errors. "
+            '<a href="/library">View the library</a>.</p>'
+        )
+    error_html = f'<p style="color: #b00020">{html.escape(form_error)}</p>' if form_error else ""
+    prefill = last_path or state.root
+    body = f"""
+    {notes}
+    {error_html}
+    <p>Scanning reads the tags of the audio files in a folder (including subfolders) into the library
+    database. It never changes your files.</p>
+    <form method="post" action="/scan">
+      <input type="text" id="path" name="path" size="60" value="{html.escape(prefill)}"
+             placeholder="C:\\Users\\you\\Music" required>
+      <button type="button" id="browse" hidden>Browse...</button>
+      <button type="submit">Scan</button>
+    </form>
+    <script>
+      // Only the desktop app provides a native folder picker; in a plain browser the typed path is used.
+      if (window.mtk && window.mtk.selectFolder) {{
+        const browse = document.getElementById("browse");
+        browse.hidden = false;
+        browse.addEventListener("click", async () => {{
+          const picked = await window.mtk.selectFolder();
+          if (picked) document.getElementById("path").value = picked;
+        }});
+      }}
+    </script>
+    """
+    return _page("Scan library", body)
+
+
+@app.get("/scan", response_class=HTMLResponse)
+def scan_page() -> str:
+    return _scan_view()
+
+
+@app.post("/scan")
+def start_scan(path: str = Form(...)) -> Response:
+    # Explorer's "Copy as path" wraps the path in double quotes.
+    root = Path(path.strip().strip('"')).expanduser()
+    if not root.is_dir():
+        return HTMLResponse(
+            _scan_view(form_error=f"Folder not found: {path}", last_path=path), status_code=400
+        )
+    _start_scan(root)
+    return RedirectResponse(url="/scan", status_code=303)

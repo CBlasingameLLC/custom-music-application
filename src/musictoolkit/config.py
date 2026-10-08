@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from musictoolkit import __version__
+
+
+def default_data_dir() -> Path:
+    """Per-user location for config/db/logs when nothing else is specified —
+    mirrors the ~/.dial/ convention from the sibling Dial project (avoids
+    Documents/'s OneDrive sync-corruption risk and %APPDATA%'s MSIX-container
+    snapshot problem)."""
+    return Path.home() / ".musictoolkit"
 
 
 @dataclass
@@ -15,7 +26,7 @@ class LibraryConfig:
 class MusicBrainzConfig:
     contact: str = ""
     app_name: str = "custom-music-application"
-    app_version: str = "0.1.0"
+    app_version: str = __version__
 
 
 @dataclass
@@ -39,13 +50,13 @@ class SyncConfig:
 
 @dataclass
 class DatabaseConfig:
-    path: str = "./data/library.db"
+    path: str = field(default_factory=lambda: str(default_data_dir() / "data" / "library.db"))
 
 
 @dataclass
 class LoggingConfig:
     level: str = "INFO"
-    dir: str = "./logs"
+    dir: str = field(default_factory=lambda: str(default_data_dir() / "logs"))
 
 
 @dataclass
@@ -59,14 +70,66 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
-def load_config(path: Path | str = "config.toml") -> Config:
-    """Load config.toml, falling back to all-defaults if it doesn't exist yet."""
-    path = Path(path)
-    if not path.exists():
+def resolve_config_path(explicit: str | Path | None) -> Path:
+    """Precedence: an explicit path always wins; otherwise prefer a
+    config.toml in the current directory (keeps running `mtk` from a repo
+    checkout working exactly as before); otherwise fall back to the
+    per-user default location, for a packaged app launched from a shortcut
+    with an unpredictable working directory."""
+    if explicit is not None:
+        return Path(explicit)
+    cwd_config = Path("config.toml")
+    if cwd_config.exists():
+        return cwd_config
+    return default_data_dir() / "config.toml"
+
+
+def bootstrap_if_missing(path: Path, example_path: Path | None = None) -> None:
+    """First-run convenience: if the resolved config location has nothing
+    there yet, seed it from config.example.toml so there's a real, findable,
+    editable file rather than silence. Never touches a path that already
+    exists, and never runs for a path the caller passed in explicitly to
+    load_config() directly — only cli.py's default-resolution path calls
+    this."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if example_path and example_path.exists():
+        shutil.copy(example_path, path)
+
+
+def _anchor_to(base_dir: Path, value: str) -> str:
+    """Relative paths in a config file mean "relative to this file", not "to
+    whatever the process's working directory happens to be" — a packaged app
+    launched from a shortcut has an unpredictable one, and the bootstrapped
+    config ships with relative defaults."""
+    path = Path(value).expanduser()
+    return str(path if path.is_absolute() else base_dir / path)
+
+
+def load_config(path: Path | str | None = None) -> Config:
+    """Load config.toml, falling back to all-defaults if it doesn't exist.
+
+    Pass an explicit path to load exactly that file — every test does this,
+    and is completely unaffected by resolve_config_path()/bootstrap_if_missing()
+    above, which only run when the caller (cli.py's main callback) resolves
+    the path itself and passes None here to mean "use the default resolution."
+
+    A relative `database.path` or `logging.dir` is resolved against the
+    config file's own directory.
+    """
+    resolved = Path(path) if path is not None else resolve_config_path(None)
+    if not resolved.exists():
         return Config()
 
-    with path.open("rb") as f:
+    with resolved.open("rb") as f:
         raw = tomllib.load(f)
+
+    base_dir = resolved.absolute().parent
+    database = DatabaseConfig(**raw.get("database", {}))
+    database.path = _anchor_to(base_dir, database.path)
+    logging_cfg = LoggingConfig(**raw.get("logging", {}))
+    logging_cfg.dir = _anchor_to(base_dir, logging_cfg.dir)
 
     return Config(
         library=LibraryConfig(**raw.get("library", {})),
@@ -74,6 +137,6 @@ def load_config(path: Path | str = "config.toml") -> Config:
         listenbrainz=ListenBrainzConfig(**raw.get("listenbrainz", {})),
         lastfm=LastFmConfig(**raw.get("lastfm", {})),
         sync=SyncConfig(**raw.get("sync", {})),
-        database=DatabaseConfig(**raw.get("database", {})),
-        logging=LoggingConfig(**raw.get("logging", {})),
+        database=database,
+        logging=logging_cfg,
     )

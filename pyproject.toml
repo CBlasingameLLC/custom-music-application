@@ -1,6 +1,6 @@
 [project]
 name = "musictoolkit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Personal music library organizer, importer, recommender, and device sync toolkit"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,6 +21,9 @@ dev = [
     "pytest",
     "responses",
 ]
+packaging = [
+    "pyinstaller",
+]
 
 [project.scripts]
 mtk = "musictoolkit.cli:app"
@@ -28,6 +31,9 @@ mtk = "musictoolkit.cli:app"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "musictoolkit.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -39,6 +39,34 @@ def test_scan_adds_new_tracks_and_reads_tags(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_scan_reports_progress_ending_at_total(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    _copy_fixture("complete_tags.mp3", library / "song_a.mp3")
+    _copy_fixture("sparse_tags.mp3", library / "song_b.mp3")
+
+    calls: list[tuple[int, int]] = []
+    conn = connect(tmp_path / "test.db")
+    scan_library(conn, library, on_progress=lambda done, total: calls.append((done, total)))
+    conn.close()
+
+    assert calls[0] == (0, 2)
+    assert calls[-1] == (2, 2)
+    assert [done for done, _ in calls] == sorted(done for done, _ in calls)
+
+
+def test_scan_progress_still_reported_for_an_empty_folder(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+
+    calls: list[tuple[int, int]] = []
+    conn = connect(tmp_path / "test.db")
+    scan_library(conn, library, on_progress=lambda done, total: calls.append((done, total)))
+    conn.close()
+
+    assert calls == [(0, 0)]
+
+
 def test_rescan_unchanged_file_is_a_noop(tmp_path: Path) -> None:
     library = tmp_path / "library"
     library.mkdir()

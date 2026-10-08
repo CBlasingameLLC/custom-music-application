@@ -3,8 +3,11 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-build/
-dist/
+# Rooted (not bare) so these don't also swallow desktop/build/ (tracked —
+# holds the app icon) or desktop's own dist-like output, which has its own
+# nested .gitignore.
+/build/
+/dist/
 
 # Runtime data — real user data, never commit
 data/
