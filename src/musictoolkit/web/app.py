@@ -26,6 +26,7 @@ from musictoolkit.web.context import AppContext
 from musictoolkit.web.routers import (
     devices,
     discover,
+    enrich,
     history,
     library,
     manage,
@@ -113,7 +114,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)

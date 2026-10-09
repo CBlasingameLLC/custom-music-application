@@ -117,3 +117,20 @@ def test_old_finished_jobs_are_pruned() -> None:
 
 def test_job_cancelled_exception_is_exported() -> None:
     assert issubclass(JobCancelled, Exception)
+
+
+def test_lanes_run_independently_but_each_lane_stays_in_order() -> None:
+    manager = JobManager()
+    gate = threading.Event()
+    order: list[str] = []
+
+    slow = manager.submit("enrich", "slow network job", lambda handle: (gate.wait(5), order.append("slow"))[1] and None, lane="network")
+    first = manager.submit("tags", "first", lambda handle: order.append("first"))
+    second = manager.submit("tags", "second", lambda handle: order.append("second"))
+
+    manager.wait(second.id)  # the main lane is not stuck behind the network job
+    assert order == ["first", "second"] and slow.status == "running"
+    gate.set()
+    manager.wait(slow.id)
+    assert order == ["first", "second", "slow"]
+    assert first.status == second.status == slow.status == "done"

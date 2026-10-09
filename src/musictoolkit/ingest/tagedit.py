@@ -25,6 +25,8 @@ class EditResult:
     edited: int = 0
     unchanged: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
+    edited_ids: list[int] = field(default_factory=list)
+    unchanged_ids: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {"batch_id": self.batch_id, "edited": self.edited, "unchanged": self.unchanged, "errors": self.errors}
@@ -57,43 +59,56 @@ def _label(row: sqlite3.Row) -> str:
     return row["title"] or Path(row["file_path"]).name
 
 
-def edit_tracks(
+def edit_each(
     conn: sqlite3.Connection,
-    track_ids: list[int],
-    changes: dict[str, Any],
+    plan: list[tuple[int, dict[str, Any]]],
     on_progress: Progress | None = None,
+    tag_source: str = "manual",
 ) -> EditResult:
-    """Write `changes` into each track's file and library row. One bad file never stops the rest."""
-    cleaned = tagwrite.clean_changes(changes)
+    """Write each track's own validated {column: value} changes into its file and library row, as one
+    undoable batch. One bad file never stops the rest."""
     result = EditResult(batch_id=uuid.uuid4().hex[:12])
     now = datetime.now(timezone.utc).isoformat()
-    for done, track_id in enumerate(track_ids):
+    for done, (track_id, changes) in enumerate(plan):
         if on_progress:
-            on_progress(done, len(track_ids))
+            on_progress(done, len(plan))
         row = conn.execute("SELECT id, file_path, title FROM tracks WHERE id = ? AND is_missing = 0", (track_id,)).fetchone()
         if row is None:
             result.errors.append({"track_id": track_id, "title": "", "error": "Not in the library any more"})
             continue
         path = Path(row["file_path"])
         try:
-            before, after = tagwrite.apply_changes(path, cleaned)
+            before, after = tagwrite.apply_changes(path, changes)
         except tagwrite.TagWriteError as exc:
             result.errors.append({"track_id": track_id, "title": _label(row), "error": str(exc)})
             continue
         if not after:
             result.unchanged += 1
+            result.unchanged_ids.append(track_id)
             continue
-        refresh_from_file(conn, track_id, path)
+        refresh_from_file(conn, track_id, path, tag_source=tag_source)
         conn.execute(
             "INSERT INTO tag_edits (batch_id, track_id, before_json, after_json, edited_at) VALUES (?, ?, ?, ?, ?)",
             (result.batch_id, track_id, json.dumps(before), json.dumps(after), now),
         )
         conn.commit()
         result.edited += 1
+        result.edited_ids.append(track_id)
     if on_progress:
-        on_progress(len(track_ids), len(track_ids))
+        on_progress(len(plan), len(plan))
     _prune(conn)
     return result
+
+
+def edit_tracks(
+    conn: sqlite3.Connection,
+    track_ids: list[int],
+    changes: dict[str, Any],
+    on_progress: Progress | None = None,
+) -> EditResult:
+    """The same change for every track (the Edit tags dialog)."""
+    cleaned = tagwrite.clean_changes(changes)
+    return edit_each(conn, [(track_id, cleaned) for track_id in track_ids], on_progress)
 
 
 def list_batches(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import mutagen
+import pytest
 from playwright.sync_api import expect
 
+from musictoolkit.ingest import tagger
+from tests.conftest import make_track
 from tests.e2e.conftest import add_library, api, row, wait_until
 
 expect.set_options(timeout=15_000)
@@ -79,3 +82,60 @@ class TestTagEditor:
         expect(page.get_by_text("Updated tags on 1 song")).to_be_visible()
         assert "genre" not in tags_of(song_file(live, "Drift"))
         assert tags_of(song_file(live, "Drift"))["title"] == "Drift"
+
+
+class TestFixMissingTags:
+    @pytest.fixture
+    def loose_songs(self, live, monkeypatch):
+        """Two songs with no tags at all, and a pretend MusicBrainz that knows them."""
+        loose = live.library / "loose"
+        make_track(loose, "01 - Mystery Song.mp3", "tone_12s.mp3")
+        make_track(loose, "Some Artist - Other Song.mp3", "tone_12s.mp3")
+        known = {
+            "Mystery Song": {"id": "mb-1", "title": "Mystery Song", "ext:score": "98", "artist-credit-phrase": "The Mystics",
+                             "release-list": [{"id": "rel-1", "title": "Secrets"}]},
+            "Other Song": {"id": "mb-2", "title": "Other Song", "ext:score": "72", "artist-credit-phrase": "Some Artist",
+                           "release-list": [{"id": "rel-2", "title": "Odds and Ends"}]},
+        }
+        monkeypatch.setattr(tagger.musicbrainz_client, "best_match", lambda artist, title: known.get(title))
+        return loose
+
+    def test_lookup_review_apply_and_dismiss(self, page, live, loose_songs):
+        add_library(page, live)
+        page.get_by_role("link", name="Library tools").click()
+        expect(page.get_by_role("heading", name="Library tools")).to_be_visible()
+        page.get_by_role("link", name="Fix missing tags").click()
+        expect(page.locator(".stat", has_text="to look up").locator("strong")).to_have_text("2")
+
+        # MusicBrainz wants a contact email before the first lookup; the page asks for it right there
+        lookup = page.get_by_role("button", name="Look up 2 songs")
+        expect(lookup).to_be_disabled()
+        page.get_by_label("Contact email").fill("me@example.com")
+        page.get_by_role("button", name="Save", exact=True).click()
+        expect(page.get_by_label("Contact email")).to_have_count(0)
+        expect(lookup).to_be_enabled()
+        lookup.click()
+
+        rows = page.locator(".enrich-row")
+        expect(rows).to_have_count(2)
+        expect(rows.first).to_contain_text("The Mystics")  # best match first
+        expect(rows.first.locator(".chip")).to_have_text("98%")
+        expect(rows.nth(1).locator(".chip")).to_have_text("72%")
+        expect(page.locator(".stat", has_text="matches to review").locator("strong")).to_have_text("2")
+
+        page.get_by_role("button", name="Apply all 90%+ (1)").click()
+        expect(page.get_by_text("Updated tags on 1 song")).to_be_visible()
+        expect(rows).to_have_count(1)
+        tags = mutagen.File(next(live.library.rglob("*Mystery Song.mp3")), easy=True).tags
+        assert (tags["title"][0], tags["artist"][0], tags["album"][0]) == ("Mystery Song", "The Mystics", "Secrets")
+
+        rows.first.locator("input[type=checkbox]").check()
+        page.locator(".enrich-bar").get_by_role("button", name="Dismiss").click()
+        expect(page.get_by_text("Dismissed 1 match")).to_be_visible()
+        expect(page.get_by_text("All caught up")).to_be_visible()
+        assert "title" not in tags_of(next(live.library.rglob("*Other Song.mp3")))  # the dismissed one is untouched
+
+    def test_the_hub_reports_what_needs_attention(self, page, live, loose_songs):
+        add_library(page, live)
+        page.get_by_role("link", name="Library tools").click()
+        expect(page.locator(".tool-card", has_text="Fix missing tags")).to_contain_text("2 songs to look up")

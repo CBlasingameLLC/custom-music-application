@@ -95,23 +95,30 @@ JobFn = Callable[[JobHandle], "dict[str, Any] | None"]
 
 
 class JobManager:
+    """Jobs run one at a time per lane, in submission order.
+
+    The default lane is for anything that writes the library or the user's files, so two such
+    operations can never overlap. A slow job that only talks to the network (a MusicBrainz lookup
+    can take an hour) goes in its own lane so it does not hold up a quick tag edit."""
+
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
-        self._queue: queue.Queue[tuple[Job, JobFn]] = queue.Queue()
+        self._queues: dict[str, queue.Queue[tuple[Job, JobFn]]] = {}
         self._lock = threading.Lock()
-        self._worker: threading.Thread | None = None
+        self._workers: dict[str, threading.Thread] = {}
 
-    def submit(self, kind: str, title: str, fn: JobFn) -> Job:
+    def submit(self, kind: str, title: str, fn: JobFn, lane: str = "main") -> Job:
         job = Job(id=uuid.uuid4().hex[:12], kind=kind, title=title)
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)
             self._prune()
-            if self._worker is None:
-                self._worker = threading.Thread(target=self._run, name="job-worker", daemon=True)
-                self._worker.start()
-        self._queue.put((job, fn))
+            jobs_queue = self._queues.setdefault(lane, queue.Queue())
+            if lane not in self._workers:
+                self._workers[lane] = threading.Thread(target=self._run, args=(jobs_queue,), name=f"job-worker-{lane}", daemon=True)
+                self._workers[lane].start()
+        jobs_queue.put((job, fn))
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -150,9 +157,9 @@ class JobManager:
             del self._jobs[job_id]
             self._order.remove(job_id)
 
-    def _run(self) -> None:
+    def _run(self, jobs_queue: "queue.Queue[tuple[Job, JobFn]]") -> None:
         while True:
-            job, fn = self._queue.get()
+            job, fn = jobs_queue.get()
             if job.cancel_requested:
                 job.status = "cancelled"
                 job.finished_at = time.time()
