@@ -12,6 +12,8 @@ import { SettingsView } from './views/settings.js';
 import { DevicesView, DiscoverView, HistoryView } from './views/discover.js';
 import { EnrichView, ToolsView } from './views/tools.js';
 import { OrganizeView } from './views/organize.js';
+import { DuplicatesView } from './views/duplicates.js';
+import { MissingView } from './views/missing.js';
 
 function View() {
   const { parts, query } = useStore(route);
@@ -35,6 +37,8 @@ function View() {
     case 'tools':
       if (second === 'enrich') return html`<${EnrichView} />`;
       if (second === 'organize') return html`<${OrganizeView} />`;
+      if (second === 'duplicates') return html`<${DuplicatesView} />`;
+      if (second === 'missing') return html`<${MissingView} />`;
       return html`<${ToolsView} />`;
     case 'settings': return html`<${SettingsView} />`;
     default: return html`<${Empty} icon="search" title="That page doesn't exist"><a href="#/">Go home</a><//>`;

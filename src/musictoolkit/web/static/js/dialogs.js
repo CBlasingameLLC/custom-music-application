@@ -49,6 +49,37 @@ export function confirmDialog({ title, message, confirm = 'OK', danger = false }
   });
 }
 
+function TypedConfirmBody({ message, word, confirm, close, onYes }) {
+  const [text, setText] = useState('');
+  const input = useRef();
+  useEffect(() => input.current?.focus(), []);
+  const ok = text.trim().toLowerCase() === word.toLowerCase();
+  return html`<form onSubmit=${(e) => { e.preventDefault(); if (ok) onYes(); }}>
+    <p class="modal-text">${message}</p>
+    <label class="field">
+      <span>Type ${word} to confirm</span>
+      <input ref=${input} type="text" value=${text} autocomplete="off" spellcheck="false" onInput=${(e) => setText(e.target.value)} />
+    </label>
+    <div class="modal-actions">
+      <${Button} onClick=${close}>Cancel<//>
+      <${Button} kind="danger" type="submit" disabled=${!ok}>${confirm}<//>
+    </div>
+  </form>`;
+}
+
+/** Like confirmDialog, but the action only unlocks once the person types a word (for deleting things). */
+export function typedConfirm({ title, message, word = 'delete', confirm }) {
+  return new Promise((resolve) => {
+    let answer = false;
+    openModal({
+      title,
+      width: 480,
+      onClose: () => resolve(answer),
+      render: (close) => html`<${TypedConfirmBody} message=${message} word=${word} confirm=${confirm} close=${close} onYes=${() => { answer = true; close(); }} />`,
+    });
+  });
+}
+
 /** Native folder picker in the desktop app; a typed path in a plain browser. */
 export async function pickFolder(title = 'Choose a folder') {
   if (desktop?.selectFolder) return desktop.selectFolder();

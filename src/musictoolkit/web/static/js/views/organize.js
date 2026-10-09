@@ -132,6 +132,7 @@ export function OrganizeView() {
     setPlan(null);
     try {
       const { job } = await api('/tools/organize/preview', { method: 'POST', body: { root, scheme } });
+      pendingRef.current = job.id; // before the job can finish, not after the next render
       setPending(job.id);
       trackJob(job);
     } catch (err) {

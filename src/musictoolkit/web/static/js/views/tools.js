@@ -21,13 +21,29 @@ const TOOLS = [
     blurb: 'Rename and move songs into folders like Artist / Album / 01 - Title. You see every move first, lyrics and covers follow, and a whole batch can be undone.',
     status: (d) => (d.organize?.batches?.length ? `Last change ${fmt.ago(Date.parse(d.organize.batches[0].moved_at) / 1000)}` : ''),
   },
+  {
+    path: '/tools/duplicates',
+    icon: 'copy',
+    title: 'Find duplicates',
+    blurb: 'Find songs you have twice, keep the best copy of each, and move the rest to a review folder. Plays and playlists carry over, and it can all be undone.',
+    status: (d) => (d.duplicates?.review?.count ? `${fmt.plural(d.duplicates.review.count, 'copy', 'copies')} in the review folder` : ''),
+  },
+  {
+    path: '/tools/missing',
+    icon: 'alert',
+    title: 'Missing files',
+    blurb: 'See the songs whose files cannot be found, usually an unplugged drive, and forget the ones that are gone for good.',
+    status: (d) => (d.missing ? (d.missing.total ? `${fmt.plural(d.missing.total, 'song')} cannot be found` : 'Nothing is missing') : ''),
+  },
 ];
 
 export function ToolsView() {
   const rev = useStore(library, (s) => s.rev);
   const { data: enrich } = useAsync(() => api('/tools/enrich/summary'), [rev]);
   const { data: organize } = useAsync(() => api('/tools/organize/batches'), [rev]);
-  const data = { enrich, organize };
+  const { data: duplicates } = useAsync(() => api('/tools/duplicates/info'), [rev]);
+  const { data: missing } = useAsync(() => api('/tools/missing/summary'), [rev]);
+  const data = { enrich, organize, duplicates, missing };
   return html`
     <${PageHeader} title="Library tools" subtitle="Keep your collection tidy. Every tool shows a preview first and can be undone." />
     <div class="tool-grid">

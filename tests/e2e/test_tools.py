@@ -230,3 +230,170 @@ class TestOrganize:
         add_library(page, live)
         page.get_by_role("link", name="Library tools").click()
         expect(page.locator(".tool-card", has_text="Organize files")).to_be_visible()
+
+
+class TestDuplicates:
+    @pytest.fixture
+    def twin(self, live):
+        """A bare second copy of Glacier in Downloads (with a lyrics file); the album-folder copy is the richer one."""
+        copy = make_track(live.library / "Downloads", "Glacier (copy).mp3", "tone_12s.mp3", title="Glacier", artist="Aurora Vale")
+        copy.with_suffix(".lrc").write_text("[00:01.00]hi\n", encoding="utf-8")
+        return copy
+
+    @pytest.fixture(autouse=True)
+    def private_recycle_bin(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))  # keep the test off the real trash folder
+
+    def open_page(self, page, live):
+        add_library(page, live)
+        page.get_by_role("link", name="Library tools").click()
+        page.get_by_role("link", name="Find duplicates").click()
+        expect(page.get_by_role("heading", name="Find duplicates")).to_be_visible()
+
+    def test_find_move_restore_and_delete(self, page, live, twin, tmp_path):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Find duplicates").click()
+
+        expect(page.locator(".stat", has_text="found more than once").locator("strong")).to_have_text("1")
+        group = page.locator(".dup-group")
+        expect(group).to_have_count(1)
+        members = group.locator(".dup-member")
+        expect(members).to_have_count(2)
+        expect(members.first.locator(".dup-path")).to_contain_text("01 - Glacier.mp3")
+        expect(members.first.locator(".dup-verdict")).to_have_text("Keep · suggested")
+        expect(members.nth(1).locator(".dup-verdict")).to_have_text("Move to review folder")
+
+        page.get_by_role("button", name="Move to review folder").click()
+        dialog = page.locator(".modal")
+        expect(dialog).to_contain_text("Move 1 copy to the review folder?")
+        dialog.get_by_role("button", name="Move 1 copy").click()
+
+        expect(page.get_by_text("Moved 1 copy to the review folder.")).to_be_visible()
+        parked = live.library / "_duplicates_review" / "Downloads" / "Glacier (copy).mp3"
+        assert parked.exists() and parked.with_suffix(".lrc").exists() and not twin.exists()
+        expect(page.get_by_text("No duplicates found")).to_be_visible()  # the list refreshed itself
+        page.evaluate("location.hash = '#/songs'")
+        expect(page.locator(".trow", has_text="Glacier")).to_have_count(1)
+        page.go_back()
+
+        page.get_by_role("tab", name="Review folder").click()
+        expect(page.locator(".review-row")).to_have_count(1)
+        expect(page.locator(".review-row .path")).to_contain_text("Downloads/Glacier (copy).mp3")
+        page.get_by_role("button", name="Restore all").click()
+        expect(page.get_by_text("Restored 1 song.")).to_be_visible()
+        assert twin.exists() and not parked.exists()
+        expect(page.get_by_text("The review folder is empty")).to_be_visible()
+
+        # park it again, then delete it for good (to the Recycle Bin) behind a typed confirmation
+        page.get_by_role("tab", name="Find").click()
+        page.get_by_role("button", name="Search again").click()
+        expect(page.locator(".dup-group")).to_have_count(1)
+        page.get_by_role("button", name="Move to review folder").click()
+        page.locator(".modal").get_by_role("button", name="Move 1 copy").click()
+        expect(page.get_by_text("Moved 1 copy to the review folder.")).to_be_visible()
+
+        page.get_by_role("tab", name="Review folder").click()
+        page.get_by_role("button", name="Delete all…").click()
+        dialog = page.locator(".modal")
+        confirm = dialog.get_by_role("button", name="Delete all 1 song")
+        expect(confirm).to_be_disabled()
+        dialog.get_by_label("Type delete to confirm").fill("nope")
+        expect(confirm).to_be_disabled()
+        dialog.get_by_label("Type delete to confirm").fill("DELETE")
+        confirm.click()
+        expect(page.get_by_text("Moved 1 song to the Recycle Bin.")).to_be_visible()
+        assert not parked.exists() and not (live.library / "_duplicates_review").exists()
+        assert (live.library / "Aurora Vale" / "Northern Lights" / "01 - Glacier.mp3").exists()
+
+    def test_picking_the_other_copy_to_keep(self, page, live, twin):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Find duplicates").click()
+        members = page.locator(".dup-group .dup-member")
+        expect(members).to_have_count(2)
+        members.nth(1).locator("input[type=radio]").check()  # keep the Downloads copy instead
+        expect(members.nth(1).locator(".dup-verdict")).to_have_text("Keep")
+        expect(members.first.locator(".dup-verdict")).to_have_text("Move to review folder")
+        page.get_by_role("button", name="Move to review folder").click()
+        page.locator(".modal").get_by_role("button", name="Move 1 copy").click()
+        expect(page.get_by_text("Moved 1 copy to the review folder.")).to_be_visible()
+        assert twin.exists()
+        assert (live.library / "_duplicates_review" / "Aurora Vale" / "Northern Lights" / "01 - Glacier.mp3").exists()
+
+    def test_different_songs_can_be_marked_so_and_brought_back(self, page, live, twin):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Find duplicates").click()
+        page.get_by_role("button", name="These are different songs").click()
+        expect(page.locator(".dup-group")).to_have_count(0)
+        page.get_by_role("button", name="Search again").click()
+        expect(page.get_by_text("No duplicates found")).to_be_visible()
+        expect(page.get_by_text("1 match you marked as different was left out.")).to_be_visible()
+        page.get_by_role("button", name="Check the 1 I marked as different again").click()
+        page.get_by_role("button", name="Search again").click()
+        expect(page.locator(".dup-group")).to_have_count(1)
+
+    def test_a_group_can_be_left_out_of_the_move(self, page, live, twin):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Find duplicates").click()
+        page.locator(".dup-head input[type=checkbox]").uncheck()
+        expect(page.get_by_role("button", name="Move to review folder")).to_be_disabled()
+        expect(page.locator(".dup-bar")).to_contain_text("0 copies in 0 groups")
+
+    def test_the_hub_counts_what_waits_in_the_review_folder(self, page, live, twin):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Find duplicates").click()
+        page.get_by_role("button", name="Move to review folder").click()
+        page.locator(".modal").get_by_role("button", name="Move 1 copy").click()
+        expect(page.get_by_text("Moved 1 copy to the review folder.")).to_be_visible()
+        page.get_by_role("link", name="Library tools").click()
+        expect(page.locator(".tool-card", has_text="Find duplicates")).to_contain_text("1 copy in the review folder")
+
+
+class TestMissingFiles:
+    @pytest.fixture
+    def lost(self, live):
+        """Two songs deleted behind the app's back, then noticed by a scan."""
+        add_library_files = [song_file(live, "Wires"), song_file(live, "Neon Rain")]
+        return add_library_files
+
+    def open_page(self, page, live, lost):
+        add_library(page, live)
+        for path in lost:
+            path.unlink()
+        result = api(page, "/library/scan", "POST")
+        wait_until(page, f"fetch('/api/jobs/{result['job']['id']}').then(r => r.json()).then(j => j.status === 'done')", 60)
+        page.get_by_role("link", name="Library tools").click()
+        expect(page.locator(".tool-card", has_text="Missing files")).to_contain_text("2 songs cannot be found")
+        page.get_by_role("link", name="Missing files").click()
+        expect(page.get_by_role("heading", name="Missing files")).to_be_visible()
+
+    def test_look_at_missing_songs_and_forget_them(self, page, live, lost):
+        self.open_page(page, live, lost)
+        expect(page.locator(".stat", has_text="cannot be found").locator("strong")).to_have_text("2")
+        expect(page.locator(".folder-card")).to_have_count(1)
+        expect(page.locator(".folder-card .chip")).to_have_text("Connected")
+        rows = page.locator(".review-row")
+        expect(rows).to_have_count(2)
+        expect(rows.first).to_contain_text("Wires")  # listed by path
+
+        rows.first.locator("input[type=checkbox]").check()
+        page.get_by_role("button", name="Forget selected…").click()
+        dialog = page.locator(".modal")
+        expect(dialog).to_contain_text("Forget 1 song?")
+        dialog.get_by_role("button", name="Forget 1 song").click()
+        expect(page.get_by_text("Forgot 1 song.")).to_be_visible()
+        expect(rows).to_have_count(1)
+
+        page.get_by_role("button", name="Forget all…").click()
+        page.locator(".modal").get_by_role("button", name="Forget all 1 song").click()
+        expect(page.get_by_text("Nothing is missing")).to_be_visible()
+
+    def test_a_song_whose_file_returns_comes_back_after_checking_again(self, page, live, lost, tmp_path):
+        import shutil
+
+        backup = tmp_path / "backup.mp3"
+        shutil.copy(lost[0], backup)
+        self.open_page(page, live, lost)
+        shutil.copy(backup, lost[0])
+        page.get_by_role("button", name="Check again").click()
+        expect(page.locator(".review-row")).to_have_count(1)
+        expect(page.locator(".stat", has_text="cannot be found").locator("strong")).to_have_text("1")

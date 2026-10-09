@@ -95,6 +95,10 @@ function summarize(job) {
   if (job.kind === 'organize-preview') return `${r.moves || 0} to move · ${r.unchanged || 0} already in place${r.collisions ? ` · ${r.collisions} names taken` : ''}`;
   if (job.kind === 'organize') return `${r.moved || 0} moved${r.skipped ? ` · ${r.skipped} left alone` : ''}${r.tidied_folders ? ` · ${r.tidied_folders} empty folders removed` : ''}`;
   if (job.kind === 'organize-undo') return `${r.moved || 0} put back${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
+  if (job.kind === 'dedupe-scan') return `${r.groups || 0} songs found more than once · ${r.copies || 0} extra copies`;
+  if (job.kind === 'dedupe') return `${r.moved || 0} moved to the review folder${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
+  if (job.kind === 'dedupe-restore') return `${r.moved || 0} restored${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
+  if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   return job.message || 'Finished';
 }

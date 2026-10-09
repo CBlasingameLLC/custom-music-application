@@ -41,7 +41,7 @@ def refresh_from_file(conn: sqlite3.Connection, track_id: int, path: Path, tag_s
     tags = scanner.read_basic_tags(path)
     conn.execute(
         """
-        UPDATE tracks SET file_size = ?, file_mtime = ?, duration_seconds = ?, bitrate = ?,
+        UPDATE tracks SET file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?, bitrate = ?,
             title = ?, artist = ?, album_artist = ?, album = ?, track_number = ?, disc_number = ?,
             year = ?, genre = ?, tag_source = ?, date_last_scanned = ?
         WHERE id = ?

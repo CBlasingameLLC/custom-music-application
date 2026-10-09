@@ -629,3 +629,46 @@ input.mono { font-size: 13.5px; }
 @media (max-width: 900px) {
   .organize-form { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- duplicates, review folder, missing files ---- */
+.dup-bar { position: sticky; top: -1px; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--border); margin: 0 0 6px; padding-top: 10px; }
+.dup-help { margin: 4px 0 14px; }
+.dup-group { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0 0 14px; overflow: hidden; background: var(--bg-elev); }
+.dup-group.off { opacity: 0.55; }
+.dup-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.dup-head .spacer { flex: 1; }
+.dup-head input[type=checkbox], .dup-member input[type=radio], .review-row input { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.dup-title { font-size: 15px; }
+.dup-member { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 14px; cursor: pointer; }
+.dup-member + .dup-member { border-top: 1px solid var(--border); }
+.dup-member:hover { background: var(--bg-hover); }
+.dup-member.keep { background: color-mix(in srgb, var(--good) 8%, transparent); }
+.dup-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dup-path { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
+.dup-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 12.5px; color: var(--text-dim); }
+.dup-meta .chip { font-size: 11.5px; padding: 2px 7px; }
+.dup-verdict { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.dup-member.keep .dup-verdict { color: var(--good); }
+.dup-member.move .dup-verdict { color: var(--text-faint, var(--text-dim)); }
+.review-table { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.review-head, .review-row { display: grid; grid-template-columns: 28px minmax(0, 1.2fr) minmax(0, 1.4fr) 90px; gap: 12px; align-items: center; padding: 8px 14px; }
+.review-head { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint, var(--text-dim)); background: var(--bg-elev); }
+.review-row { border-top: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+.review-row:hover { background: var(--bg-hover); }
+.review-row.selected { background: var(--bg-active); }
+.review-row .cell { display: flex; flex-direction: column; min-width: 0; }
+.review-row .cell > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-row .path { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 0 0 18px; }
+.folder-card { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--border); }
+.folder-card.active { border-color: var(--accent); }
+.folder-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.folder-card-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.folder-card p { margin: 0; font-size: 12.5px; }
+.folder-card .row-actions { margin: 4px 0 0; }
+@media (max-width: 900px) {
+  .review-head, .review-row { grid-template-columns: 28px minmax(0, 1fr) 80px; }
+  .review-head span:nth-child(3), .review-row .cell:nth-of-type(2) { display: none; }
+  .dup-member { grid-template-columns: 22px minmax(0, 1fr); }
+  .dup-verdict { grid-column: 2; }
+}
