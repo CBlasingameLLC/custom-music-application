@@ -595,3 +595,37 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
   .enrich-head, .enrich-row { grid-template-columns: 28px 1fr 1fr 56px; }
   .enrich-head span:nth-child(2), .enrich-row .file, .enrich-head span:nth-child(5), .enrich-row .cell:nth-of-type(3) { display: none; }
 }
+
+/* ---- organize files ---- */
+.organize-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; margin-bottom: 8px; }
+.organize-form .field.wide, .organize-form .field-chips, .organize-form .example-box, .organize-form .row-actions { grid-column: 1 / -1; }
+.organize-form .field, .organize-form .field-chips, .organize-form .example-box { min-width: 0; }
+.organize-form select, .organize-form input { min-width: 0; width: 100%; text-overflow: ellipsis; }
+.mono, code { font-family: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace; }
+input.mono { font-size: 13.5px; }
+.field-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 12px; }
+.field-chips .chip-btn { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.example-box { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; margin-bottom: 8px; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--border); font-size: 13px; min-height: 3.2em; }
+.example-box code { color: var(--accent); overflow-wrap: anywhere; }
+.example-box.bad { flex-direction: row; align-items: flex-start; gap: 8px; color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.example-box.bad svg { flex: none; margin-top: 2px; }
+.organize-apply { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin: 0 0 18px; }
+.move-table { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.move-head, .move-row { display: grid; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); gap: 10px; align-items: center; padding: 7px 14px; }
+.move-head { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint, var(--text-dim)); background: var(--bg-elev); }
+.move-row { border-top: 1px solid var(--border); font-size: 12.5px; }
+.move-row:hover { background: var(--bg-hover); }
+.move-row .from, .move-row .to { overflow-wrap: anywhere; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.move-row .from { color: var(--text-dim); }
+.move-row .to { color: var(--accent); }
+.move-row svg { color: var(--text-faint, var(--text-dim)); }
+.batch-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.batch-row { display: flex; align-items: center; gap: 14px; padding: 9px 14px; font-size: 13.5px; }
+.batch-row + .batch-row { border-top: 1px solid var(--border); }
+.batch-row .spacer { flex: 1; }
+.batch-when { color: var(--text-dim); min-width: 130px; }
+.problem-list { margin: 0; padding-left: 20px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+.problem-list code { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .organize-form { grid-template-columns: minmax(0, 1fr); }
+}

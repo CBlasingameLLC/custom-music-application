@@ -7,7 +7,7 @@ import pytest
 from playwright.sync_api import expect
 
 from musictoolkit.ingest import tagger
-from tests.conftest import make_track
+from tests.conftest import jpeg_bytes, make_track
 from tests.e2e.conftest import add_library, api, row, wait_until
 
 expect.set_options(timeout=15_000)
@@ -139,3 +139,94 @@ class TestFixMissingTags:
         add_library(page, live)
         page.get_by_role("link", name="Library tools").click()
         expect(page.locator(".tool-card", has_text="Fix missing tags")).to_contain_text("2 songs to look up")
+
+
+class TestOrganize:
+    @pytest.fixture
+    def inbox(self, live):
+        """Two properly tagged songs dumped in one folder with a lyrics file and a cover; the rest of the library is tidy."""
+        inbox = live.library / "inbox"
+        for n, title in enumerate(["Inbox One", "Inbox Two"], start=1):
+            make_track(inbox, f"track {n}.mp3", "tone_12s.mp3", title=title, artist="Zed Band", albumartist="Zed Band",
+                       album="First Album", tracknumber=n)
+        (inbox / "track 1.lrc").write_text("[00:01.00]one\n", encoding="utf-8")
+        (inbox / "cover.jpg").write_bytes(jpeg_bytes())
+        return inbox
+
+    def open_page(self, page, live):
+        add_library(page, live)
+        page.get_by_role("link", name="Library tools").click()
+        page.get_by_role("link", name="Organize files").click()
+        expect(page.get_by_role("heading", name="Organize files")).to_be_visible()
+
+    def test_preview_then_move_then_undo(self, page, live, inbox):
+        self.open_page(page, live)
+        expect(page.get_by_label("Folder and file name, built from these fields")).to_have_value("{album_artist}/{album}/{track:02d} - {title}.{ext}")
+        expect(page.locator(".example-box code").first).to_have_text("Aurora Vale/Northern Lights/03 - Glacier.flac")
+
+        page.get_by_role("button", name="Preview changes").click()
+        expect(page.locator(".stat", has_text="songs will move").locator("strong")).to_have_text("2")
+        expect(page.locator(".stat", has_text="already in place").locator("strong")).to_have_text("9")
+        rows = page.locator(".move-row")
+        expect(rows).to_have_count(2)
+        expect(rows.first.locator(".from")).to_have_text("inbox/track 1.mp3")
+        expect(rows.first.locator(".to")).to_have_text("Zed Band/First Album/01 - Inbox One.mp3")
+        assert (inbox / "track 1.mp3").exists(), "a preview must not move anything"
+
+        page.get_by_role("button", name="Move 2 songs").click()
+        dialog = page.locator(".modal")
+        expect(dialog).to_contain_text("Move 2 songs?")
+        dialog.get_by_role("button", name="Move 2 songs").click()
+
+        expect(page.get_by_text("Moved 2 songs.")).to_be_visible()
+        album = live.library / "Zed Band" / "First Album"
+        assert (album / "01 - Inbox One.mp3").exists() and (album / "02 - Inbox Two.mp3").exists()
+        assert (album / "01 - Inbox One.lrc").read_text(encoding="utf-8") == "[00:01.00]one\n"
+        assert (album / "cover.jpg").exists()
+        assert not inbox.exists(), "the emptied folder is tidied away"
+        batch = page.locator(".batch-row")
+        expect(batch).to_have_count(1)
+        expect(batch).to_contain_text("2 songs moved")
+
+        # the library follows the files: nothing is missing and the songs are findable at their new place
+        page.evaluate("location.hash = '#/songs'")
+        expect(page.locator(".trow", has_text="Inbox One")).to_have_count(1)
+        page.go_back()
+
+        batch.get_by_role("button", name="Undo").click()
+        expect(page.get_by_text("Put 2 songs back.")).to_be_visible()
+        assert (inbox / "track 1.mp3").exists() and (inbox / "track 2.mp3").exists()
+        assert (inbox / "track 1.lrc").exists() and (inbox / "cover.jpg").exists()
+        assert not (live.library / "Zed Band").exists()
+        expect(page.locator(".batch-row")).to_contain_text("Undone")
+
+    def test_changing_the_layout_after_a_preview_asks_for_a_new_preview(self, page, live, inbox):
+        self.open_page(page, live)
+        page.get_by_role("button", name="Preview changes").click()
+        expect(page.get_by_role("button", name="Move 2 songs")).to_be_visible()
+
+        page.get_by_label("Layout preset").select_option(label="Artist / Album / Title")
+        expect(page.get_by_text("You changed the folder or layout after previewing")).to_be_visible()
+        expect(page.get_by_role("button", name="Move 2 songs")).to_have_count(0)
+        page.get_by_role("button", name="Preview changes").click()
+        # without track numbers the tidy songs change name too, so look for the inbox song's row
+        expect(page.locator(".move-row", has_text="inbox/track 1.mp3").locator(".to")).to_have_text("Zed Band/First Album/Inbox One.mp3")
+        assert (inbox / "track 1.mp3").exists()
+
+    def test_a_layout_that_cannot_work_is_explained_and_cannot_be_previewed(self, page, live, inbox):
+        self.open_page(page, live)
+        box = page.get_by_label("Folder and file name, built from these fields")
+        box.fill("{nonsense}/{title}.{ext}")
+        expect(page.locator(".example-box.bad")).to_contain_text("Available fields")
+        expect(page.get_by_role("button", name="Preview changes")).to_be_disabled()
+        box.fill("")
+        expect(page.get_by_role("button", name="Preview changes")).to_be_disabled()
+        page.get_by_role("button", name="{album}").click()
+        page.get_by_role("button", name="{ext}").click()
+        expect(box).to_have_value("{album}{ext}")
+        expect(page.locator(".example-box code").first).to_have_text("Northern Lightsflac")
+
+    def test_the_hub_links_to_organize(self, page, live, inbox):
+        add_library(page, live)
+        page.get_by_role("link", name="Library tools").click()
+        expect(page.locator(".tool-card", has_text="Organize files")).to_be_visible()

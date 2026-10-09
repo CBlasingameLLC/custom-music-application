@@ -71,6 +71,10 @@ class JobHandle:
     def __init__(self, job: Job) -> None:
         self._job = job
 
+    @property
+    def id(self) -> str:
+        return self._job.id
+
     def update(self, done: int | None = None, total: int | None = None, message: str | None = None) -> None:
         if done is not None:
             self._job.done = done

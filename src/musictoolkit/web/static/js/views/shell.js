@@ -92,6 +92,9 @@ function summarize(job) {
   const r = job.result || {};
   if (job.kind === 'scan') return `${r.added || 0} added · ${r.updated || 0} changed · ${r.unchanged || 0} unchanged${r.missing ? ` · ${r.missing} missing` : ''}${r.offline_roots?.length ? ` · ${r.offline_roots.length} folder(s) not found` : ''}`;
   if (job.kind === 'tags') return `${r.edited || 0} updated${r.unchanged ? ` · ${r.unchanged} already matched` : ''}${r.errors?.length ? ` · ${r.errors.length} failed` : ''}`;
+  if (job.kind === 'organize-preview') return `${r.moves || 0} to move · ${r.unchanged || 0} already in place${r.collisions ? ` · ${r.collisions} names taken` : ''}`;
+  if (job.kind === 'organize') return `${r.moved || 0} moved${r.skipped ? ` · ${r.skipped} left alone` : ''}${r.tidied_folders ? ` · ${r.tidied_folders} empty folders removed` : ''}`;
+  if (job.kind === 'organize-undo') return `${r.moved || 0} put back${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   return job.message || 'Finished';
 }

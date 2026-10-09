@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from fastapi import Request
 
@@ -21,6 +22,7 @@ class AppContext:
     config: Config
     token: str | None = None  # None disables auth (tests); the desktop app always sets one
     jobs: JobManager = field(default_factory=JobManager)
+    previews: dict[str, Any] = field(default_factory=dict)  # the last "show me first" result per tool, kept in memory
 
     @property
     def data_dir(self) -> Path:
@@ -48,6 +50,11 @@ class AppContext:
 
     def save_config(self) -> None:
         save_config(self.config_path, self.config)
+
+
+def same_path(a: str, b: str) -> bool:
+    """Do these name the same place, ignoring letter case on Windows and a trailing slash?"""
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 def get_ctx(request: Request) -> AppContext:

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from musictoolkit.config import Config
 from musictoolkit.ingest import organizer
-from musictoolkit.web.context import AppContext, get_ctx
+from musictoolkit.web.context import AppContext, get_ctx, same_path
 
 router = APIRouter(prefix="/api")
 
@@ -90,10 +90,6 @@ class RootBody(BaseModel):
     path: str
 
 
-def _same(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
-
-
 @router.post("/library/roots", status_code=201)
 def add_root(body: RootBody, ctx: AppContext = Depends(get_ctx)) -> dict:
     from musictoolkit.web.routers.manage import submit_scan
@@ -102,7 +98,7 @@ def add_root(body: RootBody, ctx: AppContext = Depends(get_ctx)) -> dict:
     if not path.is_dir():
         raise HTTPException(status_code=422, detail=f"Folder not found: {body.path}")
     resolved = str(path.resolve())
-    if any(_same(resolved, existing) for existing in ctx.config.library.roots):
+    if any(same_path(resolved, existing) for existing in ctx.config.library.roots):
         raise HTTPException(status_code=409, detail="That folder is already in your library")
     ctx.config.library.roots.append(resolved)
     ctx.save_config()
@@ -113,7 +109,7 @@ def add_root(body: RootBody, ctx: AppContext = Depends(get_ctx)) -> dict:
 @router.post("/library/roots/remove")
 def remove_root(body: RootBody, ctx: AppContext = Depends(get_ctx)) -> dict:
     """Stop watching a folder and hide its tracks. The files on disk are never touched."""
-    remaining = [r for r in ctx.config.library.roots if not _same(r, body.path)]
+    remaining = [r for r in ctx.config.library.roots if not same_path(r, body.path)]
     if len(remaining) == len(ctx.config.library.roots):
         raise HTTPException(status_code=404, detail="That folder is not in your library")
     prefix = os.path.normpath(body.path).rstrip("\\/") + os.sep

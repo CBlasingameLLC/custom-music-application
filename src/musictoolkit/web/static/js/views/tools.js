@@ -14,12 +14,20 @@ const TOOLS = [
     blurb: 'Songs with no title, artist or album are looked up on MusicBrainz. You approve each match before anything is written.',
     status: (d) => (d.enrich ? (d.enrich.pending ? `${fmt.plural(d.enrich.pending, 'match', 'matches')} to review` : d.enrich.to_look_up ? `${fmt.plural(d.enrich.to_look_up, 'song')} to look up` : 'Nothing needs fixing') : ''),
   },
+  {
+    path: '/tools/organize',
+    icon: 'folder',
+    title: 'Organize files',
+    blurb: 'Rename and move songs into folders like Artist / Album / 01 - Title. You see every move first, lyrics and covers follow, and a whole batch can be undone.',
+    status: (d) => (d.organize?.batches?.length ? `Last change ${fmt.ago(Date.parse(d.organize.batches[0].moved_at) / 1000)}` : ''),
+  },
 ];
 
 export function ToolsView() {
   const rev = useStore(library, (s) => s.rev);
   const { data: enrich } = useAsync(() => api('/tools/enrich/summary'), [rev]);
-  const data = { enrich };
+  const { data: organize } = useAsync(() => api('/tools/organize/batches'), [rev]);
+  const data = { enrich, organize };
   return html`
     <${PageHeader} title="Library tools" subtitle="Keep your collection tidy. Every tool shows a preview first and can be undone." />
     <div class="tool-grid">

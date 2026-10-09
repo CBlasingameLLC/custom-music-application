@@ -151,7 +151,7 @@ onJobFinished((job) => {
     const r = job.result || {};
     toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing`, 'success');
   }
-  if (job.status === 'done') {
+  if (job.status === 'done' || job.status === 'cancelled') {
     bumpLibrary();
     loadFacets().catch(() => {});
     loadAbout().catch(() => {});

@@ -107,7 +107,7 @@ function AccountsCard({ settings }) {
 function LayoutsCard({ settings }) {
   const [organize, setOrganize] = useState(settings.library.canonical_scheme);
   const [device, setDevice] = useState(settings.sync.device_scheme);
-  return html`<${Card} icon="layers" title="Folder layouts" hint="How files are named when you tidy the library or copy music to a player. Fields: {album_artist} {artist} {album} {title} {track:02d} {year} {ext}">
+  return html`<${Card} icon="layers" title="Folder layouts" hint="How files are named when you tidy the library or copy music to a player. Fields: {album_artist} {artist} {album} {title} {track:02d} {disc} {year} {ext}. Use Library tools, Organize files to preview and apply it.">
     <label class="field"><span>Tidy up the library as</span><input type="text" value=${organize} onInput=${(e) => setOrganize(e.target.value)} /></label>
     <label class="field"><span>Copy to players as</span><input type="text" value=${device} onInput=${(e) => setDevice(e.target.value)} /></label>
     <${Button} onClick=${() => save({ library: { canonical_scheme: organize }, sync: { device_scheme: device } })}>Save layouts<//>
