@@ -39,11 +39,30 @@ in the main process and ignored unless it comes from the backend's own origin.
 | `openPath(dir)` | Open a **folder** (never a file: the page cannot launch programs) |
 | `openExternal(url)` | Open an `http(s)` link in the default browser |
 | `onMediaKey(fn)` | Play/pause, next, previous, stop from the keyboard's media keys; returns an unsubscribe function |
+| `update.status()` / `update.check()` | The updater's state (`idle`, `checking`, `up-to-date`, `downloading`, `ready`, `error`, `disabled`) and a manual check |
+| `update.install()` / `update.setAuto(on)` | Restart into a downloaded update; switch the automatic checks on or off |
+| `update.onStatus(fn)` | Be told whenever the updater's state changes; returns an unsubscribe function |
 
 The window cannot navigate away from the app or open new windows; `http(s)`
 links go to the default browser instead. Media keys are registered as global
 shortcuts, and Chromium's own media-key handling is switched off so the two
 cannot both fire.
+
+## Updates
+
+`updater.js` wraps `electron-updater` with the GitHub provider (the repository is
+public, so no token is involved). Shortly after start and every six hours it asks
+GitHub for the latest release's `latest.yml`; a newer version is downloaded in
+the background (only the changed blocks when the `.blockmap` allows) and installed
+silently when the app quits, or at once on `update.install()`. The switch for
+automatic checks is the `auto_update` setting of the Python backend, which the
+main process reads at start-up. Only a packaged build updates; `npm start` reports
+`disabled`. The logic is plain Node with the updater and timers injected, tested by
+`npm test` (`test/updater.test.js`). Update activity is logged to
+`~/.musictoolkit/logs/updater.log`.
+
+Because the installer is unsigned there is nothing to verify beyond the checksum in
+`latest.yml`, which electron-updater checks against the downloaded file.
 
 ## Building the Windows installer
 

@@ -5,7 +5,7 @@ import { Cover, IconButton } from '../components.js';
 import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
 import { QueueList } from './nowplaying.js';
 import { setFavorite } from '../tracks.js';
-import { enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui } from '../state.js';
+import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
 // ------------------------------------------------------------ sidebar
 
@@ -19,6 +19,7 @@ function NavItem({ to, icon, label, match }) {
 export function Sidebar() {
   const playlists = useStore(library, (s) => s.playlists);
   const about = useStore(library, (s) => s.about);
+  const update = useStore(updates, (s) => s.status);
   useEffect(() => { loadPlaylists().catch(() => {}); }, []);
   const starts = (prefix) => (path) => path === prefix || path.startsWith(prefix + '/');
   return html`<nav class="sidebar" aria-label="Main">
@@ -50,7 +51,8 @@ export function Sidebar() {
       <div class="nav-scroll">${playlists.slice(0, 40).map((p) => html`<a class="nav-item small" href=${href(`/playlist/${p.id}`)} key=${p.id} title=${p.name}>
         <${Icon} name=${p.kind === 'smart' ? 'sparkles' : 'list'} size=${15} /><span>${p.name}</span></a>`)}</div>
     </div>`}
-    <div class="sidebar-foot">${about ? `v${about.version} · ${fmt.plural(about.tracks, 'song')}` : ''}</div>
+    <div class="sidebar-foot">${about ? `v${about.version} · ${fmt.plural(about.tracks, 'song')}` : ''}
+      ${update?.state === 'ready' && html`<button class="update-pill" onClick=${() => desktop.update.install()} title="Close the app and install the update now">Update ready · restart</button>`}</div>
   </nav>`;
 }
 

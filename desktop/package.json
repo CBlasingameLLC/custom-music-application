@@ -1,12 +1,16 @@
 {
   "name": "musictoolkit-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Desktop shell for Music Toolkit: starts the Python backend and shows its web UI in a native window.",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "package": "electron-builder --win"
+    "package": "electron-builder --win",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "electron": "^44.0.0",
@@ -32,6 +36,9 @@
       ],
       "icon": "build/icon.png"
     },
+    "publish": [
+      { "provider": "github", "owner": "CBlasingameLLC", "repo": "custom-music-application", "releaseType": "release" }
+    ],
     "nsis": {
       "oneClick": false,
       "perMachine": false,

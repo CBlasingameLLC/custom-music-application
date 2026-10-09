@@ -672,3 +672,11 @@ input.mono { font-size: 13.5px; }
   .dup-member { grid-template-columns: 22px minmax(0, 1fr); }
   .dup-verdict { grid-column: 2; }
 }
+
+/* ---- updates ---- */
+.status-line { margin: 0 0 10px; font-size: 13.5px; }
+.status-line.error { color: var(--warn); }
+.status-line.ready { color: var(--good); font-weight: 600; }
+.status-line + .progress { margin: 0 0 12px; }
+.update-pill { display: block; margin-top: 6px; padding: 4px 10px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.update-pill:hover { background: var(--accent); color: var(--on-accent); }

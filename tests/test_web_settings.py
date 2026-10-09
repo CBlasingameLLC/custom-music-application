@@ -22,13 +22,20 @@ class TestSettings:
         body = response.json()
         assert body["musicbrainz"]["contact"] == "me@example.com"
         assert body["listenbrainz"]["has_token"] is True and "tok-123" not in response.text
-        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True}
+        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True, "auto_update": True}
 
         saved = load_config(empty_web.ctx.config_path)  # really written to config.toml
         assert saved.listenbrainz.user_token == "tok-123" and saved.listenbrainz.username == "cayl"
         # an untouched key keeps its value across a later partial update
         c.put("/api/settings", json={"listenbrainz": {"scrobble": False}})
         assert load_config(empty_web.ctx.config_path).listenbrainz.user_token == "tok-123"
+
+    def test_automatic_updates_can_be_switched_off_and_stay_off(self, empty_web) -> None:
+        c = empty_web.client
+        assert c.get("/api/settings").json()["app"]["auto_update"] is True
+        assert c.put("/api/settings", json={"app": {"auto_update": False}}).json()["app"]["auto_update"] is False
+        assert load_config(empty_web.ctx.config_path).app.auto_update is False
+        assert c.put("/api/settings", json={"app": {"auto_update": "no"}}).status_code == 422
 
     def test_sending_an_empty_secret_clears_it(self, empty_web) -> None:
         c = empty_web.client

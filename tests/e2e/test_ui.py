@@ -6,6 +6,7 @@ import json
 import re
 import urllib.parse
 
+import pytest
 from playwright.sync_api import expect
 
 from tests.e2e.conftest import add_library, api, play, row, wait_until
@@ -238,3 +239,78 @@ def test_layout_survives_a_narrow_window(page, live):
             assert page.evaluate("document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth"), (
                 f"horizontal page scroll at {width}px on {route}"
             )
+
+
+FAKE_DESKTOP = """
+(() => {
+  const listeners = new Set();
+  let status = { state: 'idle', current: '0.3.0', version: null, percent: 0, error: null, checkedAt: null };
+  const push = (patch) => { status = { ...status, ...patch }; listeners.forEach((l) => l({ ...status })); };
+  window.__bridge = { calls: [], push };
+  window.mtk = {
+    selectFolder: async () => null, selectFile: async () => null, showItemInFolder: async () => null,
+    openPath: async () => null, openExternal: async () => null, onMediaKey: () => () => {},
+    update: {
+      status: async () => ({ ...status }),
+      check: async () => { window.__bridge.calls.push('check'); push({ state: 'checking' }); setTimeout(() => push({ state: 'up-to-date', checkedAt: Date.now() }), 80); return { ...status }; },
+      install: async () => { window.__bridge.calls.push('install'); return true; },
+      setAuto: async (on) => { window.__bridge.calls.push('auto:' + on); return { ...status }; },
+      onStatus: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+  };
+})();
+"""
+
+
+class TestDesktopUpdates:
+    """The Updates card and the restart prompt, against a stand-in for the desktop shell's bridge."""
+
+    @pytest.fixture
+    def desktop(self, page):
+        page.add_init_script(FAKE_DESKTOP)
+        page.reload()
+        page.wait_for_selector(".sidebar")
+        page.evaluate("location.hash = '#/settings'")
+        return page
+
+    def calls(self, page) -> list[str]:
+        return page.evaluate("window.__bridge.calls")
+
+    def test_checking_downloading_and_restarting(self, desktop):
+        page = desktop
+        card = page.locator(".card-panel", has_text="Updates")
+        expect(card.locator(".status-line")).to_have_text("Not checked yet.")
+
+        card.get_by_role("button", name="Check for updates").click()
+        expect(card.locator(".status-line")).to_contain_text("You have the latest version (0.3.0)")
+        assert self.calls(page) == ["check"]
+
+        page.evaluate("window.__bridge.push({ state: 'downloading', version: '0.3.1', percent: 40 })")
+        expect(card.locator(".status-line")).to_have_text("Downloading version 0.3.1… 40%")
+        expect(card.get_by_role("button", name="Check for updates")).to_be_disabled()
+
+        page.evaluate("window.__bridge.push({ state: 'ready', version: '0.3.1', percent: 100 })")
+        expect(page.get_by_text("Music Toolkit 0.3.1 is ready to install.")).to_be_visible()
+        expect(page.get_by_role("button", name="Update ready · restart")).to_be_visible()
+        page.locator(".toast").get_by_role("button", name="Restart now").click()
+        card.get_by_role("button", name="Restart and install 0.3.1").click()
+        page.get_by_role("button", name="Update ready · restart").click()
+        assert self.calls(page).count("install") == 3
+
+    def test_a_failed_check_says_why_and_the_automatic_switch_is_remembered(self, desktop):
+        page = desktop
+        card = page.locator(".card-panel", has_text="Updates")
+        page.evaluate("window.__bridge.push({ state: 'error', error: \"Couldn't reach GitHub to look for updates. Are you offline?\" })")
+        expect(card.locator(".status-line")).to_contain_text("Are you offline?")
+
+        switch = card.get_by_label("Look for updates automatically")
+        expect(switch).to_be_checked()
+        switch.uncheck()
+        expect(page.get_by_text("Saved")).to_be_visible()
+        assert "auto:false" in self.calls(page)
+        assert api(page, "/settings")["app"]["auto_update"] is False
+
+    def test_a_plain_browser_has_no_updates_card(self, page):
+        page.evaluate("location.hash = '#/settings'")
+        expect(page.get_by_role("heading", name="Appearance and data")).to_be_visible()
+        expect(page.get_by_role("heading", name="Updates")).to_have_count(0)

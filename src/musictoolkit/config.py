@@ -68,6 +68,7 @@ class LoggingConfig:
 class AppConfig:
     rescan_on_launch: bool = True
     lyrics_lrclib: bool = False  # look up lyrics on lrclib.net when a file has none
+    auto_update: bool = True  # the desktop app checks GitHub Releases for new versions and installs them
 
 
 @dataclass

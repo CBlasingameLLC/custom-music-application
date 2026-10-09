@@ -194,3 +194,21 @@ export function openModal({ title, render, width = 480, onClose }) {
 
 /** Present only inside the Electron app; the browser build falls back to typed paths. */
 export const desktop = window.mtk || null;
+
+// ------------------------------------------------------------ app updates (desktop only)
+
+/** { state: idle | checking | up-to-date | downloading | ready | error | disabled, current, version, percent, error, checkedAt } */
+export const updates = createStore({ status: null });
+
+if (desktop?.update) {
+  const apply = (status) => {
+    if (!status) return;
+    const before = updates.get().status;
+    updates.set({ status });
+    if (status.state === 'ready' && before?.state !== 'ready') {
+      toast(`Music Toolkit ${status.version} is ready to install.`, 'info', 0, { label: 'Restart now', onClick: () => desktop.update.install() });
+    }
+  };
+  desktop.update.status().then(apply).catch(() => {});
+  desktop.update.onStatus(apply);
+}

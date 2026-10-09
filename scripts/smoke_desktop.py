@@ -34,7 +34,8 @@ WINDOWS = sys.platform == "win32"
 # CI consoles on Windows default to a legacy code page; the checks print arrows and quotes.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-BRIDGE = ["onMediaKey", "openExternal", "openPath", "selectFile", "selectFolder", "showItemInFolder"]
+BRIDGE = ["onMediaKey", "openExternal", "openPath", "selectFile", "selectFolder", "showItemInFolder", "update"]
+UPDATE_BRIDGE = ["check", "install", "onStatus", "setAuto", "status"]
 failures: list[str] = []
 
 
@@ -187,6 +188,19 @@ def drive(args, command: list[str]) -> None:
             check(page.evaluate("typeof require") == "undefined" and page.evaluate("typeof process") == "undefined",
                   "no Node.js globals reach the page")
 
+            step("app updates")
+            check(page.evaluate("Object.keys(window.mtk.update).sort()") == UPDATE_BRIDGE, f"window.mtk.update is exactly {UPDATE_BRIDGE}")
+            update = page.evaluate("window.mtk.update.status()")
+            version = page.evaluate("fetch('/api/about').then(r => r.json()).then(a => a.version)")
+            check(update.get("current") == version, f"the app reports its own version ({update.get('current')} vs the backend's {version})")
+            if args.expect_updater:
+                check(update.get("state") != "disabled", f"the updater is active in the installed app (state {update.get('state')!r})")
+                checked = page.evaluate("window.mtk.update.check()")
+                # No newer release (or no update feed yet, or no network on the runner) are all fine here;
+                # what matters is that electron-updater loaded and ran a check without crashing the app.
+                check(checked.get("state") in ("up-to-date", "error", "downloading", "ready", "checking"),
+                      f"a check for updates ran ({checked.get('state')!r}: {checked.get('error')})")
+
             step("first run, library, playback")
             check(page.locator("text=Add your music").count() == 1, "an empty library shows the first-run prompt")
             status = page.evaluate(
@@ -214,8 +228,10 @@ def drive(args, command: list[str]) -> None:
             started = time.time()
             answers = page.evaluate(
                 "(async () => [await window.mtk.selectFile({}), await window.mtk.selectFolder(), "
-                "await window.mtk.openPath('.'), await window.mtk.showItemInFolder('.')])()")
-            check(answers == [None] * 4 and time.time() - started < 5, f"no dialog opens and every call answers null ({answers})")
+                "await window.mtk.openPath('.'), await window.mtk.showItemInFolder('.'), "
+                "await window.mtk.update.status(), await window.mtk.update.check(), await window.mtk.update.install(), "
+                "await window.mtk.update.setAuto(false)])()")
+            check(answers == [None] * 8 and time.time() - started < 5, f"no dialog opens, nothing updates, and every call answers null ({answers})")
             page.goto(page_url)
             page.wait_for_selector(".sidebar", timeout=30000)
 
@@ -278,6 +294,7 @@ def main() -> None:
     parser.add_argument("--cwd", help="working directory for the app command (e.g. desktop/ for `electron .`)")
     parser.add_argument("--launch-timeout", type=float, default=90, help="seconds to wait for the window")
     parser.add_argument("--strict-audio", action="store_true", help="also require the playback clock to advance (needs an audio device or a fake sink)")
+    parser.add_argument("--expect-updater", action="store_true", help="the app is an installed build: its updater must be active")
     parser.add_argument("--skip-external", action="store_true", help="skip the checks that make the app open a link in the system browser")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the command that starts the app")
     args = parser.parse_args()
