@@ -163,7 +163,7 @@ jobs:
       # the real build (the `update` job).
       - name: Build an older-versioned installer for the update test
         working-directory: desktop
-        run: npm run package -- -c.extraMetadata.version=0.0.1 -c.directories.output=release-old
+        run: node_modules\.bin\electron-builder.cmd --win --config.extraMetadata.version=0.0.1 --config.directories.output=release-old
 
       # Installs the installer that was just built and drives the installed
       # app's real window: backend start, token handoff, bridge, streaming
