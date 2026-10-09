@@ -8,6 +8,7 @@ tracknumber, discnumber), so one code path serves all of them.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,8 @@ def _open(path: Path):
         raise TagWriteError("The file is missing (is its drive connected?)")
     if not can_write(path):
         raise TagWriteError(f"Tags in {path.suffix.upper() or 'this kind of'} files can't be edited yet")
+    if not os.access(path, os.W_OK):  # on Windows this is the file's read-only attribute
+        raise TagWriteError("The file is read-only or in use by another program")
     try:
         audio = mutagen.File(path, easy=True)
     except Exception as exc:
@@ -115,6 +118,10 @@ def _save(path: Path, audio) -> None:
         raise TagWriteError("The file is read-only or in use by another program") from None
     except OSError as exc:
         raise TagWriteError(f"The file could not be written ({exc.strerror or exc})") from None
+    except mutagen.MutagenError as exc:  # mutagen wraps the OSError of a file it cannot open for writing
+        if exc.args and isinstance(exc.args[0], PermissionError):
+            raise TagWriteError("The file is read-only or in use by another program") from None
+        raise TagWriteError(f"The tags could not be saved ({exc})") from None
     except Exception as exc:
         raise TagWriteError(f"The tags could not be saved ({exc})") from None
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
@@ -610,7 +609,6 @@ def test_a_missing_song_that_is_not_flagged_missing_is_never_forgotten(conn, lib
     assert cleanup.forget_missing(conn, [str(library)], track_ids=[live]) == {"forgotten": 0, "kept": 0}
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
 def test_path_buckets_do_not_confuse_a_look_alike_folder(conn, tmp_path, library) -> None:
     sibling = tmp_path / (library.name + "-backup")
     conn.execute("INSERT INTO tracks (file_path, is_missing) VALUES (?, 1)", (str(sibling / "x.mp3"),))

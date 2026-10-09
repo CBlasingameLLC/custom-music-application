@@ -137,6 +137,21 @@ class TestRefusals:
         with pytest.raises(tagwrite.TagWriteError, match="missing"):
             tagwrite.apply_changes(tmp_path / "gone.mp3", {"title": "x"})
 
+    def test_a_write_mutagen_reports_as_permission_denied_is_explained(self, tmp_path: Path, monkeypatch) -> None:
+        """On Windows a read-only or locked file arrives as MutagenError(PermissionError(...)), not PermissionError."""
+        import mutagen
+        from mutagen.mp3 import MP3
+
+        path = tmp_path / "locked.mp3"
+        shutil.copy(FIXTURES_DIR / "complete_tags.mp3", path)
+
+        def refuse(self, *args, **kwargs):
+            raise mutagen.MutagenError(PermissionError(13, "Permission denied", str(path)))
+
+        monkeypatch.setattr(MP3, "save", refuse)
+        with pytest.raises(tagwrite.TagWriteError, match="read-only or in use"):
+            tagwrite.apply_changes(path, {"title": "x"})
+
     def test_read_only_file_is_explained(self, tmp_path: Path) -> None:
         import os
         import stat
