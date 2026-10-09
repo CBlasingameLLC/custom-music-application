@@ -61,14 +61,16 @@ def test_the_lyrics_file_moves_with_its_song(conn, library) -> None:
     assert path_of(conn, track_id) == new
 
 
-def test_an_upper_case_lyrics_extension_is_found_too(conn, library) -> None:
+def test_a_lyrics_file_keeps_its_own_spelling_wherever_it_goes(conn, library) -> None:
     _, song = add_song(conn, library)
     song.with_suffix(".LRC").write_text("[00:01.00]hello")
 
-    organize(conn, library)
+    _, result = organize(conn, library)
 
     moved = library / "Artist" / "Album"
-    assert [p.name for p in moved.iterdir() if p.suffix.lower() == ".lrc"], "lyrics were left behind"
+    assert [p.name for p in moved.iterdir() if p.suffix.lower() == ".lrc"] == ["01 - Title.LRC"]
+    moves.undo_batch(conn, result.batch_id, "organize", [library])
+    assert [p.name for p in library.iterdir() if p.suffix.lower() == ".lrc"] == ["raw.LRC"]
 
 
 def test_folder_art_is_copied_so_the_album_keeps_its_cover(conn, library) -> None:

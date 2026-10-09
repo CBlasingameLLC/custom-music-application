@@ -26,7 +26,7 @@ from musictoolkit.media.art import FOLDER_ART_EXTS, FOLDER_ART_STEMS
 
 logger = logging.getLogger("musictoolkit")
 
-SIDECAR_EXTS = (".lrc", ".LRC")
+LYRICS_EXTS = {".lrc"}
 JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 KEEP_BATCHES = 20  # undoable batches kept per kind
 
@@ -95,20 +95,23 @@ def _rename(old: Path, new: Path) -> None:
 
 
 def sidecars(old: Path) -> list[Path]:
-    """The lyrics file that goes with a song, unless another song in its folder has the same name apart from
-    the extension (a.mp3 and a.flac share a.lrc): then the lyrics belong to that one too and stay put."""
+    """The lyrics file that goes with a song, under its real name (a.lrc, A.LRC, ...), unless another song
+    in its folder has the same name apart from the extension (a.mp3 and a.flac share a.lrc): then the lyrics
+    belong to that one too and stay put."""
     stem = os.path.normcase(old.stem)
+    found: list[Path] = []
     try:
-        if any(e.is_file() and e.suffix.lower() in AUDIO_EXTENSIONS and os.path.normcase(e.stem) == stem for e in old.parent.iterdir()):
-            return []
+        for entry in old.parent.iterdir():
+            if os.path.normcase(entry.stem) != stem or not entry.is_file():
+                continue
+            suffix = entry.suffix.lower()
+            if suffix in AUDIO_EXTENSIONS:
+                return []
+            if suffix in LYRICS_EXTS:
+                found.append(entry)
     except OSError:
         return []
-    seen: dict[str, Path] = {}
-    for ext in SIDECAR_EXTS:
-        candidate = old.with_suffix(ext)
-        if candidate.is_file():
-            seen[os.path.normcase(str(candidate))] = candidate
-    return list(seen.values())
+    return found
 
 
 @dataclass

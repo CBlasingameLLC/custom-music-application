@@ -124,6 +124,13 @@ function startUpdater(started) {
     try {
       ({ autoUpdater } = require('electron-updater'));
       autoUpdater.logger = { info: updaterLog, warn: updaterLog, error: updaterLog, debug: () => {} };
+      // Test hook (scripts/smoke_update.py): read releases from a local web server instead of GitHub.
+      // Loopback addresses only, so it can never point an installed app at somebody else's server.
+      const feed = process.env.MTK_UPDATE_FEED;
+      if (feed && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(feed)) {
+        autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+        updaterLog(`using the local update feed ${feed}`);
+      }
     } catch (err) {
       updaterLog(`electron-updater could not be loaded: ${err && err.stack ? err.stack : err}`);
       autoUpdater = null;

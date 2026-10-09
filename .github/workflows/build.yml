@@ -159,6 +159,12 @@ jobs:
           $size = (Get-Item (Join-Path $dir $exe)).Length
           if ($yml -notmatch "(?m)^\s*size: $size\s*$") { throw "latest.yml lists a different size than the installer ($size bytes)" }
 
+      # The same app, labelled 0.0.1, so a copy of it can be installed and made to update itself to
+      # the real build (the `update` job).
+      - name: Build an older-versioned installer for the update test
+        working-directory: desktop
+        run: npm run package -- -c.extraMetadata.version=0.0.1 -c.directories.output=release-old
+
       # Installs the installer that was just built and drives the installed
       # app's real window: backend start, token handoff, bridge, streaming
       # playback, and that closing the window kills the backend process tree.
@@ -188,6 +194,44 @@ jobs:
             desktop/release/MusicToolkit-Setup-*.exe.blockmap
             desktop/release/latest.yml
           if-no-files-found: error
+
+      - name: Upload the older-versioned installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-old
+          path: desktop/release-old/MusicToolkit-Setup-0.0.1.exe
+          if-no-files-found: error
+
+  # An installed old build finds the new release through a local feed, downloads it, restarts into it.
+  update:
+    needs: [version, build]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download the new release files
+        uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: new
+
+      - name: Download the old build
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-old
+          path: old
+
+      - name: The installed old build updates itself
+        shell: pwsh
+        run: |
+          python -m pip install playwright
+          python scripts\smoke_update.py --old (Get-ChildItem old\MusicToolkit-Setup-0.0.1.exe).FullName --feed-dir new --install-dir (Join-Path $env:RUNNER_TEMP 'mtk-update') --expect-version ${{ needs.version.outputs.version }}
 
   # The previous release, installed and given some data, then upgraded in place by the installer the
   # build job just made. Checks the installer's upgrade path, that the old library database opens and
@@ -273,7 +317,7 @@ jobs:
           python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater -- (Join-Path $dir 'Music Toolkit.exe')
 
   release:
-    needs: [version, test, e2e, build, upgrade]
+    needs: [version, test, e2e, build, upgrade, update]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.version.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     permissions:
