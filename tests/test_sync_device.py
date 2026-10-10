@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from musictoolkit.db.connection import connect
-from musictoolkit.sync import mirror, selection
+from musictoolkit.sync import mirror, selection, targets
 
 SCHEME = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
 FREE = 10**9
@@ -123,7 +123,7 @@ def test_an_interrupted_copy_leaves_no_half_song_behind(conn, library, device, m
         Path(dest).write_bytes(b"half")
         raise OSError(errno.EIO, "Input/output error")
 
-    monkeypatch.setattr(mirror.shutil, "copyfile", dies_halfway)
+    monkeypatch.setattr(targets.shutil, "copyfile", dies_halfway)
     _, result = sync(conn, device_id, device, rows(conn, a))
 
     assert result.copied == 0 and len(result.errors) == 1
@@ -134,7 +134,7 @@ def test_an_interrupted_copy_leaves_no_half_song_behind(conn, library, device, m
 def test_a_full_device_stops_the_run_and_keeps_what_was_copied(conn, library, device, monkeypatch) -> None:
     ids = [add(conn, library, f"s{n}.mp3", 100, title=f"S{n}", track_number=n) for n in range(1, 5)]
     device_id = mirror.get_or_create_device(conn, str(device))
-    real = mirror._copy_file
+    real = targets._copy_file
     calls = []
 
     def fills_up(source, dest):
@@ -143,7 +143,7 @@ def test_a_full_device_stops_the_run_and_keeps_what_was_copied(conn, library, de
             raise OSError(errno.ENOSPC, "No space left on device")
         return real(source, dest)
 
-    monkeypatch.setattr(mirror, "_copy_file", fills_up)
+    monkeypatch.setattr(targets, "_copy_file", fills_up)
     _, result = sync(conn, device_id, device, rows(conn, *ids))
 
     assert (result.copied, len(calls)) == (2, 3)
@@ -159,7 +159,7 @@ def test_an_unplugged_device_stops_the_run(conn, library, device, monkeypatch) -
         shutil.rmtree(device)
         raise OSError(errno.EIO, "The device is not ready")
 
-    monkeypatch.setattr(mirror, "_copy_file", vanishes)
+    monkeypatch.setattr(targets, "_copy_file", vanishes)
     _, result = sync(conn, device_id, device, rows(conn, *ids))
 
     assert result.copied == 0 and "unplugged" in result.aborted and len(result.errors) == 1
@@ -303,7 +303,7 @@ def test_the_old_copy_stays_if_the_new_one_cannot_be_made(conn, library, device,
     def refuses(source, dest):
         raise OSError(errno.EACCES, "Permission denied")
 
-    monkeypatch.setattr(mirror, "_copy_file", refuses)
+    monkeypatch.setattr(targets, "_copy_file", refuses)
     result = mirror.run_sync(conn, device_id, device, plan)
 
     assert result.copied == 0 and (device / "Artist" / "Album" / "01 - One.mp3").exists()
@@ -313,7 +313,7 @@ def test_removal_never_leaves_the_device_folder(conn, library, device, tmp_path)
     outside = tmp_path / "precious.mp3"
     outside.write_bytes(b"x")
 
-    mirror._remove_stale(device, "../precious.mp3")
+    targets._remove_stale(device, "../precious.mp3")
 
     assert outside.exists()
 
@@ -359,6 +359,16 @@ def test_playlists_are_written_with_paths_relative_to_the_playlist_folder(conn, 
     assert (written, names) == (1, ["Road_ trip_.m3u8"])
     lines = (device / "Playlists" / "Road_ trip_.m3u8").read_text(encoding="utf-8").splitlines()
     assert lines == ["#EXTM3U", "../Artist/Other/02 - Two.mp3", "../Artist/Album/01 - One.mp3"]
+
+
+def test_a_playlist_has_windows_line_endings_whatever_machine_wrote_it(conn, library, device) -> None:
+    a = add(conn, library, "one.mp3", title="One", track_number=1)
+    device_id = mirror.get_or_create_device(conn, str(device))
+    sync(conn, device_id, device, rows(conn, a))
+
+    mirror.write_playlists(conn, device_id, device, [("Mix", [a])])
+
+    assert (device / "Playlists" / "Mix.m3u8").read_bytes() == b"#EXTM3U\r\n../Artist/Album/01 - One.mp3\r\n"
 
 
 def test_playlists_the_app_wrote_earlier_can_be_removed(conn, library, device) -> None:

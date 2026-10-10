@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- mtk-mtp.exe: the small program that talks to phones and players without a drive letter (MTP) for Music Toolkit.
+       .NET Framework 4.8 is part of Windows 10 and 11, so nothing has to be installed alongside it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>mtk-mtp</AssemblyName>
+    <RootNamespace>MusicToolkit.Mtp</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Description>Music Toolkit helper for phones and players without a drive letter (MTP)</Description>
+    <Product>Music Toolkit</Product>
+    <Copyright>Music Toolkit</Copyright>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The library's licence travels with its dll, in the build output and so in the installer. -->
+    <None Include="THIRD-PARTY-LICENSES.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- MIT licensed wrapper around Windows Portable Devices (https://github.com/Bassman2/MediaDevices). One dll, no dependencies. -->
+    <PackageReference Include="MediaDevices" Version="1.10.1" />
+    <!-- Lets this build on a machine without the .NET Framework targeting pack (Linux, for a compile check). -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+</Project>

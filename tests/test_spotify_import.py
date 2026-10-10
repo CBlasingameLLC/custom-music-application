@@ -89,6 +89,23 @@ def test_import_from_zip_extracts_nested_json(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_zip_members_named_to_climb_out_are_unpacked_and_read_inside_the_work_folder(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "test.db")
+    extra = {**SAMPLE_RECORDS[0], "ts": "2024-02-01T10:00:00Z", "spotify_track_uri": "spotify:track:zzz999"}
+    zip_path = tmp_path / "odd.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("../../../elsewhere/Streaming_History_Audio_2024_0.json", json.dumps(SAMPLE_RECORDS[:2]))
+        zf.writestr("/absolute/Streaming_History_Audio_2024_1.json", json.dumps([extra]))
+    work = tmp_path / "a" / "b" / "work"
+
+    summary = spotify_import.import_history(conn, zip_path, work)
+
+    assert summary.inserted == 3
+    assert not (tmp_path / "elsewhere").exists(), "nothing was written, or looked for, outside the work folder"
+    assert sorted(p.name for p in work.rglob("*.json")) == ["Streaming_History_Audio_2024_0.json", "Streaming_History_Audio_2024_1.json"]
+    conn.close()
+
+
 def test_reimporting_same_export_is_idempotent(tmp_path: Path) -> None:
     conn = connect(tmp_path / "test.db")
     export_dir = _write_export_folder(tmp_path, SAMPLE_RECORDS)

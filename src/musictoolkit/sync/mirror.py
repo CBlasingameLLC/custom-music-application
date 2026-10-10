@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import errno
 import logging
-import os
+import posixpath
 import re
-import shutil
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from musictoolkit.ingest import moves, organizer
+from musictoolkit.sync.targets import MAX_PATH, PARTIAL_SUFFIX, Target, TargetError, as_target, join, native, parent_of
 
 logger = logging.getLogger("musictoolkit")
 
@@ -33,8 +33,6 @@ _FAT_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _MAX_COMPONENT_LENGTH = 255
 FAT_FILE_LIMIT = 4 * 1024**3 - 1  # a FAT32 file can't be 4 GiB or larger
 FAT_NAMES = {"fat", "fat32", "vfat", "msdos"}
-MAX_PATH = 259
-PARTIAL_SUFFIX = ".mtk-partial"
 PLAYLIST_DIR = "Playlists"
 COMMIT_EVERY = 25
 ABORT_AFTER_ERRORS = 5  # consecutive failures with the device gone
@@ -50,14 +48,10 @@ def sanitize_for_fat(value: str) -> str:
     return cleaned or "Unknown"
 
 
-def _compute_dest_path(row: sqlite3.Row, device_root: Path, scheme: str) -> Path:
-    return device_root / organizer.render_relative(row, scheme, sanitize_for_fat)
-
-
 @dataclass
 class CopyItem:
     row: sqlite3.Row
-    dest: Path
+    relative: str  # where it goes on the device, with forward slashes
     old_relative_path: str | None = None  # set only if this track was previously synced to a different path
     reason: str = "new"  # new | changed | moved | missing (removed from the device) | damaged (wrong size)
 
@@ -105,7 +99,7 @@ def get_or_create_device(conn: sqlite3.Connection, mount_path: str, label: str |
 def plan_sync(
     conn: sqlite3.Connection,
     device_id: int,
-    device_root: Path,
+    device_root: Path | Target,
     selected_rows: list[sqlite3.Row],
     scheme: str,
     free_bytes_on_device: int,
@@ -113,6 +107,7 @@ def plan_sync(
     on_progress: Callable[[int, int], None] | None = None,
 ) -> SyncPlan:
     """What a sync would do, from the library, the manifest and what is actually on the device. Touches nothing."""
+    target = as_target(device_root)
     plan = SyncPlan(free_bytes_on_device=free_bytes_on_device, selected=len(selected_rows))
     fat = (fs or "").lower() in FAT_NAMES
     selected_track_ids = {row["id"] for row in selected_rows}
@@ -131,19 +126,19 @@ def plan_sync(
             plan.skipped.append(SkippedItem(row["id"], str(source_path), "source_missing", "The file is not where the library says"))
             continue
         try:
-            dest = _compute_dest_path(row, device_root, scheme)
+            dest_relative = organizer.render_relative(row, scheme, sanitize_for_fat)
         except (KeyError, ValueError, IndexError) as exc:
             plan.skipped.append(SkippedItem(row["id"], str(source_path), "layout", f"The folder layout cannot be applied ({exc})"))
             continue
-        dest_relative = str(dest.relative_to(device_root))
 
         if fat and source_stat.st_size > FAT_FILE_LIMIT:
             plan.skipped.append(SkippedItem(row["id"], str(source_path), "too_big", "A FAT32 card cannot hold a file of 4 GB or more"))
             continue
-        if len(str(dest)) > MAX_PATH:
-            plan.skipped.append(SkippedItem(row["id"], str(source_path), "path_too_long", f"The path on the device would be {len(str(dest))} characters"))
+        problem = target.path_problem(dest_relative)
+        if problem:
+            plan.skipped.append(SkippedItem(row["id"], str(source_path), "path_too_long", problem))
             continue
-        key = os.path.normcase(str(dest))
+        key = dest_relative if target.case_sensitive else dest_relative.lower()
         if key in claimed:
             plan.skipped.append(SkippedItem(row["id"], str(source_path), "collision", f"Another song already takes {dest_relative}"))
             continue
@@ -153,17 +148,15 @@ def plan_sync(
         reason = "new"
         old_relative = None
         if entry is not None:
-            on_device = dest if entry["dest_relative_path"] == dest_relative else device_root / entry["dest_relative_path"]
+            recorded = native(entry["dest_relative_path"])  # older manifests hold this machine's separators
             expected = entry["size"] if entry["size"] is not None else source_stat.st_size
-            try:
-                exists = on_device.is_file()
-                size_ok = exists and on_device.stat().st_size == expected
-            except OSError:
-                exists = size_ok = False
-            if entry["source_file_mtime"] == source_stat.st_mtime and entry["dest_relative_path"] == dest_relative and size_ok:
+            on_device = target.size_of(recorded)
+            exists = on_device is not None
+            size_ok = exists and on_device == expected
+            if entry["source_file_mtime"] == source_stat.st_mtime and recorded == dest_relative and size_ok:
                 plan.unchanged += 1
                 continue
-            if entry["dest_relative_path"] != dest_relative:
+            if recorded != dest_relative:
                 old_relative, reason = entry["dest_relative_path"], "moved"
             elif not exists:
                 reason = "missing"  # someone removed it from the device
@@ -172,7 +165,7 @@ def plan_sync(
             else:
                 reason = "changed"  # the song in the library changed since it was copied
 
-        plan.to_copy.append(CopyItem(row=row, dest=dest, old_relative_path=old_relative, reason=reason))
+        plan.to_copy.append(CopyItem(row=row, relative=dest_relative, old_relative_path=old_relative, reason=reason))
         plan.total_bytes_to_copy += source_stat.st_size
 
     for m_row in manifest.values():
@@ -204,55 +197,24 @@ class SyncResult:
         }
 
 
-def _copy_file(source: str | Path, dest: Path) -> int:
-    """Copy through a temporary name and rename when complete. Returns the size of the finished copy."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    partial = dest.with_name(dest.name + PARTIAL_SUFFIX)
-    try:
-        shutil.copyfile(source, partial)
-        try:
-            shutil.copystat(source, partial)
-        except OSError:
-            pass  # some file systems refuse to take the date; the copy is still good
-        os.replace(partial, dest)
-    except BaseException:
-        try:
-            partial.unlink()
-        except OSError:
-            pass
-        raise
-    return dest.stat().st_size
-
-
-def _copy_cover(source_dir: Path, dest_dir: Path) -> bool:
+def _copy_cover(source_dir: Path, target: Target, relative_dir: str) -> bool:
     """Take the folder picture (cover.jpg and friends) along when the device folder has none."""
     try:
-        if any(moves.is_folder_art(e.name) for e in dest_dir.iterdir()):
+        if any(moves.is_folder_art(name) for name in target.list_names(relative_dir)):
             return False
         art = next((e for e in source_dir.iterdir() if e.is_file() and moves.is_folder_art(e.name)), None)
         if art is None:
             return False
-        shutil.copyfile(art, dest_dir / art.name)
+        target.put(art, join(relative_dir, art.name))
         return True
     except OSError:
         return False
 
 
-def _remove_stale(device_root: Path, relative: str) -> None:
-    """Remove a file this app copied earlier, and the folders that leaves empty. Never leaves the device folder."""
-    target = (device_root / relative).resolve()
-    if not target.is_relative_to(device_root.resolve()):
-        logger.warning("Refusing to remove %s: it is outside the device folder", target)
-        return
-    if target.is_file():
-        target.unlink()
-        moves.prune_empty_folders(target.parent, device_root.resolve(), allow_art=True)
-
-
 def run_sync(
     conn: sqlite3.Connection,
     device_id: int,
-    device_root: Path,
+    device_root: Path | Target,
     plan: SyncPlan,
     prune: bool = False,
     copy_covers: bool = True,
@@ -260,10 +222,11 @@ def run_sync(
 ) -> SyncResult:
     """Do what the plan says: removals first (they free space), then copies. If `on_progress` raises (a cancelled
     job) the manifest keeps everything copied so far. Returns what happened."""
+    target = as_target(device_root)
     result = SyncResult()
     now = datetime.now(timezone.utc).isoformat()
     total = len(plan.to_copy)
-    covered: set[Path] = set()
+    covered: set[tuple[Path, str]] = set()
     failures_in_a_row = 0
     pending_commit = 0
 
@@ -271,7 +234,7 @@ def run_sync(
         if prune:
             for manifest_id, relative in plan.to_prune:
                 try:
-                    _remove_stale(device_root, relative)
+                    target.delete(relative)
                 except OSError as exc:
                     result.errors.append({"path": relative, "error": f"Could not remove it from the device ({exc.strerror or exc})"})
                     continue
@@ -284,17 +247,17 @@ def run_sync(
                 on_progress(done, total, result.bytes_copied)
             source = Path(item.row["file_path"])
             try:
-                size = _copy_file(source, item.dest)
+                size = target.put(source, item.relative)
                 source_mtime = source.stat().st_mtime
-                if item.old_relative_path and device_root / item.old_relative_path != item.dest:
-                    _remove_stale(device_root, item.old_relative_path)  # the old copy goes only once the new one is in place
+                if item.old_relative_path and native(item.old_relative_path) != item.relative:
+                    target.delete(item.old_relative_path)  # the old copy goes only once the new one is in place
             except OSError as exc:
                 if exc.errno == errno.ENOSPC:
                     result.aborted = "The device is full. What was copied so far is kept."
                     result.errors.append({"path": str(source), "error": "No space left on the device"})
                     break
                 failures_in_a_row += 1
-                gone = not device_root.exists()
+                gone = not target.is_connected()
                 result.errors.append({"path": str(source), "error": "The device was disconnected" if gone else f"{exc.strerror or exc}"})
                 if gone or failures_in_a_row >= ABORT_AFTER_ERRORS:
                     result.aborted = "The device stopped answering (was it unplugged?). What was copied so far is kept."
@@ -313,7 +276,7 @@ def run_sync(
                     status = 'synced',
                     size = excluded.size
                 """,
-                (device_id, item.row["id"], str(item.dest.relative_to(device_root)), item.row["file_hash"], source_mtime, now, size),
+                (device_id, item.row["id"], item.relative, item.row["file_hash"], source_mtime, now, size),
             )
             result.copied += 1
             result.bytes_copied += size
@@ -321,9 +284,10 @@ def run_sync(
             if pending_commit >= COMMIT_EVERY:
                 conn.commit()
                 pending_commit = 0
-            if copy_covers and (source.parent, item.dest.parent) not in covered:
-                covered.add((source.parent, item.dest.parent))
-                result.covers += _copy_cover(source.parent, item.dest.parent)
+            folder = parent_of(item.relative)
+            if copy_covers and (source.parent, folder) not in covered:
+                covered.add((source.parent, folder))
+                result.covers += _copy_cover(source.parent, target, folder)
         if on_progress and result.aborted is None:
             on_progress(total, total, result.bytes_copied)
     finally:
@@ -333,7 +297,7 @@ def run_sync(
 
 
 def apply_sync(
-    conn: sqlite3.Connection, device_id: int, device_root: Path, plan: SyncPlan, prune: bool
+    conn: sqlite3.Connection, device_id: int, device_root: Path | Target, plan: SyncPlan, prune: bool
 ) -> tuple[int, int]:
     """Command-line entry point: returns (copied, pruned)."""
     result = run_sync(conn, device_id, device_root, plan, prune)
@@ -348,15 +312,15 @@ def playlist_file_name(name: str) -> str:
 
 
 def write_playlists(
-    conn: sqlite3.Connection, device_id: int, device_root: Path, playlists: list[tuple[str, list[int]]]
+    conn: sqlite3.Connection, device_id: int, device_root: Path | Target, playlists: list[tuple[str, list[int]]]
 ) -> tuple[int, list[str]]:
     """Write each playlist as `Playlists/<name>.m3u8` with paths relative to that folder, listing only songs that
     are on the device. Returns (written, names of playlist files this app wrote earlier and no longer wants)."""
+    target = as_target(device_root)
     on_device = {
-        m["track_id"]: m["dest_relative_path"]
+        m["track_id"]: native(m["dest_relative_path"])
         for m in conn.execute("SELECT track_id, dest_relative_path FROM sync_manifest WHERE device_id = ?", (device_id,))
     }
-    folder = device_root / PLAYLIST_DIR
     written = 0
     names: set[str] = set()
     for name, track_ids in playlists:
@@ -364,23 +328,21 @@ def write_playlists(
         for track_id in track_ids:
             relative = on_device.get(track_id)
             if relative:
-                lines.append(os.path.relpath(device_root / relative, folder).replace("\\", "/"))
-        folder.mkdir(parents=True, exist_ok=True)
+                lines.append(posixpath.relpath(relative, PLAYLIST_DIR))
         file_name = playlist_file_name(name)
-        (folder / file_name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        target.write_text(join(PLAYLIST_DIR, file_name), "\n".join(lines) + "\n")
         names.add(file_name)
         written += 1
     return written, sorted(names)
 
 
-def remove_playlists(device_root: Path, file_names: list[str]) -> int:
+def remove_playlists(device_root: Path | Target, file_names: list[str]) -> int:
+    """Remove playlist files this app wrote earlier; the Playlists folder goes too if that leaves it empty."""
+    target = as_target(device_root)
     removed = 0
-    folder = device_root / PLAYLIST_DIR
     for name in file_names:
-        target = folder / name
-        if target.is_file():
-            target.unlink()
+        relative = join(PLAYLIST_DIR, name)
+        if target.size_of(relative) is not None:
+            target.delete(relative)
             removed += 1
-    if folder.is_dir() and not any(folder.iterdir()):
-        folder.rmdir()
     return removed

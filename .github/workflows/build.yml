@@ -110,6 +110,16 @@ jobs:
       - name: Smoke-test frozen backend (first run, scan, art, streaming)
         run: python scripts\smoke_frozen.py dist\mtk-backend.exe tests\fixtures
 
+      # The helper for phones and players without a drive letter: a small C# program (.NET Framework 4.8,
+      # which Windows 10 and 11 already have) that talks to Windows Portable Devices.
+      - name: Build the MTP helper
+        run: dotnet build helpers\mtp\MtkMtp.csproj -c Release -o helpers\mtp\out
+
+      # No phone is plugged into a build machine. This proves what can be proved without one: the program
+      # starts, speaks the protocol, and Windows Portable Devices answers (with nothing listed).
+      - name: Smoke-test the MTP helper
+        run: .venv\Scripts\python.exe scripts\check_mtp_helper.py helpers\mtp\out\mtk-mtp.exe
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -117,10 +127,11 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Stage backend into desktop resources
+      - name: Stage backend and helper into desktop resources
         run: |
           New-Item -ItemType Directory -Force -Path desktop\resources | Out-Null
           Copy-Item dist\mtk-backend.exe desktop\resources\mtk-backend.exe
+          Copy-Item helpers\mtp\out desktop\resources\mtk-mtp -Recurse
 
       - name: Install Electron dependencies
         working-directory: desktop
@@ -186,7 +197,7 @@ jobs:
             throw "the installer did not produce $exe (installer exit code $($setup.ExitCode))"
           }
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater -- $exe
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater --expect-mtp-helper -- $exe
 
       - name: Upload installer and update files
         uses: actions/upload-artifact@v4
@@ -317,7 +328,7 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'mtk-upgrade'
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater -- (Join-Path $dir 'Music Toolkit.exe')
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater --expect-mtp-helper -- (Join-Path $dir 'Music Toolkit.exe')
 
   release:
     needs: [version, test, e2e, build, upgrade, update]

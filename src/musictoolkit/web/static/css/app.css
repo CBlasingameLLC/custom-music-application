@@ -703,6 +703,11 @@ input.mono { font-size: 13.5px; }
 .callout.nearby .volume-row { padding: 8px 0 0; border-top: 1px solid var(--border); }
 .volume-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .volume-main .subtle { font-size: 12.5px; overflow-wrap: anywhere; }
+.phones { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+.phones h3 { margin: 0 0 8px; font-size: 14px; }
+.phones .note { margin: 6px 0; }
+.phones-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 10px; }
+.phones-actions .field { flex: 1 1 220px; margin: 0; }
 .source-editor { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
 .source-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 34px; }
 .source-chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px 5px 13px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }

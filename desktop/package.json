@@ -1,6 +1,6 @@
 {
   "name": "musictoolkit-desktop",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Desktop shell for Music Toolkit: starts the Python backend and shows its web UI in a native window.",
   "main": "src/main/index.js",
@@ -28,7 +28,8 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "resources/mtk-backend.exe", "to": "mtk-backend.exe" }
+      { "from": "resources/mtk-backend.exe", "to": "mtk-backend.exe" },
+      { "from": "resources/mtk-mtp", "to": "mtk-mtp" }
     ],
     "win": {
       "target": [

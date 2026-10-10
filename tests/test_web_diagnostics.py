@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from musictoolkit.sync import device_detect
+import json
+import sys
+
+import pytest
+
+from musictoolkit.sync import device_detect, mtp
+from tests.test_mtp import FAKE, SERIAL, control, write_device
 
 SECRETS = ("tok-SECRET-1", "key-SECRET-2", "secret-SECRET-3", "contact-SECRET@example.com")
 
@@ -65,3 +71,35 @@ def test_failed_jobs_are_reported_and_one_broken_check_does_not_spoil_the_rest(w
     assert failure["title"] == "A job that fails" and "the disk went away" in failure["error"] and failure["finished_at"]
     assert report["drives"] == {"error": "OSError: drive enumeration failed"}
     assert report["database"]["songs"] == 9, "the other parts are still there"
+
+
+@pytest.fixture
+def phone(tmp_path, monkeypatch):
+    root = tmp_path / "phones"
+    write_device(root)
+    monkeypatch.setenv("MTK_MTP_HELPER", json.dumps([sys.executable, str(FAKE), str(root)]))
+    mtp.forget_listing()
+    yield root
+    mtp.forget_listing()
+
+
+def test_a_phone_is_connected_when_it_is_plugged_in_and_never_judged_by_a_path(web, phone) -> None:
+    web.client.post("/api/devices/mtp", json={"serial": SERIAL, "storage": "s1"})
+
+    (found,) = web.client.get("/api/system/diagnostics").json()["devices"]
+    assert (found["kind"], found["path"], found["connected"], found["label"]) == ("mtp", None, True, "Pixel")
+
+    control(phone, unplugged=[SERIAL])
+    mtp.forget_listing()
+    (gone,) = web.client.get("/api/system/diagnostics").json()["devices"]
+    assert gone["connected"] is False
+
+
+def test_the_report_says_whether_phones_can_be_reached_at_all(web, phone, monkeypatch) -> None:
+    ready = web.client.get("/api/system/diagnostics").json()["phones"]
+    assert ready == {"supported": sys.platform == "win32", "available": True, "reason": None}
+
+    monkeypatch.delenv("MTK_MTP_HELPER")
+    monkeypatch.setattr(mtp, "helper_command", lambda: None)
+    missing = web.client.get("/api/system/diagnostics").json()["phones"]
+    assert missing["available"] is False and missing["reason"]
