@@ -3,18 +3,23 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
 from musictoolkit.integrations import listenbrainz_client
+from musictoolkit.integrations.submission import submit_with_isolation, with_patience
 
 logger = logging.getLogger("musictoolkit")
 
 _AUDIO_HISTORY_GLOB = "Streaming_History_Audio_*.json"
+MAX_EXPORT_BYTES = 2 * 1024**3  # a real export is a few hundred MB at most; anything near this is not one
+PROGRESS_EVERY = 1000  # rows between progress reports while importing
 
 
 @dataclass
@@ -27,16 +32,34 @@ class ImportSummary:
     inserted: int = 0
     duplicates_skipped: int = 0
     matched_to_library: int = 0
+    batch_id: str | None = None
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["top_artists"] = [{"name": name, "plays": int(plays)} for name, plays in self.top_artists]
+        data["date_range"] = list(self.date_range) if self.date_range else None
+        return data
+
+
+def _check_size(total: int) -> None:
+    if total > MAX_EXPORT_BYTES:
+        raise ValueError("That is far bigger than a Spotify history export (over 2 GB of listening data). Is it the right file?")
 
 
 def _extract_json_files(source: Path, work_dir: Path) -> list[Path]:
     if source.is_dir():
-        return sorted(source.rglob(_AUDIO_HISTORY_GLOB))
+        files = sorted(source.rglob(_AUDIO_HISTORY_GLOB))
+        _check_size(sum(f.stat().st_size for f in files))
+        return files
     if source.suffix.lower() == ".zip":
-        with zipfile.ZipFile(source) as zf:
-            names = [n for n in zf.namelist() if Path(n).match(_AUDIO_HISTORY_GLOB)]
-            zf.extractall(work_dir, members=names)
-        return sorted((work_dir / n) for n in names)
+        try:
+            with zipfile.ZipFile(source) as zf:
+                members = [i for i in zf.infolist() if Path(i.filename).match(_AUDIO_HISTORY_GLOB)]
+                _check_size(sum(i.file_size for i in members))
+                zf.extractall(work_dir, members=[i.filename for i in members])
+        except zipfile.BadZipFile:
+            raise ValueError("That file is not a valid ZIP archive.") from None
+        return sorted(work_dir / i.filename for i in members)
     raise ValueError(f"Expected a directory or .zip file, got: {source}")
 
 
@@ -79,8 +102,26 @@ def summarize(df: pd.DataFrame) -> ImportSummary:
     return summary
 
 
+def preview(source: Path, work_dir: Path) -> ImportSummary:
+    """Read an export and say what is in it, without touching the library."""
+    json_files = _extract_json_files(source, work_dir)
+    if not json_files:
+        raise ValueError(_NO_FILES.format(source=source))
+    return summarize(_load_records(json_files))
+
+
+_NO_FILES = (
+    "No Streaming_History_Audio_*.json files found in {source}. "
+    "Make sure you requested 'Extended streaming history' from Spotify, not just 'Account data'."
+)
+
+
 def import_history(
-    conn: sqlite3.Connection, source: Path, work_dir: Path, import_batch_id: str | None = None
+    conn: sqlite3.Connection,
+    source: Path,
+    work_dir: Path,
+    import_batch_id: str | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> ImportSummary:
     """Parse a Spotify Extended Streaming History export and insert music
     listens into play_history. Safe to re-run on the same or an overlapping
@@ -88,10 +129,7 @@ def import_history(
     silently skipped via the table's own uniqueness constraint."""
     json_files = _extract_json_files(source, work_dir)
     if not json_files:
-        raise ValueError(
-            f"No Streaming_History_Audio_*.json files found in {source}. "
-            "Make sure you requested 'Extended streaming history' from Spotify, not just 'Account data'."
-        )
+        raise ValueError(_NO_FILES.format(source=source))
 
     df = _load_records(json_files)
     summary = summarize(df)
@@ -99,8 +137,12 @@ def import_history(
         return summary
 
     batch_id = import_batch_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    summary.batch_id = batch_id
 
-    for _, record in df[_music_mask(df)].iterrows():
+    music = df[_music_mask(df)]
+    for done, (_, record) in enumerate(music.iterrows(), start=1):
+        if on_progress and done % PROGRESS_EVERY == 0:
+            on_progress(done, len(music))  # may raise to stop: nothing is committed until the end
         played_at = pd.to_datetime(record.get("ts"), utc=True, errors="coerce")
         if pd.isna(played_at):
             continue
@@ -185,26 +227,55 @@ def _build_listen_payload(row: sqlite3.Row) -> dict:
     return {"listened_at": row["played_at_epoch"], "track_metadata": metadata}
 
 
-def backfill_to_listenbrainz(conn: sqlite3.Connection, user_token: str) -> int:
+_UNSENT = (
+    "source = 'spotify_import' AND listenbrainz_submitted = 0 "
+    "AND raw_artist_name IS NOT NULL AND raw_artist_name != '' AND raw_track_name IS NOT NULL AND raw_track_name != ''"
+)
+
+
+def unsent_count(conn: sqlite3.Connection) -> int:
+    """Imported plays ListenBrainz has not been given yet."""
+    return conn.execute(f"SELECT COUNT(*) FROM play_history WHERE {_UNSENT}").fetchone()[0]
+
+
+def backfill_to_listenbrainz(
+    conn: sqlite3.Connection,
+    user_token: str,
+    on_progress: Callable[[int, int], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    on_refused: Callable[[sqlite3.Row], None] | None = None,
+) -> int:
     """Submit not-yet-submitted spotify_import listens to the user's own
     ListenBrainz account, batched to the API's limit. Each batch is marked
     submitted immediately after it succeeds, so an interrupted run resumes
-    from where it left off rather than re-submitting or losing progress."""
-    pending = conn.execute(
-        "SELECT * FROM play_history WHERE source = 'spotify_import' AND listenbrainz_submitted = 0"
-    ).fetchall()
-
-    submittable = [row for row in pending if row["raw_artist_name"] and row["raw_track_name"]]
-    submitted_count = 0
+    from where it left off rather than re-submitting or losing progress.
+    A busy or unreachable service is waited out a few times; a listen the
+    service refuses is marked (2) and skipped instead of blocking the rest."""
+    pending = conn.execute(f"SELECT * FROM play_history WHERE {_UNSENT} ORDER BY played_at_epoch, id").fetchall()
     batch_size = listenbrainz_client.MAX_LISTENS_PER_REQUEST
+    submitted_count = 0
 
-    for start in range(0, len(submittable), batch_size):
-        batch = submittable[start : start + batch_size]
-        listenbrainz_client.submit_listens(user_token, [_build_listen_payload(row) for row in batch])
-        conn.executemany(
-            "UPDATE play_history SET listenbrainz_submitted = 1 WHERE id = ?", [(row["id"],) for row in batch]
-        )
+    def mark(rows: list[sqlite3.Row], value: int) -> None:
+        conn.executemany("UPDATE play_history SET listenbrainz_submitted = ? WHERE id = ?", [(value, row["id"]) for row in rows])
         conn.commit()
-        submitted_count += len(batch)
+
+    def refused(row: sqlite3.Row) -> None:
+        mark([row], 2)
+        if on_refused:
+            on_refused(row)
+
+    def sent(rows: list[sqlite3.Row]) -> None:
+        nonlocal submitted_count
+        mark(rows, 1)
+        submitted_count += len(rows)
+
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start : start + batch_size]
+        with_patience(
+            lambda batch=batch: submit_with_isolation(listenbrainz_client, user_token, batch, _build_listen_payload, sent, refused),
+            sleep=sleep,
+        )
+        if on_progress:
+            on_progress(min(start + len(batch), len(pending)), len(pending))
 
     return submitted_count

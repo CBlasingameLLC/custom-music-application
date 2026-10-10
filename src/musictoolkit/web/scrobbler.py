@@ -17,6 +17,7 @@ from typing import Any
 from musictoolkit import __version__
 from musictoolkit.integrations import listenbrainz_client
 from musictoolkit.integrations.listenbrainz_client import ListenBrainzError
+from musictoolkit.integrations.submission import submit_with_isolation
 
 logger = logging.getLogger("musictoolkit")
 
@@ -44,6 +45,8 @@ def listen_payload(row: Any) -> dict[str, Any]:
 
 
 def describe_failure(exc: ListenBrainzError) -> str:
+    if exc.token_rejected:
+        return "ListenBrainz does not accept this token. Copy it again from listenbrainz.org/settings."
     if exc.status is None:
         return "Can't reach ListenBrainz right now. Your plays are kept and sent when it is back."
     if exc.status == 429:
@@ -139,27 +142,24 @@ class Scrobbler:
         return 0.0 if len(rows) == BATCH else IDLE_POLL
 
     def _deliver(self, conn: Any, token: str, rows: list[Any]) -> None:
-        try:
-            self._client.submit_listens(token, [listen_payload(r) for r in rows])
-        except ListenBrainzError as exc:
-            if exc.status != 400:
-                raise
-            # Something in this batch is unacceptable. Narrow it down so the good plays still go through.
-            if len(rows) == 1:
-                self._mark(conn, rows, REFUSED)
-                with self._lock:
-                    self._status["refused"] += 1
-                    self._status["last_refused"] = rows[0]["raw_track_name"]
-                return
-            middle = len(rows) // 2
-            self._deliver(conn, token, rows[:middle])
-            self._deliver(conn, token, rows[middle:])
-            return
+        submit_with_isolation(
+            self._client, token, rows, listen_payload,
+            on_sent=lambda sent: self._sent(conn, sent),
+            on_refused=lambda row: self._refused(conn, row),
+        )
+
+    def _sent(self, conn: Any, rows: list[Any]) -> None:
         self._mark(conn, rows, SENT)
         with self._lock:
             self._status["sent"] += len(rows)
             self._status["last_sent_at"] = self._clock()
             self._status["last_error"] = None
+
+    def _refused(self, conn: Any, row: Any) -> None:
+        self._mark(conn, [row], REFUSED)
+        with self._lock:
+            self._status["refused"] += 1
+            self._status["last_refused"] = row["raw_track_name"]
 
     @staticmethod
     def _mark(conn: Any, rows: list[Any], value: int) -> None:
