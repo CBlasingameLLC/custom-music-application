@@ -36,6 +36,9 @@ class Target(Protocol):
 
     def free_space(self) -> int: ...
 
+    def capacity(self) -> int | None:
+        """The whole size of the storage, if the device says."""
+
     def size_of(self, relative: str) -> int | None:
         """The size of the file at this path, or None if there is no such file."""
 
@@ -123,6 +126,9 @@ class LocalFolder:
 
     def free_space(self) -> int:
         return shutil.disk_usage(self.root).free
+
+    def capacity(self) -> int | None:
+        return shutil.disk_usage(self.root).total
 
     def size_of(self, relative: str) -> int | None:
         path = self._abs(relative)

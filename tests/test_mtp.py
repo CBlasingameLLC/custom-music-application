@@ -130,9 +130,9 @@ def test_without_a_helper_the_reason_is_plain(monkeypatch) -> None:
 
 
 def test_listing_devices_never_raises_and_is_reused_for_a_moment(phones, monkeypatch) -> None:
-    monkeypatch.setenv("MTK_MTP_HELPER", f"{sys.executable} {FAKE} {phones}")
+    monkeypatch.setenv("MTK_MTP_HELPER", json.dumps([sys.executable, str(FAKE), str(phones)]))
     first = mtp.list_devices(fresh=True)
-    assert first["available"] is True and [d["serial"] for d in first["devices"]] == [SERIAL]
+    assert (first["available"], first["error"]) == (True, None) and [d["serial"] for d in first["devices"]] == [SERIAL]
 
     write_device(phones, "SER999", name="Walkman")
     assert [d["serial"] for d in mtp.list_devices()["devices"]] == [SERIAL], "reused within a few seconds"
@@ -140,7 +140,29 @@ def test_listing_devices_never_raises_and_is_reused_for_a_moment(phones, monkeyp
 
     monkeypatch.setenv("MTK_MTP_HELPER", f"{sys.executable} -c pass")
     broken = mtp.list_devices(fresh=True)
-    assert broken["available"] is False and broken["devices"] == [] and "did not start" in broken["reason"]
+    assert broken["available"] is True and broken["devices"] == [] and "did not start" in broken["error"], "the helper is there, looking failed"
+
+    monkeypatch.delenv("MTK_MTP_HELPER")
+    monkeypatch.setattr(mtp, "helper_command", lambda: None)
+    missing = mtp.list_devices(fresh=True)
+    assert missing["available"] is False and missing["error"] is None and missing["reason"]
+
+
+def test_a_device_is_found_by_serial_and_its_storage_by_id_then_by_name() -> None:
+    devices = [{"id": "dev-a", "serial": "SER1", "storages": [{"id": "s2", "name": "Internal storage"}, {"id": "s3", "name": "SD card"}]}]
+
+    assert mtp.find(devices, "SER1", "s3")[1]["name"] == "SD card"
+    assert mtp.find(devices, "SER1", "s9", "SD card")[1]["id"] == "s3", "the id changed between plugs; the name did not"
+    assert mtp.find(devices, "dev-a", "s2")[0] is devices[0], "the device id works too"
+    assert mtp.find(devices, "SER1", "s9", "Gone")[1] is None and mtp.find(devices, "SER1", "s9", "Gone")[0] is devices[0]
+    assert mtp.find(devices, "OTHER", "s2") == (None, None) and mtp.find(devices, "", "s2") == (None, None)
+
+
+def test_the_helper_can_be_named_as_a_list_when_a_path_has_spaces(monkeypatch) -> None:
+    monkeypatch.setenv("MTK_MTP_HELPER", json.dumps(["C:\\Program Files\\Python\\python.exe", "x.py"]))
+    assert mtp.helper_command() == ["C:\\Program Files\\Python\\python.exe", "x.py"]
+    monkeypatch.setenv("MTK_MTP_HELPER", "tool --flag")
+    assert mtp.helper_command() == ["tool", "--flag"]
 
 
 # ------------------------------------------------------------------------------------------- a device used like a folder

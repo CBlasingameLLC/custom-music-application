@@ -41,6 +41,8 @@ CALL_TIMEOUT = 300.0  # seconds for one request (a long song over a slow USB por
 CODES = {"no_space": errno.ENOSPC, "disconnected": errno.ENODEV, "not_found": errno.ENOENT}
 LISTING_TTL = 3.0  # seconds a list of plugged-in devices is reused, so a busy screen does not start a helper per request
 DEFAULT_BASE = "Music"
+NOT_CONNECTED = "The phone or player is not connected. Plug it in, unlock it, and choose File transfer on the device."
+NO_STORAGE = "The device is connected but its storage is not available. Unlock it and choose File transfer."
 
 
 class MtpUnavailable(Exception):
@@ -48,9 +50,15 @@ class MtpUnavailable(Exception):
 
 
 def helper_command() -> list[str] | None:
-    """How to start the helper, or None if it is not here. MTK_MTP_HELPER overrides (tests point it at a stand-in)."""
+    """How to start the helper, or None if it is not here. MTK_MTP_HELPER overrides it (tests and the packaged-app
+    smoke test point it at a stand-in): a JSON list of arguments, or one command line."""
     override = os.environ.get("MTK_MTP_HELPER")
     if override:
+        if override.lstrip().startswith("["):
+            try:
+                return [str(part) for part in json.loads(override)]
+            except (ValueError, TypeError):
+                pass
         return shlex.split(override, posix=os.name != "nt")
     if sys.platform != "win32":
         return None
@@ -147,7 +155,7 @@ class MtpHelper:
             except ValueError:
                 continue
 
-    def call(self, cmd: str, **args: Any) -> dict[str, Any]:
+    def call(self, cmd: str, *, timeout: float | None = None, **args: Any) -> dict[str, Any]:
         """Send one request and return the helper's reply. A refusal is raised as TargetError (an OSError)."""
         with self._lock:
             if self._process is None or self._process.stdin is None:
@@ -160,7 +168,7 @@ class MtpHelper:
             except OSError:
                 raise TargetError(errno.ENODEV, "The MTP helper stopped") from None
             while True:
-                reply = self._receive(CALL_TIMEOUT)
+                reply = self._receive(timeout or CALL_TIMEOUT)
                 if reply.get("id") == request["id"]:
                     break
             if not reply.get("ok"):
@@ -190,25 +198,49 @@ class MtpHelper:
                 pass
 
 
+LISTING_TIMEOUT = 25.0  # a phone that is asleep or waiting to be unlocked can keep the helper busy for a while
+
 _cache: dict[str, Any] = {"at": 0.0, "value": None}
+_listing_lock = threading.Lock()
 
 
 def list_devices(fresh: bool = False) -> dict[str, Any]:
-    """What the Add a device dialog shows: {"available": bool, "reason": str | None, "devices": [...]}.
-    Never raises; an unavailable helper or a failure is reported in `reason`. Reused for a few seconds."""
-    if not fresh and _cache["value"] is not None and time.monotonic() - _cache["at"] < LISTING_TTL:
-        return _cache["value"]
-    ok, reason = availability()
-    if not ok:
-        result: dict[str, Any] = {"available": False, "reason": reason, "devices": []}
-    else:
-        try:
-            with MtpHelper() as helper:
-                result = {"available": True, "reason": None, "devices": helper.call("devices")["devices"]}
-        except (MtpUnavailable, TargetError) as exc:
-            result = {"available": False, "reason": str(exc), "devices": []}
-    _cache.update(at=time.monotonic(), value=result)
-    return result
+    """What the Add a device dialog and the device cards need: {"available": bool, "reason": str | None,
+    "error": str | None, "devices": [...]}. `available` is False when this computer has no helper (the reason says why);
+    `error` is set when the helper is there but looking failed. Never raises. Reused for a few seconds."""
+    with _listing_lock:
+        if not fresh and _cache["value"] is not None and time.monotonic() - _cache["at"] < LISTING_TTL:
+            return _cache["value"]
+        ok, reason = availability()
+        if not ok:
+            result: dict[str, Any] = {"available": False, "reason": reason, "error": None, "devices": []}
+        else:
+            try:
+                with MtpHelper() as helper:
+                    result = {"available": True, "reason": None, "error": None, "devices": helper.call("devices", timeout=LISTING_TIMEOUT)["devices"]}
+            except (MtpUnavailable, TargetError) as exc:
+                result = {"available": True, "reason": None, "error": exc.strerror if isinstance(exc, TargetError) and exc.strerror else str(exc), "devices": []}
+        _cache.update(at=time.monotonic(), value=result)
+        return result
+
+
+def forget_listing() -> None:
+    """Drop the remembered list (after something changed on a device, or between tests)."""
+    with _listing_lock:
+        _cache.update(at=0.0, value=None)
+
+
+def find(devices: list[dict[str, Any]], serial: str, storage: str | None = None, storage_name: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """The device with this serial number among those plugged in, and its storage: by the id it had when it was
+    added, else by its name (an id can change between plugs, "Internal storage" does not)."""
+    device = next((d for d in devices if serial and serial in (d.get("serial"), d.get("id"))), None)
+    if device is None:
+        return None, None
+    storages = device.get("storages", [])
+    chosen = next((s for s in storages if storage and s.get("id") == storage), None)
+    if chosen is None:
+        chosen = next((s for s in storages if any(name and s.get("name") == name for name in (storage_name, storage))), None)
+    return device, chosen
 
 
 class MtpTarget:
@@ -227,16 +259,16 @@ class MtpTarget:
         self.label = label or device.get("name") or "Device"
 
     @classmethod
-    def connect(cls, helper: MtpHelper, *, serial: str, storage: str, base: str, label: str | None = None) -> "MtpTarget":
+    def connect(
+        cls, helper: MtpHelper, *, serial: str, storage: str, base: str, label: str | None = None, storage_name: str | None = None
+    ) -> "MtpTarget":
         """Find the device among those plugged in (by serial number), open it, and check that its storage is there."""
-        devices = helper.call("devices")["devices"]
-        found = next((d for d in devices if serial and serial in (d.get("serial"), d.get("id"))), None)
+        found, store = find(helper.call("devices", timeout=LISTING_TIMEOUT)["devices"], serial, storage, storage_name)
         if found is None:
-            raise TargetError(errno.ENODEV, "The device is not connected")
-        helper.call("open", device=found["id"])
-        store = next((s for s in found.get("storages", []) if storage in (s.get("id"), s.get("name"))), None)
+            raise TargetError(errno.ENODEV, NOT_CONNECTED)
         if store is None:
-            raise TargetError(errno.ENODEV, "The device is connected but its storage is not available. Unlock it and choose File transfer.")
+            raise TargetError(errno.ENODEV, NO_STORAGE)
+        helper.call("open", device=found["id"])
         return cls(helper, found, store, base, label)
 
     def _path(self, relative: str) -> str:

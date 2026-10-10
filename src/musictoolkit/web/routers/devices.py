@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from musictoolkit.sync import device_detect, mirror, selection
+from musictoolkit.sync import device_detect, mirror, mtp, selection
+from musictoolkit.sync.targets import LocalFolder, Target, TargetError
 from musictoolkit.web.context import AppContext, get_ctx, same_path
 from musictoolkit.web.jobs import JobHandle
 
@@ -23,6 +28,13 @@ PAGE = 100
 
 class DeviceBody(BaseModel):
     path: str
+    label: str | None = Field(default=None, max_length=80)
+
+
+class MtpBody(BaseModel):
+    serial: str = Field(max_length=200)
+    storage: str = Field(max_length=200)
+    folder: str | None = Field(default=None, max_length=200)  # where the music goes on that storage; "Music" if empty
     label: str | None = Field(default=None, max_length=80)
 
 
@@ -109,7 +121,43 @@ def _label_for(path: Path, volume_label: str | None, given: str | None) -> str:
     return (given or "").strip() or (volume_label if whole_drive and volume_label else "") or path.name or str(path)
 
 
+def _synced(conn, device_id: int):
+    return conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM sync_manifest WHERE device_id = ? AND status = 'synced'", (device_id,)
+    ).fetchone()
+
+
+def _mtp_trouble(listing: dict[str, Any], device: dict[str, Any] | None) -> str:
+    """Why a phone or player cannot be used right now, in words for the person."""
+    if not listing["available"]:
+        return listing["reason"] or "Phones and players without a drive letter are not available here."
+    if listing["error"]:
+        return f"Could not look for phones and players: {listing['error']}"
+    return mtp.NOT_CONNECTED if device is None else mtp.NO_STORAGE
+
+
+def _describe_mtp(conn, row) -> dict[str, Any]:
+    listing = mtp.list_devices()
+    device, storage = mtp.find(listing["devices"], row["mtp_serial"], row["mtp_storage"], row["mtp_storage_name"])
+    synced = _synced(conn, row["id"])
+    prefs = _prefs(row)
+    folder = row["mtp_base"] or mtp.DEFAULT_BASE
+    return {
+        "id": row["id"], "kind": "mtp", "label": row["label"], "path": f"{row['mtp_storage_name'] or 'Storage'} / {folder}",
+        "volume_label": row["mtp_model"], "connected": storage is not None, "different_drive": False, "moved_to": None,
+        "note": None if storage is not None else _mtp_trouble(listing, device),
+        "free": int(storage["free"]) if storage and storage.get("free") is not None else None,
+        "total": int(storage["capacity"]) if storage and storage.get("capacity") else None,
+        "fs": None, "removable": True, "synced": synced["n"], "synced_bytes": synced["bytes"],
+        "last_synced_at": row["last_synced_at"], "created_at": row["created_at"],
+        "mtp": {"model": row["mtp_model"], "storage": row["mtp_storage_name"], "folder": folder, "serial": row["mtp_serial"]},
+        "prefs": {k: prefs[k] for k in ("sources", "scheme", "playlists", "covers")},
+    }
+
+
 def _describe(conn, row) -> dict[str, Any]:
+    if row["kind"] == "mtp":
+        return _describe_mtp(conn, row)
     path = row["last_seen_mount_path"]
     exists = Path(path).is_dir()
     info = device_detect.volume_info(path) if exists else device_detect.VolumeInfo()
@@ -132,12 +180,10 @@ def _describe(conn, row) -> dict[str, Any]:
         volume = device_detect.volume_of(path)
         if volume:
             removable, fs = volume.likely_removable, fs or volume.fstype
-    synced = conn.execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM sync_manifest WHERE device_id = ? AND status = 'synced'", (row["id"],)
-    ).fetchone()
+    synced = _synced(conn, row["id"])
     prefs = _prefs(row)
     return {
-        "id": row["id"], "label": row["label"], "path": path, "volume_label": row["volume_label"],
+        "id": row["id"], "kind": "folder", "label": row["label"], "path": path, "volume_label": row["volume_label"],
         "connected": exists and not different, "different_drive": different, "moved_to": moved_to,
         "free": free, "total": total, "fs": fs, "removable": removable,
         "synced": synced["n"], "synced_bytes": synced["bytes"], "last_synced_at": row["last_synced_at"],
@@ -187,6 +233,64 @@ def volumes(ctx: AppContext = Depends(get_ctx)) -> dict:
     return {"items": items}
 
 
+def _folder_on_device(raw: str | None) -> str:
+    """Where the music goes on a phone's storage: "Music" unless the person says otherwise."""
+    parts = [part.strip() for part in (raw or "").replace("\\", "/").split("/") if part.strip()]
+    if not parts:
+        return mtp.DEFAULT_BASE
+    if any(part in (".", "..") or re.search(r'[<>:"|?*\x00-\x1f]', part) for part in parts):
+        raise HTTPException(status_code=422, detail="That folder name has characters a phone cannot use")
+    return "/".join(parts)
+
+
+@router.get("/mtp")
+def mtp_devices(fresh: bool = False, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Phones and players without a drive letter that are plugged in now, with their storages; which are already added."""
+    listing = mtp.list_devices(fresh=fresh)
+    with ctx.db() as conn:
+        known = [dict(r) for r in conn.execute("SELECT id, mtp_serial, mtp_storage, mtp_storage_name FROM devices WHERE kind = 'mtp'")]
+    devices = []
+    for device in listing["devices"]:
+        mine = [k for k in known if k["mtp_serial"] in (device.get("serial"), device.get("id"))]
+        storages = []
+        for storage in device.get("storages", []):
+            added = next((k["id"] for k in mine if storage["id"] == k["mtp_storage"] or storage.get("name") == k["mtp_storage_name"]), None)
+            storages.append({**storage, "device_id": added})
+        devices.append({**device, "storages": storages})
+    return {**listing, "devices": devices}
+
+
+@router.post("/mtp", status_code=201)
+def add_mtp_device(body: MtpBody, ctx: AppContext = Depends(get_ctx)) -> dict:
+    folder = _folder_on_device(body.folder)
+    listing = mtp.list_devices(fresh=True)
+    device, storage = mtp.find(listing["devices"], body.serial, body.storage)
+    if storage is None:
+        raise HTTPException(status_code=422, detail=_mtp_trouble(listing, device))
+    serial = device.get("serial") or device["id"]
+    model = " ".join(part for part in (device.get("manufacturer"), device.get("model")) if part) or device.get("name")
+    with ctx.db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM devices WHERE kind = 'mtp' AND mtp_serial = ? AND (mtp_storage = ? OR mtp_storage_name = ?)",
+            (serial, storage["id"], storage["name"]),
+        ).fetchone()
+        if existing is not None:  # the same phone again: keep its folder (what was copied is recorded relative to it)
+            conn.execute(
+                "UPDATE devices SET mtp_storage = ?, mtp_storage_name = ?, mtp_model = ? WHERE id = ?",
+                (storage["id"], storage["name"], model, existing["id"]),
+            )
+            conn.commit()
+            return _out(ctx, conn, _row(conn, existing["id"]))
+        label = (body.label or "").strip() or device.get("name") or model or "Phone"
+        device_id = mirror.get_or_create_device(conn, f"mtp:{serial}:{storage['id']}", label)
+        conn.execute(
+            "UPDATE devices SET kind = 'mtp', mtp_serial = ?, mtp_storage = ?, mtp_storage_name = ?, mtp_base = ?, mtp_model = ? WHERE id = ?",
+            (serial, storage["id"], storage["name"], folder, model, device_id),
+        )
+        conn.commit()
+        return _out(ctx, conn, _row(conn, device_id))
+
+
 @router.post("", status_code=201)
 def add_device(body: DeviceBody, ctx: AppContext = Depends(get_ctx)) -> dict:
     path = _usable_folder(ctx, body.path)
@@ -225,6 +329,8 @@ def patch_device(device_id: int, body: DevicePatch, ctx: AppContext = Depends(ge
                 raise HTTPException(status_code=422, detail="Give the device a name")
             conn.execute("UPDATE devices SET label = ? WHERE id = ?", (body.label.strip(), device_id))
         if body.path is not None:
+            if row["kind"] == "mtp":
+                raise HTTPException(status_code=422, detail="A phone or player without a drive letter is found by itself; there is no folder to point it at")
             path = _usable_folder(ctx, body.path)
             clash = conn.execute("SELECT id FROM devices WHERE last_seen_mount_path = ? AND id != ?", (str(path), device_id)).fetchone()
             if clash:
@@ -269,8 +375,48 @@ def _checked_sources(sources: list[dict[str, Any]], allow_empty: bool = False) -
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
-def _connected_device(ctx: AppContext, conn, device_id: int) -> tuple[Any, Path]:
+@dataclass
+class Where:
+    """Where a device's files go right now, worked out when a preview or a sync is asked for."""
+
+    key: str  # names the place: a preview only serves a sync to the very same place
+    root: Path | None  # a folder on a drive; None for a phone or player reached through the helper
+    free: int  # free bytes as just seen
+    total: int | None = None
+
+
+@contextmanager
+def _open_target(row, where: Where) -> Iterator[Target]:
+    """The device as the sync engine uses it. For a phone this starts the helper and keeps it for the whole job."""
+    if where.root is not None:
+        yield LocalFolder(where.root, row["label"])
+        return
+    helper = mtp.MtpHelper()
+    try:
+        helper.start()
+        target = mtp.MtpTarget.connect(
+            helper, serial=row["mtp_serial"], storage=row["mtp_storage"], storage_name=row["mtp_storage_name"],
+            base=row["mtp_base"] or mtp.DEFAULT_BASE, label=row["label"],
+        )
+    except (mtp.MtpUnavailable, TargetError) as exc:
+        helper.close()
+        raise RuntimeError(exc.strerror if isinstance(exc, TargetError) and exc.strerror else str(exc)) from None
+    try:
+        yield target
+    finally:
+        helper.close()
+        mtp.forget_listing()  # what the phone has free is different now
+
+
+def _connected_device(ctx: AppContext, conn, device_id: int) -> tuple[Any, Where]:
     row = _row(conn, device_id)
+    if row["kind"] == "mtp":
+        listing = mtp.list_devices()
+        device, storage = mtp.find(listing["devices"], row["mtp_serial"], row["mtp_storage"], row["mtp_storage_name"])
+        if storage is None:
+            raise HTTPException(status_code=409, detail=_mtp_trouble(listing, device))
+        key = f"mtp:{row['mtp_serial']}:{storage['id']}:{row['mtp_base']}"
+        return row, Where(key, None, int(storage.get("free") or 0), int(storage["capacity"]) if storage.get("capacity") else None)
     described = _describe(conn, row)
     if described["different_drive"]:
         raise HTTPException(status_code=409, detail="A different drive is using that drive letter now. Check that the right device is plugged in.")
@@ -280,7 +426,11 @@ def _connected_device(ctx: AppContext, conn, device_id: int) -> tuple[Any, Path]
     root = Path(row["last_seen_mount_path"]).resolve()
     if _library_overlap(ctx, root):
         raise HTTPException(status_code=409, detail="That folder is part of your music library. Pick the device folder again.")
-    return row, root
+    try:
+        usage = shutil.disk_usage(root)
+    except OSError:
+        raise HTTPException(status_code=409, detail="The device is not connected.") from None
+    return row, Where(str(root), root, usage.free, usage.total)
 
 
 @router.post("/{device_id}/preview")
@@ -295,7 +445,7 @@ def preview(device_id: int, body: PrefsBody, ctx: AppContext = Depends(get_ctx))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
     with ctx.db() as conn:
-        row, root = _connected_device(ctx, conn, device_id)
+        row, where = _connected_device(ctx, conn, device_id)
         prefs = _prefs(row)
         prefs.update(sources=body.sources, scheme=body.scheme, playlists=body.playlists, covers=body.covers)
         _save_prefs(conn, device_id, prefs)
@@ -311,10 +461,11 @@ def preview(device_id: int, body: PrefsBody, ctx: AppContext = Depends(get_ctx))
                 rows = selection.resolve_sources(conn, body.sources)
             except selection.BadSource as exc:
                 raise RuntimeError(str(exc)) from None
-            usage = shutil.disk_usage(root)
-            plan = mirror.plan_sync(conn, device_id, root, rows, scheme, usage.free, fs=fs, on_progress=progress)
+            with _open_target(row, where) as target:
+                free, total = target.free_space(), target.capacity()
+                plan = mirror.plan_sync(conn, device_id, target, rows, scheme, free, fs=fs, on_progress=progress)
         ctx.previews[f"sync:{device_id}"] = {
-            "job_id": handle.id, "plan": plan, "prefs": body.model_dump(), "root": str(root), "scheme": scheme,
+            "job_id": handle.id, "plan": plan, "prefs": body.model_dump(), "root": where.key, "scheme": scheme,
         }
         reasons: dict[str, int] = {}
         for item in plan.to_copy:
@@ -326,7 +477,7 @@ def preview(device_id: int, body: PrefsBody, ctx: AppContext = Depends(get_ctx))
             "selected": plan.selected, "to_copy": len(plan.to_copy), "bytes": plan.total_bytes_to_copy,
             "unchanged": plan.unchanged, "to_prune": len(plan.to_prune), "prune_bytes": plan.prune_bytes,
             "skipped": len(plan.skipped), "reasons": reasons, "skipped_reasons": skipped,
-            "free": usage.free, "total": usage.total,
+            "free": free, "total": total,
             "enough_space": mirror.has_sufficient_space(plan), "enough_space_with_removals": mirror.has_sufficient_space(plan, prune=True),
         }
 
@@ -386,15 +537,14 @@ def start_sync(device_id: int, body: SyncBody, ctx: AppContext = Depends(get_ctx
     if ctx.jobs.is_busy("sync"):
         raise HTTPException(status_code=409, detail="A sync is already running")
     with ctx.db() as conn:
-        row, root = _connected_device(ctx, conn, device_id)
-    if str(root) != held["root"]:
+        row, where = _connected_device(ctx, conn, device_id)
+    if where.key != held["root"]:
         raise HTTPException(status_code=409, detail="The device moved since the preview. Preview again.")
-    usage = shutil.disk_usage(root)
-    plan.free_bytes_on_device = usage.free
+    plan.free_bytes_on_device = where.free
     if not mirror.has_sufficient_space(plan, prune=prune):
         raise HTTPException(
             status_code=409,
-            detail=f"Not enough room on the device: {_size(plan.needed_bytes(prune))} needed, {_size(usage.free)} free.",
+            detail=f"Not enough room on the device: {_size(plan.needed_bytes(prune))} needed, {_size(where.free)} free.",
         )
     prefs = held["prefs"]
 
@@ -403,8 +553,11 @@ def start_sync(device_id: int, body: SyncBody, ctx: AppContext = Depends(get_ctx
             handle.update(done=done, total=total, message=f"Copied {done:,} of {_plural(total, 'song')} ({_size(copied)})")
             handle.check()
 
-        with ctx.db() as conn:
-            result = mirror.run_sync(conn, device_id, root, plan, prune=prune, copy_covers=prefs["covers"], on_progress=progress)
+        with ctx.db() as conn, _open_target(row, where) as target:
+            plan.free_bytes_on_device = target.free_space()  # a phone's room was last seen a moment ago; look again now
+            if not mirror.has_sufficient_space(plan, prune=prune):
+                raise RuntimeError(f"Not enough room on the device: {_size(plan.needed_bytes(prune))} needed, {_size(plan.free_bytes_on_device)} free.")
+            result = mirror.run_sync(conn, device_id, target, plan, prune=prune, copy_covers=prefs["covers"], on_progress=progress)
             out = result.to_dict()
             out.update(playlists_written=0, playlists_removed=0)
             if result.aborted is None:
@@ -417,10 +570,10 @@ def start_sync(device_id: int, body: SyncBody, ctx: AppContext = Depends(get_ctx
                             continue
                         ids = [r["id"] for r in selection.resolve_sources(conn, [{"kind": "playlist", "id": playlist_id}])]
                         wanted.append((name["name"], ids))
-                written, names = mirror.write_playlists(conn, device_id, root, wanted) if wanted else (0, [])
+                written, names = mirror.write_playlists(conn, device_id, target, wanted) if wanted else (0, [])
                 stale = [n for n in stored["written_playlists"] if n not in names]
                 out["playlists_written"] = written
-                out["playlists_removed"] = mirror.remove_playlists(root, stale) if stale else 0
+                out["playlists_removed"] = mirror.remove_playlists(target, stale) if stale else 0
                 stored["written_playlists"] = names
                 _save_prefs(conn, device_id, stored)
         ctx.previews.pop(f"sync:{device_id}", None)
