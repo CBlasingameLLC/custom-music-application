@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import musicbrainzngs
+import requests
 
 _configured = False
 
@@ -40,3 +41,21 @@ def get_recording(mbid: str) -> dict | None:
     except musicbrainzngs.ResponseError:
         return None
     return result.get("recording")
+
+
+def ping(app_name: str, app_version: str, contact: str) -> tuple[bool, str]:
+    """Look up one well-known artist, introducing the app the way MusicBrainz asks, to learn whether it is reachable."""
+    try:
+        response = requests.get(
+            "https://musicbrainz.org/ws/2/artist/5b11f4ce-a62d-471e-81fc-a69a8278c7da",
+            params={"fmt": "json"},
+            headers={"User-Agent": f"{app_name}/{app_version} ( {contact} )"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        return False, f"Could not reach MusicBrainz ({type(exc).__name__})."
+    if response.status_code == 200:
+        return True, "MusicBrainz is reachable and accepted the request."
+    if response.status_code in (429, 503):
+        return False, "MusicBrainz is busy right now (it limits how fast apps may ask). Try again in a minute."
+    return False, f"MusicBrainz answered with error {response.status_code}."

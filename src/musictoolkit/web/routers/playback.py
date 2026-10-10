@@ -133,4 +133,21 @@ def log_play(body: PlayLog, ctx: AppContext = Depends(get_ctx)) -> dict:
             (track["id"], started, body.ms_played, track["artist"], track["title"], track["album"]),
         )
         conn.commit()
+        if ctx.scrobbler:
+            ctx.scrobbler.wake()  # send it to ListenBrainz now rather than at the next poll
         return {"id": cursor.lastrowid, "plays": track["plays"] + 1}
+
+
+class NowPlaying(BaseModel):
+    track_id: int
+
+
+@router.post("/now-playing")
+def now_playing(body: NowPlaying, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Tell ListenBrainz what is playing, if the person turned that on. Never an error: it is only a courtesy."""
+    with ctx.db() as conn:
+        found = tracks_by_ids(conn, [body.track_id])
+    if not found or not ctx.scrobbler:
+        return {"sent": False}
+    track = found[0]
+    return {"sent": ctx.scrobbler.now_playing({"id": track["id"], "artist": track["artist"], "title": track["title"], "album": track["album"]})}

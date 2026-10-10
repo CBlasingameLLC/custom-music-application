@@ -2,13 +2,15 @@ import os
 from pathlib import Path
 
 from musictoolkit.config import load_config
+from musictoolkit.integrations.listenbrainz_client import ListenBrainzError
+from musictoolkit.web.routers import settings as settings_router
 from tests.conftest import build_web, ids_by_title, make_track, scan
 
 
 class TestSettings:
     def test_defaults_never_expose_secrets(self, empty_web) -> None:
         settings = empty_web.client.get("/api/settings").json()
-        assert settings["listenbrainz"] == {"enabled": True, "username": "", "has_token": False, "scrobble": True}
+        assert settings["listenbrainz"] == {"enabled": True, "username": "", "has_token": False, "scrobble": True, "now_playing": False}
         assert "user_token" not in settings["listenbrainz"] and "api_key" not in settings["lastfm"]
 
     def test_update_is_partial_persisted_and_masks_secrets(self, empty_web) -> None:
@@ -153,3 +155,66 @@ class TestScanning:
 
     def test_logs_endpoint_handles_a_missing_log_file(self, empty_web) -> None:
         assert empty_web.client.get("/api/system/logs").json()["lines"] == []
+
+
+class TestConnectionTests:
+    """The Test connection buttons: each tries the saved key against its own service and says plainly what happened."""
+
+    def test_listenbrainz_says_who_the_token_belongs_to(self, empty_web, monkeypatch) -> None:
+        c = empty_web.client
+        assert c.post("/api/settings/test/listenbrainz").json()["ok"] is False  # nothing saved yet
+        c.put("/api/settings", json={"listenbrainz": {"user_token": "tok-123", "username": "cayl"}})
+        asked = []
+
+        def good(token):
+            asked.append(token)
+            return {"valid": True, "user_name": "Cayl", "message": "Token valid."}
+
+        monkeypatch.setattr(settings_router.listenbrainz_client, "validate_token", good)
+
+        result = c.post("/api/settings/test/listenbrainz").json()
+
+        assert result == {"ok": True, "message": "Connected as Cayl."} and asked == ["tok-123"]
+        assert "tok-123" not in str(result)
+
+    def test_listenbrainz_points_out_a_username_that_does_not_match_the_token(self, empty_web, monkeypatch) -> None:
+        c = empty_web.client
+        c.put("/api/settings", json={"listenbrainz": {"user_token": "tok-123", "username": "somebody_else"}})
+        monkeypatch.setattr(settings_router.listenbrainz_client, "validate_token", lambda t: {"valid": True, "user_name": "cayl", "message": ""})
+        result = c.post("/api/settings/test/listenbrainz").json()
+        assert result["ok"] is True and "somebody_else" in result["message"] and "change it to cayl" in result["message"]
+
+    def test_listenbrainz_explains_a_bad_token_and_a_missing_connection(self, empty_web, monkeypatch) -> None:
+        c = empty_web.client
+        c.put("/api/settings", json={"listenbrainz": {"user_token": "wrong"}})
+        monkeypatch.setattr(settings_router.listenbrainz_client, "validate_token", lambda t: {"valid": False, "user_name": None, "message": ""})
+        bad = c.post("/api/settings/test/listenbrainz").json()
+        assert bad["ok"] is False and "does not recognise" in bad["message"]
+
+        def offline(token):
+            raise ListenBrainzError("no answer", status=None)
+
+        monkeypatch.setattr(settings_router.listenbrainz_client, "validate_token", offline)
+        gone = c.post("/api/settings/test/listenbrainz").json()
+        assert gone["ok"] is False and "Can't reach ListenBrainz" in gone["message"]
+
+    def test_lastfm_and_musicbrainz_are_tried_with_what_is_saved(self, empty_web, monkeypatch) -> None:
+        c = empty_web.client
+        assert c.post("/api/settings/test/lastfm").json()["ok"] is False
+        assert "contact" in c.post("/api/settings/test/musicbrainz").json()["message"]
+
+        c.put("/api/settings", json={"lastfm": {"api_key": "key-1"}, "musicbrainz": {"contact": "me@example.com"}})
+        seen = {}
+        monkeypatch.setattr(settings_router.lastfm_client, "check_key", lambda key: (seen.setdefault("lastfm", key) and False, "Last.fm says: Invalid API key"))
+        monkeypatch.setattr(
+            settings_router.musicbrainz_client, "ping",
+            lambda app, version, contact: (seen.update(musicbrainz=(app, contact)) or True, "MusicBrainz is reachable and accepted the request."),
+        )
+
+        assert c.post("/api/settings/test/lastfm").json() == {"ok": False, "message": "Last.fm says: Invalid API key"}
+        assert c.post("/api/settings/test/musicbrainz").json()["ok"] is True
+        assert seen["lastfm"] == "key-1" and seen["musicbrainz"][1] == "me@example.com"
+
+    def test_only_the_known_services_can_be_tested(self, empty_web) -> None:
+        assert empty_web.client.post("/api/settings/test/http%3A%2F%2Fexample.com").status_code == 404
+        assert empty_web.client.post("/api/settings/test/spotify").status_code == 404

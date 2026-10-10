@@ -203,7 +203,7 @@ async function loadCurrent(autoplay) {
     player.set({ playing: false, loading: false, position: 0, duration: 0 });
     return;
   }
-  listen = { id: track.id, startedAt: Date.now() / 1000, ms: 0, logged: false, lastTime: 0, duration: track.duration };
+  listen = { id: track.id, startedAt: Date.now() / 1000, ms: 0, logged: false, announced: false, lastTime: 0, duration: track.duration };
   player.set({ loading: true, error: null, position: 0, duration: track.duration || 0 });
   audio.src = `/api/tracks/${track.id}/stream`;
   updateMediaSession(track);
@@ -318,7 +318,7 @@ function advance(fromEnd) {
   const s = player.get();
   if (s.repeat === 'one' && fromEnd) {
     audio.currentTime = 0;
-    listen = { ...listen, ms: 0, logged: false, startedAt: Date.now() / 1000, lastTime: 0 };
+    listen = { ...listen, ms: 0, logged: false, announced: false, startedAt: Date.now() / 1000, lastTime: 0 };
     return play();
   }
   if (s.pos + 1 < s.order.length) {
@@ -413,6 +413,10 @@ export function updateTrack(trackId, patch) {
 audio.addEventListener('playing', () => {
   consecutiveErrors = 0;
   player.set({ playing: true, loading: false, error: null });
+  if (listen && !listen.announced && listen.id === current()?.id) {
+    listen.announced = true; // once per song; the server stays quiet unless "show what I'm playing" is on
+    api('/now-playing', { method: 'POST', body: { track_id: listen.id } }).catch(() => {});
+  }
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
 });
 audio.addEventListener('pause', () => {

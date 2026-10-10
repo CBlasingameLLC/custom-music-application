@@ -61,6 +61,56 @@ function LibraryCard({ settings, about }) {
   <//>`;
 }
 
+/** Tries the saved key or token against its service. `before` saves anything typed but not yet saved. */
+function TestButton({ service, before }) {
+  const [result, setResult] = useState(null); // null | 'working' | { ok, message }
+  async function run() {
+    setResult('working');
+    if (before && !(await before())) return setResult(null);
+    try {
+      setResult(await api(`/settings/test/${service}`, { method: 'POST' }));
+    } catch (error) {
+      setResult({ ok: false, message: error.message });
+    }
+  }
+  return html`<${Button} icon="link" disabled=${result === 'working'} onClick=${run}>${result === 'working' ? 'Testing…' : 'Test connection'}<//>
+    ${result && result !== 'working' && html`<span class="test-result ${result.ok ? 'ok' : 'bad'}" role="status"><${Icon} name=${result.ok ? 'check' : 'alert'} size=${14} /><span>${result.message}</span></span>`}`;
+}
+
+/** Whether plays are reaching ListenBrainz: up to date, how many are waiting, or what went wrong. */
+function ScrobbleStatus() {
+  const [status, setStatus] = useState(null);
+  const load = () => api('/scrobbler').then(setStatus).catch(() => {});
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, []);
+  async function retry() {
+    try {
+      setStatus(await api('/scrobbler/retry', { method: 'POST' }));
+    } catch (error) {
+      notifyError(error);
+    }
+  }
+  if (!status || !status.has_token) return null;
+  const wait = status.next_attempt_at ? Math.max(0, Math.round(status.next_attempt_at - Date.now() / 1000)) : 0;
+  const line = !status.active
+    ? 'Not sending: ListenBrainz or recording plays is switched off above.'
+    : status.state === 'rejected'
+      ? status.last_error
+      : status.state === 'waiting'
+        ? `${status.last_error} Trying again in ${wait < 90 ? fmt.plural(wait, 'second') : fmt.plural(Math.round(wait / 60), 'minute')}.`
+        : status.pending
+          ? `${fmt.plural(status.pending, 'play')} waiting to be sent.`
+          : `Up to date.${status.sent ? ` ${fmt.plural(status.sent, 'play')} sent since the app started.` : ''}`;
+  const refused = status.refused
+    ? ` ${fmt.plural(status.refused, 'play')} that ListenBrainz refused ${status.refused === 1 ? 'was' : 'were'} skipped${status.last_refused ? ` (latest: “${status.last_refused}”)` : ''}.`
+    : '';
+  return html`<p class="status-line ${status.active ? status.state : 'off'}" role="status" aria-label="Scrobbling status">${line}${refused}
+    ${status.active && (status.state === 'rejected' || status.state === 'waiting') && html` <button class="link" onClick=${retry}>Try again</button>`}</p>`;
+}
+
 function AccountsCard({ settings }) {
   const [mb, setMb] = useState(settings.musicbrainz.contact);
   const [lbUser, setLbUser] = useState(settings.listenbrainz.username);
@@ -69,12 +119,34 @@ function AccountsCard({ settings }) {
   const [lfSecret, setLfSecret] = useState('');
   const lb = settings.listenbrainz;
   const lf = settings.lastfm;
-  return html`<${Card} icon="globe" title="Accounts and services" hint="All optional and free. Nothing is sent anywhere until you turn it on.">
+
+  const saveMusicBrainz = async () => mb === settings.musicbrainz.contact || Boolean(await save({ musicbrainz: { contact: mb } }));
+  const saveListenBrainz = async () => {
+    const patch = {};
+    if (lbUser !== lb.username) patch.username = lbUser;
+    if (lbToken) patch.user_token = lbToken;
+    if (!Object.keys(patch).length) return true;
+    const saved = await save({ listenbrainz: patch });
+    if (saved) setLbToken('');
+    return Boolean(saved);
+  };
+  const saveLastFm = async () => {
+    const patch = {};
+    if (lfKey) patch.api_key = lfKey;
+    if (lfSecret) patch.api_secret = lfSecret;
+    if (!Object.keys(patch).length) return true;
+    const saved = await save({ lastfm: patch });
+    if (saved) { setLfKey(''); setLfSecret(''); }
+    return Boolean(saved);
+  };
+
+  return html`<${Card} icon="globe" title="Accounts and services" hint="All optional and free. Nothing is sent anywhere until you turn it on. “Test connection” saves what you typed and tries it.">
     <div class="service">
       <h3>MusicBrainz <span class="badge">tag lookups</span></h3>
       <p class="subtle">MusicBrainz asks apps to identify themselves with a contact address. Used when filling in missing song tags.</p>
-      <div class="inline-form"><input type="email" placeholder="you@example.com" value=${mb} onInput=${(e) => setMb(e.target.value)} />
+      <div class="inline-form"><input type="email" aria-label="MusicBrainz contact email" placeholder="you@example.com" value=${mb} onInput=${(e) => setMb(e.target.value)} />
         <${Button} onClick=${() => save({ musicbrainz: { contact: mb } })}>Save<//></div>
+      <div class="row-actions"><${TestButton} service="musicbrainz" before=${saveMusicBrainz} /></div>
     </div>
     <div class="service">
       <h3>ListenBrainz <span class="badge">recommendations and listening history</span></h3>
@@ -86,8 +158,11 @@ function AccountsCard({ settings }) {
           <input type="password" value=${lbToken} placeholder=${lb.has_token ? 'Enter a new token to replace it' : 'Paste your token'} autocomplete="off" onInput=${(e) => setLbToken(e.target.value)} /></label>
       </div>
       <${Switch} checked=${lb.scrobble} onChange=${(v) => save({ listenbrainz: { scrobble: v } })}>Record what I play in this app to ListenBrainz<//>
+      <${Switch} checked=${lb.now_playing} onChange=${(v) => save({ listenbrainz: { now_playing: v } })}>Also show what I'm playing right now (shown for a few minutes, never kept as a listen)<//>
+      <${ScrobbleStatus} />
       <div class="row-actions">
-        <${Button} onClick=${async () => { const patch = { username: lbUser }; if (lbToken) patch.user_token = lbToken; if (await save({ listenbrainz: patch })) setLbToken(''); }}>Save ListenBrainz<//>
+        <${Button} onClick=${saveListenBrainz}>Save ListenBrainz<//>
+        <${TestButton} service="listenbrainz" before=${saveListenBrainz} />
         ${lb.has_token && html`<${Button} kind="danger-ghost" onClick=${() => save({ listenbrainz: { user_token: '' } }, 'Token removed')}>Remove token<//>`}
       </div>
     </div>
@@ -99,7 +174,10 @@ function AccountsCard({ settings }) {
         <label class="field"><span>API key ${lf.has_key ? html`<em class="ok">saved</em>` : ''}</span><input type="password" value=${lfKey} placeholder=${lf.has_key ? 'Enter a new key to replace it' : 'API key'} autocomplete="off" onInput=${(e) => setLfKey(e.target.value)} /></label>
         <label class="field"><span>Shared secret ${lf.has_secret ? html`<em class="ok">saved</em>` : ''}</span><input type="password" value=${lfSecret} placeholder=${lf.has_secret ? 'Enter a new secret to replace it' : 'Shared secret'} autocomplete="off" onInput=${(e) => setLfSecret(e.target.value)} /></label>
       </div>
-      <${Button} onClick=${async () => { const patch = {}; if (lfKey) patch.api_key = lfKey; if (lfSecret) patch.api_secret = lfSecret; if (Object.keys(patch).length && (await save({ lastfm: patch }))) { setLfKey(''); setLfSecret(''); } }}>Save Last.fm<//>
+      <div class="row-actions">
+        <${Button} onClick=${saveLastFm}>Save Last.fm<//>
+        <${TestButton} service="lastfm" before=${saveLastFm} />
+      </div>
     </div>
   <//>`;
 }

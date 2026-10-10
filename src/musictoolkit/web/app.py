@@ -35,10 +35,12 @@ from musictoolkit.web.routers import (
     organize,
     playback,
     playlists,
+    scrobbling,
     settings,
     system,
     tags,
 )
+from musictoolkit.web.scrobbler import Scrobbler
 
 logger = logging.getLogger("musictoolkit")
 
@@ -88,12 +90,17 @@ def create_app(
         db_path=Path(db_path).absolute(), config_path=Path(config_path).absolute(), config=config, token=token
     )
     connect(ctx.db_path).close()  # first launch: create the folder and apply migrations now
+    ctx.scrobbler = Scrobbler(ctx)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if rescan_on_start and ctx.config.app.rescan_on_launch and ctx.config.library.roots:
             manage.submit_scan(ctx, list(ctx.config.library.roots), title="Refreshing library")
-        yield
+        ctx.scrobbler.start()
+        try:
+            yield
+        finally:
+            ctx.scrobbler.stop()
 
     app = FastAPI(title="Music Toolkit", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
@@ -117,7 +124,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)

@@ -9,7 +9,10 @@ from pydantic import BaseModel
 
 from musictoolkit.config import Config
 from musictoolkit.ingest import organizer
+from musictoolkit.integrations import lastfm_client, listenbrainz_client, musicbrainz_client
+from musictoolkit.integrations.listenbrainz_client import ListenBrainzError
 from musictoolkit.web.context import AppContext, get_ctx, same_path
+from musictoolkit.web.scrobbler import describe_failure
 
 router = APIRouter(prefix="/api")
 
@@ -17,7 +20,7 @@ router = APIRouter(prefix="/api")
 EDITABLE: dict[str, set[str]] = {
     "library": {"canonical_scheme"},
     "musicbrainz": {"contact"},
-    "listenbrainz": {"enabled", "username", "user_token", "scrobble"},
+    "listenbrainz": {"enabled", "username", "user_token", "scrobble", "now_playing"},
     "lastfm": {"enabled", "api_key", "api_secret"},
     "sync": {"device_scheme"},
     "app": {"rescan_on_launch", "lyrics_lrclib", "auto_update"},
@@ -35,6 +38,7 @@ def public_settings(cfg: Config) -> dict[str, Any]:
             "username": cfg.listenbrainz.username,
             "has_token": bool(cfg.listenbrainz.user_token),
             "scrobble": cfg.listenbrainz.scrobble,
+            "now_playing": cfg.listenbrainz.now_playing,
         },
         "lastfm": {
             "enabled": cfg.lastfm.enabled,
@@ -83,7 +87,56 @@ def put_settings(body: dict[str, dict[str, Any]], ctx: AppContext = Depends(get_
     for target, key, value in updates:  # validated first, so a bad field never half-applies the rest
         setattr(target, key, value)
     ctx.save_config()
+    if "listenbrainz" in body and ctx.scrobbler:
+        ctx.scrobbler.reset()  # a new token, or scrobbling switched on, should be tried right away
     return public_settings(ctx.config)
+
+
+def _test_listenbrainz(cfg: Config) -> dict[str, Any]:
+    lb = cfg.listenbrainz
+    token = lb.user_token.strip()
+    if not token:
+        return {"ok": False, "message": "Paste your ListenBrainz user token first. You find it at listenbrainz.org/settings."}
+    try:
+        result = listenbrainz_client.validate_token(token)
+    except ListenBrainzError as exc:
+        return {"ok": False, "message": describe_failure(exc)}
+    if not result["valid"]:
+        return {"ok": False, "message": "ListenBrainz does not recognise this token. Copy it again from listenbrainz.org/settings."}
+    name = result["user_name"] or ""
+    note = ""
+    if lb.username.strip() and name and lb.username.strip().lower() != name.lower():
+        note = f" Your username setting says “{lb.username.strip()}”; change it to {name} so recommendations use this account."
+    return {"ok": True, "message": f"Connected as {name}.{note}" if name else "ListenBrainz accepted the token."}
+
+
+def _test_lastfm(cfg: Config) -> dict[str, Any]:
+    key = cfg.lastfm.api_key.strip()
+    if not key:
+        return {"ok": False, "message": "Enter your Last.fm API key first."}
+    ok, message = lastfm_client.check_key(key)
+    return {"ok": ok, "message": message}
+
+
+def _test_musicbrainz(cfg: Config) -> dict[str, Any]:
+    contact = cfg.musicbrainz.contact.strip()
+    if not contact:
+        return {"ok": False, "message": "MusicBrainz asks every app to give a contact email. Add yours first."}
+    ok, message = musicbrainz_client.ping(cfg.musicbrainz.app_name, cfg.musicbrainz.app_version, contact)
+    return {"ok": ok, "message": message}
+
+
+TESTS = {"listenbrainz": _test_listenbrainz, "lastfm": _test_lastfm, "musicbrainz": _test_musicbrainz}
+
+
+@router.post("/settings/test/{service}")
+def test_connection(service: str, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Try the saved key or token against its service, so a typo shows up here and not later as silence.
+    Always answers 200 with {ok, message}; only the fixed service addresses are ever contacted."""
+    tester = TESTS.get(service)
+    if tester is None:
+        raise HTTPException(status_code=404, detail="That service is not one Music Toolkit connects to")
+    return tester(ctx.config)
 
 
 class RootBody(BaseModel):

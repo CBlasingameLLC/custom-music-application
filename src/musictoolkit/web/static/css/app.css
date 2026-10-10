@@ -731,3 +731,11 @@ input.mono { font-size: 13.5px; }
   .device-icon { width: 40px; height: 40px; }
   .device-actions { grid-column: 1 / -1; }
 }
+
+/* ---- connection tests and scrobbling status ---- */
+.test-result { display: inline-flex; align-items: flex-start; gap: 6px; font-size: 13px; line-height: 1.4; }
+.test-result svg { flex: none; margin-top: 2px; }
+.test-result.ok { color: var(--good); }
+.test-result.bad { color: var(--warn); }
+.status-line.rejected, .status-line.waiting { color: var(--warn); }
+.status-line.off { color: var(--text-dim); }
