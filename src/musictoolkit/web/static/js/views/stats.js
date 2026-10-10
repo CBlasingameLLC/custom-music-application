@@ -1,6 +1,6 @@
 // Stats: what you listen to, when, and how it changed. Everything here comes from the play history, so it grows with it
 // (plays made in this app and the Spotify history you imported).
-import { api, fmt, html, useAsync, useState, useStore } from '../lib.js';
+import { api, fmt, html, useAsync, useState, useStore, viewerOffset } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Empty, PageHeader, Spinner } from '../components.js';
 import { ChartCard, ColumnChart, daysBetween, Heatmap, RankedBars } from '../charts.js';
@@ -11,9 +11,6 @@ const LAST_YEAR = 'days:365';
 const LAST_MONTH = 'days:30';
 const SHORT_PERIOD_DAYS = 62; // up to here a period is shown as one column per day; beyond it as a grid of days
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-/** Minutes east of UTC, the way the server wants a time zone. */
-const viewerOffset = () => -new Date().getTimezoneOffset();
 
 const utcDate = (year, month, day = 1, hour = 0) => new Date(Date.UTC(year, month, day, hour));
 const inUtc = (date, options) => date.toLocaleDateString(undefined, { ...options, timeZone: 'UTC' });

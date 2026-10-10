@@ -95,6 +95,9 @@ export function useDebounced(value, ms = 250) {
   return debounced;
 }
 
+/** The viewer's offset from UTC in minutes, east positive: what the server needs to know which day a play was on. */
+export const viewerOffset = () => -new Date().getTimezoneOffset();
+
 // ---------------------------------------------------------------- formatting
 
 export const fmt = {

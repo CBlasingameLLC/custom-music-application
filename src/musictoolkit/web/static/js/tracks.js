@@ -27,6 +27,18 @@ export async function setRating(tracks, rating) {
   ids.forEach((id) => updateTrack(id, { rating }));
 }
 
+/** Play songs that go with this one (same sittings, genre, era; no run of one artist), starting with it. */
+export async function startRadio(track) {
+  try {
+    const { tracks } = await api(`/radio/track/${track.id}`);
+    if (!tracks.length) return toast('There is nothing to build a radio from yet');
+    await playQueue(tracks, 0, { shuffle: false, source: `Radio: ${track.title}` });
+    toast(`Radio from "${track.title}": ${fmt.plural(tracks.length, 'song')} queued`, 'success', 3500);
+  } catch (error) {
+    notifyError(error);
+  }
+}
+
 export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 'Remove from playlist' } = {}) {
   const single = tracks.length === 1 ? tracks[0] : null;
   const allFavorite = tracks.every((t) => t.favorite);
@@ -35,6 +47,7 @@ export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 
     { label: `Play${label}`, icon: 'play', action: () => (playNow ? playNow() : playQueue(tracks, 0)) },
     { label: 'Play next', icon: 'chevron-right', action: () => { addToQueue(tracks, { next: true }); toast(`Playing ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} next`); } },
     { label: 'Add to queue', icon: 'queue', action: () => { addToQueue(tracks); toast(`Added ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} to the queue`); } },
+    ...(single ? [{ label: 'Start radio', icon: 'radio', action: () => startRadio(single) }] : []),
     { divider: true },
     { label: 'Add to playlist…', icon: 'plus', action: () => openAddToPlaylist(tracks) },
     {

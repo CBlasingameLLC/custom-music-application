@@ -4,7 +4,7 @@ import { Icon } from '../icons.js';
 import { Cover, IconButton } from '../components.js';
 import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
 import { QueueList } from './nowplaying.js';
-import { setFavorite } from '../tracks.js';
+import { setFavorite, startRadio } from '../tracks.js';
 import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
 // ------------------------------------------------------------ sidebar
@@ -197,6 +197,7 @@ export function PlayerBar() {
     </div>
 
     <div class="pb-right">
+      ${track && html`<${IconButton} icon="radio" title="Start radio from this song" onClick=${() => startRadio(track)} />`}
       <${IconButton} icon="mic" title="Now Playing and lyrics" onClick=${() => go('/now')} />
       <${IconButton} icon="queue" title="Queue" active=${queueOpen} onClick=${() => ui.set({ queueOpen: !queueOpen })} />
       <${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />

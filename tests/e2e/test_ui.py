@@ -241,6 +241,26 @@ def test_layout_survives_a_narrow_window(page, live):
             )
 
 
+def test_the_sidebar_keeps_the_playlists_in_reach_in_a_short_window(page, live):
+    add_library(page, live)
+    names = ["Gym", "Road trip", "Sunday", "Focus"]
+    for name in names:
+        api(page, "/playlists", "POST", {"name": name})
+    page.reload()
+    page.wait_for_selector(".sidebar")
+
+    for height in (860, 700):
+        page.set_viewport_size({"width": 1360, "height": height})
+        area = page.locator(".playlists-nav").bounding_box()
+        assert area["height"] >= 90, f"the playlists have {area['height']}px at {height}px high"
+
+    last = page.locator(".sidebar").get_by_role("link", name=names[-1])
+    last.scroll_into_view_if_needed()
+    expect(last).to_be_visible()
+    last.click()
+    expect(page.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
+
+
 FAKE_DESKTOP = """
 (() => {
   const listeners = new Set();
