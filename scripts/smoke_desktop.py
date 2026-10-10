@@ -206,6 +206,13 @@ def drive(args, command: list[str]) -> None:
                 check(checked.get("state") in ("up-to-date", "error", "downloading", "ready", "checking"),
                       f"a check for updates ran ({checked.get('state')!r}: {checked.get('error')})")
 
+            if args.expect_mtp_helper:
+                step("phones and players")
+                listing = page.evaluate("fetch('/api/devices/mtp?fresh=true').then(r => r.json())")
+                check(listing.get("available") is True, f"the installed app found its helper for phones and players ({listing.get('reason')})")
+                check(not listing.get("error"), f"the helper started and looked for devices ({listing.get('error')})")
+                check(listing.get("devices") == [], f"no phone is plugged into this machine ({listing.get('devices')})")
+
             step("first run, library, playback")
             check(page.locator("text=Add your music").count() == 1, "an empty library shows the first-run prompt")
             status = page.evaluate(
@@ -300,6 +307,7 @@ def main() -> None:
     parser.add_argument("--launch-timeout", type=float, default=90, help="seconds to wait for the window")
     parser.add_argument("--strict-audio", action="store_true", help="also require the playback clock to advance (needs an audio device or a fake sink)")
     parser.add_argument("--expect-updater", action="store_true", help="the app is an installed build: its updater must be active")
+    parser.add_argument("--expect-mtp-helper", action="store_true", help="the app is an installed build: the helper for phones and players must be there and start")
     parser.add_argument("--skip-external", action="store_true", help="skip the checks that make the app open a link in the system browser")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the command that starts the app")
     args = parser.parse_args()

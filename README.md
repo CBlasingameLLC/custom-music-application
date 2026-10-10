@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.4.0)
+## What it does (v0.4.1)
 
 | Area | Features |
 |---|---|
@@ -36,7 +36,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded or `.lrc`, synced highlighting), folders added from Settings |
 | **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
 | **Discover** | New-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
-| **Devices** | Copy music to a Walkman, phone, SD card or USB stick (anything that shows up as a drive): choose what goes on it, preview, copy only what changed. See below |
+| **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, responsive down to a narrow window |
@@ -68,8 +68,28 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 5. Songs no longer chosen are removed **only if you tick the box and confirm the exact number**, and only files
    this app copied. A different drive that has taken over the drive letter is never written to.
 
-A player in **MTP mode** (no drive letter; many Walkmans and phones by default) is not supported yet: switch the
-player's USB connection to *mass storage* (MSC) if it offers that. MTP support is planned for 0.4.1.
+#### Phones and players without a drive letter (MTP, experimental)
+
+Most phones and many Walkmans connect in **MTP** mode, which has no drive letter. Add a device, then use the
+"Phones and players without a drive letter" part of the dialog: plug the phone in with a USB cable, unlock its
+screen and choose **File transfer** in the notification on it, then press *Look again*. Pick the storage
+(internal storage or SD card) and the folder the music goes in (`Music` unless you say otherwise). From there it
+works exactly like a drive: the same choices, the same preview, the same exact-count confirmation before
+anything is removed, progress and Cancel.
+
+What is different on a phone:
+- It cannot rename a file, so there is no temporary name: a copy that breaks off is deleted again, and a file that
+  still looks too small the next time is copied again.
+- Keep the phone unlocked while it copies. If it goes to sleep or the cable is pulled the sync stops and says so;
+  everything copied so far is kept and the next sync carries on from there.
+- Some players do not list `.m3u8` playlists in their own playlist screen, and a phone's music app may need a
+  moment (or a restart) to notice new songs.
+- A phone that does not say how much room it has is not stopped early; it simply refuses when it is full.
+- It is labelled *experimental* because it has been checked against a stand-in for a phone and against Windows'
+  own interface, not yet against every real model. If a model misbehaves, Settings, Diagnostics shows whether the
+  helper is installed and what Windows reports, and the logs folder has the details.
+
+A small helper program (`mtk-mtp.exe`, installed next to the app) does the talking to Windows Portable Devices.
 
 ### Spotify history and ListenBrainz
 
@@ -141,10 +161,20 @@ vendored under `vendor/`, no build step, nothing to `npm install`). The API is
 in `src/musictoolkit/web/routers/`.
 
 ```bash
-pytest                       # unit + API tests (~30 s); browser tests skip if Playwright is absent
+pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
 pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts...
 python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
 cd desktop && npm test       # the update logic of the desktop shell
+```
+
+The helper for phones and players without a drive letter is a small C# program
+([`helpers/mtp`](helpers/mtp), .NET Framework 4.8, built with the .NET SDK; Windows only at run time).
+The tests use a stand-in that keeps its "phones" in plain folders (`tests/fake_mtp_helper.py`), so they run
+anywhere:
+
+```bash
+dotnet build helpers/mtp/MtkMtp.csproj -c Release -o helpers/mtp/out        # Windows: the real helper
+python scripts/check_mtp_helper.py helpers/mtp/out/mtk-mtp.exe              # starts it and checks the protocol (Windows)
 ```
 
 Fixtures under `tests/fixtures/` are tiny synthetic MP3s with known tags (plus a

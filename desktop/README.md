@@ -84,8 +84,13 @@ electron-builder's NSIS target needs Windows. From the repo root:
    token gate, a scan, cover art, Range streaming and a backup. Give it a few
    seconds: onefile builds self-extract on every launch.
 
-4. mkdir desktop\resources
-   copy dist\mtk-backend.exe desktop\resources\
+4. The helper for phones and players without a drive letter (needs the .NET SDK):
+     dotnet build helpers\mtp\MtkMtp.csproj -c Release -o helpers\mtp\out
+     python scripts\check_mtp_helper.py helpers\mtp\out\mtk-mtp.exe
+   Then stage both next to each other:
+     mkdir desktop\resources
+     copy dist\mtk-backend.exe desktop\resources\
+     xcopy /E /I helpers\mtp\out desktop\resources\mtk-mtp
 
 5. cd desktop
    npm ci
@@ -98,7 +103,7 @@ electron-builder's NSIS target needs Windows. From the repo root:
 
 8. Install it and drive the installed app's window:
      pip install playwright
-     python scripts\smoke_desktop.py --music tests\fixtures --skip-external -- "<install dir>\Music Toolkit.exe"
+     python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-mtp-helper -- "<install dir>\Music Toolkit.exe"
    (the installer accepts /S /D=<dir> for a silent install). This is what CI
    does on every build. By hand, confirm a Desktop shortcut and Start Menu
    entry appear, no console window shows, and after closing the app
