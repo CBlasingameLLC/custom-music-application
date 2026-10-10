@@ -62,6 +62,12 @@ def as_target(device: Any) -> Target:
     return device if isinstance(device, Target) else LocalFolder(Path(device))
 
 
+def text_bytes(text: str) -> bytes:
+    """A text file for a device (a playlist): UTF-8 with Windows line endings, whatever machine wrote it. Players of every
+    age read those; some older ones do not read bare line feeds."""
+    return text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+
+
 def native(relative: str) -> str:
     """A device path in the form the manifest has always held: whatever separator this machine uses."""
     return relative.replace("\\", "/")
@@ -152,7 +158,7 @@ class LocalFolder:
     def write_text(self, relative: str, text: str) -> None:
         path = self._abs(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text_bytes(text))
 
     def path_problem(self, relative: str) -> str | None:
         length = len(str(self._abs(relative)))

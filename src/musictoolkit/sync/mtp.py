@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from musictoolkit.ingest import moves
-from musictoolkit.sync.targets import TargetError, join, native, parent_of
+from musictoolkit.sync.targets import TargetError, join, native, parent_of, text_bytes
 
 logger = logging.getLogger("musictoolkit")
 
@@ -350,7 +350,7 @@ class MtpTarget:
     def write_text(self, relative: str, text: str) -> None:
         with tempfile.TemporaryDirectory(prefix="mtk-mtp-") as scratch:
             staging = Path(scratch) / "upload"
-            staging.write_text(text, encoding="utf-8")
+            staging.write_bytes(text_bytes(text))
             self.put(staging, relative)
 
     def path_problem(self, relative: str) -> str | None:

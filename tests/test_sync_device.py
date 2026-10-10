@@ -361,6 +361,16 @@ def test_playlists_are_written_with_paths_relative_to_the_playlist_folder(conn, 
     assert lines == ["#EXTM3U", "../Artist/Other/02 - Two.mp3", "../Artist/Album/01 - One.mp3"]
 
 
+def test_a_playlist_has_windows_line_endings_whatever_machine_wrote_it(conn, library, device) -> None:
+    a = add(conn, library, "one.mp3", title="One", track_number=1)
+    device_id = mirror.get_or_create_device(conn, str(device))
+    sync(conn, device_id, device, rows(conn, a))
+
+    mirror.write_playlists(conn, device_id, device, [("Mix", [a])])
+
+    assert (device / "Playlists" / "Mix.m3u8").read_bytes() == b"#EXTM3U\r\n../Artist/Album/01 - One.mp3\r\n"
+
+
 def test_playlists_the_app_wrote_earlier_can_be_removed(conn, library, device) -> None:
     a = add(conn, library, "one.mp3")
     device_id = mirror.get_or_create_device(conn, str(device))

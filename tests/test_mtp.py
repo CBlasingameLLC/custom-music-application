@@ -213,7 +213,7 @@ def test_writing_over_a_file_replaces_it_and_text_can_be_written(target, tmp_pat
     assert target.put(song(tmp_path, size=120), "Artist/a.mp3") == 120 and target.size_of("Artist/a.mp3") == 120
 
     target.write_text("Playlists/Road trip.m3u8", "#EXTM3U\n../Artist/a.mp3\n")
-    assert target.size_of("Playlists/Road trip.m3u8") == len("#EXTM3U\n../Artist/a.mp3\n")
+    assert target.size_of("Playlists/Road trip.m3u8") == len("#EXTM3U\r\n../Artist/a.mp3\r\n"), "Windows line endings on every machine"
 
 
 def test_a_full_device_refuses_a_file_and_nothing_half_written_stays(phones, helper, tmp_path) -> None:
