@@ -743,3 +743,13 @@ input.mono { font-size: 13.5px; }
 /* ---- importing history ---- */
 .steps { margin: 6px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.5; }
 .section-title.small { margin: 18px 0 10px; font-size: 14px; color: var(--text-dim); }
+
+/* ---- diagnostics ---- */
+.diag-list { list-style: none; margin: 14px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.diag { display: grid; grid-template-columns: 18px minmax(120px, 190px) minmax(0, 1fr); gap: 4px 12px; align-items: baseline; padding: 9px 14px; font-size: 13px; }
+.diag + .diag { border-top: 1px solid var(--border); }
+.diag svg { align-self: center; color: var(--text-faint, var(--text-dim)); }
+.diag.ok svg { color: var(--good); }
+.diag.bad svg { color: var(--warn); }
+.diag span { color: var(--text-dim); overflow-wrap: anywhere; }
+@media (max-width: 720px) { .diag { grid-template-columns: 18px minmax(0, 1fr); } .diag span { grid-column: 2; } }

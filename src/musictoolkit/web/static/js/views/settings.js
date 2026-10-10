@@ -216,6 +216,86 @@ function UpdatesCard({ settings }) {
   <//>`;
 }
 
+// ------------------------------------------------------------ diagnostics
+
+const KEY_NAMES = { playpause: 'Play/Pause', next: 'Next', previous: 'Previous', stop: 'Stop' };
+const failed = (part) => part && part.error;
+
+/** The report as rows: { ok: true | false | null, label, detail }. null means "just so you know". */
+function diagnosticRows(report, keys, update) {
+  const rows = [];
+  const { database: db, library, drives, devices, services, jobs } = report;
+  if (failed(db)) rows.push({ ok: false, label: 'Library database', detail: db.error });
+  else {
+    rows.push({ ok: true, label: 'Library database', detail: `${fmt.bytes(db.size)} · ${fmt.plural(db.songs, 'song')} · ${fmt.plural(db.plays, 'play')} recorded · ${fmt.plural(db.playlists, 'playlist')}` });
+    if (db.missing) rows.push({ ok: false, label: 'Songs that cannot be found', detail: `${fmt.number(db.missing)} (usually an unplugged drive). See Library tools, Missing files.` });
+  }
+  if (failed(library)) rows.push({ ok: false, label: 'Music folders', detail: library.error });
+  else if (!library.length) rows.push({ ok: null, label: 'Music folders', detail: 'None added yet.' });
+  else for (const f of library) rows.push({ ok: f.available, label: 'Music folder', detail: f.available ? `${f.path}${f.free != null ? ` · ${fmt.bytes(f.free)} free of ${fmt.bytes(f.total)}` : ''}` : `${f.path} · not found. Is the drive connected?` });
+  if (failed(drives)) rows.push({ ok: false, label: 'Drives', detail: drives.error });
+  else rows.push({ ok: null, label: 'Drives', detail: drives.length ? drives.map((d) => `${d.mount_path} (${[d.fs, d.removable ? 'removable' : null].filter(Boolean).join(', ')})`).join(' · ') : 'None found.' });
+  if (failed(devices)) rows.push({ ok: false, label: 'Devices', detail: devices.error });
+  else for (const d of devices) rows.push({ ok: d.connected, label: `Device “${d.label}”`, detail: `${d.connected ? 'connected' : 'not connected'} · ${fmt.plural(d.synced, 'song')} copied${d.last_synced_at ? ` · last synced ${fmt.date(d.last_synced_at)}` : ''}` });
+  if (!failed(services)) {
+    const lb = services.listenbrainz;
+    const sc = lb.scrobbler;
+    rows.push({
+      ok: !lb.has_token ? null : sc?.state === 'rejected' || sc?.state === 'waiting' ? false : true,
+      label: 'ListenBrainz',
+      detail: !lb.has_token ? 'No token saved.' : `token saved · recording plays ${lb.scrobble && lb.enabled ? 'on' : 'off'}${sc && sc.active ? ` · ${sc.state}${sc.pending ? `, ${fmt.plural(sc.pending, 'play')} waiting` : ''}${sc.last_error ? `: ${sc.last_error}` : ''}` : ''}`,
+    });
+    rows.push({ ok: null, label: 'Last.fm and MusicBrainz', detail: `Last.fm key ${services.lastfm.has_key ? 'saved' : 'not set'} · MusicBrainz contact ${services.musicbrainz.has_contact ? 'set' : 'not set'}` });
+  }
+  if (update) rows.push({ ok: update.state === 'error' ? false : null, label: 'Updates', detail: update.state === 'error' ? update.error : `${update.state}${update.version ? ` (${update.version})` : ''} · this is ${update.current}` });
+  if (keys) {
+    const lost = Object.entries(keys).filter(([, held]) => !held).map(([key]) => KEY_NAMES[key] || key);
+    rows.push({ ok: lost.length === 0, label: 'Keyboard media keys', detail: lost.length === 0 ? 'Play/Pause, Next, Previous and Stop are claimed by this app.' : `Another program is holding: ${lost.join(', ')}. Close other media players or restart the computer.` });
+  }
+  if (!failed(jobs) && jobs.recent_failures.length) for (const j of jobs.recent_failures) rows.push({ ok: false, label: 'A task failed', detail: `${j.title}: ${j.error}` });
+  return rows;
+}
+
+function reportText(report, rows) {
+  const home = report.paths.home;
+  const hide = (text) => (home ? String(text).split(home).join('~') : String(text));
+  const lines = [
+    `Music Toolkit ${report.app.version} on ${report.app.platform} (Python ${report.app.python}, ${report.app.installed ? 'installed app' : 'from source'})`,
+    `Report made ${report.generated_at}`,
+    `Data folder: ${report.paths.data_dir}`,
+    '',
+    ...rows.map((r) => `${r.ok === true ? '[ok]  ' : r.ok === false ? '[!!]  ' : '[..]  '}${r.label}: ${r.detail}`),
+  ];
+  return hide(lines.join('\n'));
+}
+
+function DiagnosticsCard() {
+  const { status: update } = useStore(updates);
+  const [result, setResult] = useState(null); // { report, keys }
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const [report, keys] = await Promise.all([api('/system/diagnostics'), desktop?.mediaKeys ? desktop.mediaKeys() : null]);
+      setResult({ report, keys });
+    } catch (error) {
+      notifyError(error);
+    }
+    setBusy(false);
+  }
+  const rows = result ? diagnosticRows(result.report, result.keys, desktop?.update ? update : null) : [];
+  return html`<${Card} icon="wrench" title="Diagnostics" hint="Checks the library, folders, drives, accounts and keyboard keys, and writes a report you can copy when something does not work. It never includes passwords, tokens or keys.">
+    <div class="row-actions">
+      <${Button} icon="search" disabled=${busy} onClick=${run}>${busy ? 'Checking…' : result ? 'Check again' : 'Run diagnostics'}<//>
+      ${result && html`<${Button} icon="copy" onClick=${() => navigator.clipboard?.writeText(reportText(result.report, rows)).then(() => toast('Report copied', 'success', 2200), () => toast('Could not copy. Select the text instead.', 'error'))}>Copy report<//>`}
+      ${result && desktop?.openPath && html`<${Button} icon="folder" onClick=${() => desktop.openPath(result.report.paths.logs)}>Open the logs folder<//>`}
+    </div>
+    ${result && html`<ul class="diag-list" aria-label="Diagnostics results">${rows.map((r, i) => html`<li class="diag ${r.ok === true ? 'ok' : r.ok === false ? 'bad' : ''}" key=${i}>
+      <${Icon} name=${r.ok === true ? 'check' : r.ok === false ? 'alert' : 'info'} size=${15} /><strong>${r.label}</strong><span>${r.detail}</span></li>`)}</ul>`}
+  <//>`;
+}
+
 function LogViewer() {
   const [data, setData] = useState(null);
   useEffect(() => { api('/system/logs', { params: { tail: 400 } }).then(setData).catch(notifyError); }, []);
@@ -255,6 +335,7 @@ export function SettingsView() {
       <${AccountsCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
+      <${DiagnosticsCard} />
       <${DataCard} about=${about} />
     </div>`;
 }

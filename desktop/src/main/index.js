@@ -83,6 +83,8 @@ function registerBridge() {
     return null;
   });
 
+  handle('media-keys', () => ({ ...mediaKeyState }));
+
   handle('update-status', () => updater.status());
   handle('update-check', () => updater.check());
   handle('update-install', () => updater.install());
@@ -148,12 +150,17 @@ function startUpdater(started) {
   readAutoUpdateSetting(started).then((on) => updater.setAuto(on));
 }
 
+// Which media keys this app actually owns, for Settings > Diagnostics. register() reports false (or
+// isRegistered() stays false) when another app already holds a key; there is nothing to do about that
+// except tell the person.
+const mediaKeyState = { playpause: false, next: false, previous: false, stop: false };
+
 function registerMediaKeys() {
   for (const [accelerator, key] of Object.entries(MEDIA_KEYS)) {
-    // register() reports false when another app already owns the key; nothing to do then.
-    globalShortcut.register(accelerator, () => {
+    const registered = globalShortcut.register(accelerator, () => {
       if (win && !win.isDestroyed()) win.webContents.send('media-key', key);
     });
+    mediaKeyState[key] = Boolean(registered) || globalShortcut.isRegistered(accelerator);
   }
 }
 

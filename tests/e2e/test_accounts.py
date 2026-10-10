@@ -6,11 +6,14 @@ here touches the network.
 
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import expect
 
 from musictoolkit.integrations import lastfm_client, listenbrainz_client, musicbrainz_client
 from musictoolkit.integrations.listenbrainz_client import ListenBrainzError
 from tests.e2e.conftest import add_library, api, play
+from tests.e2e.test_ui import FAKE_DESKTOP
 
 expect.set_options(timeout=15_000)
 
@@ -111,3 +114,42 @@ def test_what_is_playing_is_announced_only_once_that_is_switched_on(page, live, 
             break
         page.wait_for_timeout(100)
     assert deadline_ok and announced[0]["track_name"] == "Drift" and announced[0]["artist_name"] == "Aurora Vale"
+
+
+def test_diagnostics_point_at_what_is_wrong_and_copy_a_report_without_secrets(page, live):
+    add_library(page, live)
+    api(page, "/settings", "PUT", {"listenbrainz": {"user_token": "tok-SECRET-1"}, "musicbrainz": {"contact": "contact-SECRET@example.com"}})
+    live.ctx.config.library.roots.append(str(live.library.parent / "unplugged"))  # a music folder whose drive is not connected
+    open_settings(page)
+    card = page.locator(".card-panel", has_text="Diagnostics")
+
+    card.get_by_role("button", name="Run diagnostics").click()
+
+    results = card.get_by_label("Diagnostics results")
+    expect(results).to_contain_text("9 songs")
+    expect(results.locator(".diag.bad", has_text="not found. Is the drive connected?")).to_have_count(1)
+    expect(results.locator(".diag.ok", has_text="Library database")).to_have_count(1)
+    expect(results).to_contain_text("token saved")
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    card.get_by_role("button", name="Copy report").click()
+    expect(page.get_by_text("Report copied")).to_be_visible()
+    text = page.evaluate("navigator.clipboard.readText()")
+    assert text.startswith("Music Toolkit 0.") and "Library database:" in text and "[!!]" in text and "unplugged" in text
+    assert "tok-SECRET-1" not in text and "contact-SECRET" not in text
+
+
+def test_diagnostics_say_which_media_keys_another_program_is_holding(page, live):
+    page.add_init_script(FAKE_DESKTOP)  # the stand-in for the desktop shell's bridge
+    page.reload()
+    page.wait_for_selector(".sidebar")
+    page.evaluate("window.__bridge.keys = { playpause: true, next: true, previous: false, stop: true }")
+    open_settings(page)
+    card = page.locator(".card-panel", has_text="Diagnostics")
+
+    card.get_by_role("button", name="Run diagnostics").click()
+
+    row = card.locator(".diag", has_text="Keyboard media keys")
+    expect(row).to_have_class(re.compile(r"\bbad\b"))
+    expect(row).to_contain_text("Another program is holding: Previous")
+    expect(card.locator(".diag", has_text="Updates")).to_be_visible()
+    expect(card.get_by_role("button", name="Open the logs folder")).to_be_visible()

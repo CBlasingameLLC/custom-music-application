@@ -34,7 +34,7 @@ WINDOWS = sys.platform == "win32"
 # CI consoles on Windows default to a legacy code page; the checks print arrows and quotes.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-BRIDGE = ["onMediaKey", "openExternal", "openPath", "selectFile", "selectFolder", "showItemInFolder", "update"]
+BRIDGE = ["mediaKeys", "onMediaKey", "openExternal", "openPath", "selectFile", "selectFolder", "showItemInFolder", "update"]
 UPDATE_BRIDGE = ["check", "install", "onStatus", "setAuto", "status"]
 failures: list[str] = []
 
@@ -188,6 +188,11 @@ def drive(args, command: list[str]) -> None:
             check(page.evaluate("typeof require") == "undefined" and page.evaluate("typeof process") == "undefined",
                   "no Node.js globals reach the page")
 
+            step("media keys")
+            keys_state = page.evaluate("window.mtk.mediaKeys()")
+            check(isinstance(keys_state, dict) and sorted(keys_state) == ["next", "playpause", "previous", "stop"] and all(isinstance(v, bool) for v in keys_state.values()),
+                  f"the app reports which media keys it claimed ({keys_state})")
+
             step("app updates")
             check(page.evaluate("Object.keys(window.mtk.update).sort()") == UPDATE_BRIDGE, f"window.mtk.update is exactly {UPDATE_BRIDGE}")
             update = page.evaluate("window.mtk.update.status()")
@@ -230,8 +235,8 @@ def drive(args, command: list[str]) -> None:
                 "(async () => [await window.mtk.selectFile({}), await window.mtk.selectFolder(), "
                 "await window.mtk.openPath('.'), await window.mtk.showItemInFolder('.'), "
                 "await window.mtk.update.status(), await window.mtk.update.check(), await window.mtk.update.install(), "
-                "await window.mtk.update.setAuto(false)])()")
-            check(answers == [None] * 8 and time.time() - started < 5, f"no dialog opens, nothing updates, and every call answers null ({answers})")
+                "await window.mtk.update.setAuto(false), await window.mtk.mediaKeys()])()")
+            check(answers == [None] * 9 and time.time() - started < 5, f"no dialog opens, nothing updates, and every call answers null ({answers})")
             page.goto(page_url)
             page.wait_for_selector(".sidebar", timeout=30000)
 

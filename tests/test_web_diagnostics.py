@@ -1,0 +1,67 @@
+"""The diagnostics report: enough to work out what is wrong, and never a secret."""
+
+from __future__ import annotations
+
+from musictoolkit.sync import device_detect
+
+SECRETS = ("tok-SECRET-1", "key-SECRET-2", "secret-SECRET-3", "contact-SECRET@example.com")
+
+
+def test_the_report_describes_the_installation_without_any_secret(web) -> None:
+    cfg = web.ctx.config
+    cfg.listenbrainz.user_token, cfg.listenbrainz.username = SECRETS[0], "cayl"
+    cfg.lastfm.api_key, cfg.lastfm.api_secret = SECRETS[1], SECRETS[2]
+    cfg.musicbrainz.contact = SECRETS[3]
+
+    report = web.client.get("/api/system/diagnostics").json()
+
+    assert report["app"]["version"] and report["app"]["python"] and report["app"]["platform"]
+    assert report["paths"]["database"].endswith("library.db") and report["paths"]["home"]
+    assert report["database"]["songs"] == 9 and report["database"]["missing"] == 0 and report["database"]["schema_version"] >= 6
+    assert report["database"]["size"] > 0
+    assert report["services"]["listenbrainz"]["has_token"] is True and report["services"]["lastfm"]["has_key"] is True
+    assert report["services"]["musicbrainz"]["has_contact"] is True
+    assert report["services"]["listenbrainz"]["scrobbler"]["state"] in ("off", "idle", "sending", "waiting", "rejected")
+    text = str(report)
+    assert not any(secret in text for secret in SECRETS)
+
+
+def test_library_folders_say_whether_they_can_be_reached(web, music_dir, tmp_path) -> None:
+    web.ctx.config.library.roots.append(str(tmp_path / "unplugged"))
+
+    folders = {f["path"]: f for f in web.client.get("/api/system/diagnostics").json()["library"]}
+
+    assert folders[str(music_dir)]["available"] is True and folders[str(music_dir)]["free"] > 0
+    assert folders[str(tmp_path / "unplugged")] == {"path": str(tmp_path / "unplugged"), "available": False, "free": None, "total": None}
+
+
+def test_drives_and_devices_are_listed(web, tmp_path, monkeypatch) -> None:
+    card = tmp_path / "card"
+    card.mkdir()
+    monkeypatch.setattr(device_detect, "list_candidate_devices", lambda: [device_detect.DeviceCandidate(str(card), "E:", "exFAT", 1000, 400, True)])
+    web.client.post("/api/devices", json={"path": str(card)})
+
+    report = web.client.get("/api/system/diagnostics").json()
+
+    assert report["drives"] == [{"mount_path": str(card), "fs": "exFAT", "total": 1000, "free": 400, "removable": True}]
+    (device,) = report["devices"]
+    assert device["connected"] is True and device["synced"] == 0 and device["path"] == str(card)
+
+
+def test_failed_jobs_are_reported_and_one_broken_check_does_not_spoil_the_rest(web, monkeypatch) -> None:
+    def explode(handle):
+        raise RuntimeError("the disk went away")
+
+    web.ctx.jobs.wait(web.ctx.jobs.submit("test", "A job that fails", explode).id, timeout=10)
+
+    def broken():
+        raise OSError("drive enumeration failed")
+
+    monkeypatch.setattr(device_detect, "list_candidate_devices", broken)
+
+    report = web.client.get("/api/system/diagnostics").json()
+
+    failure = report["jobs"]["recent_failures"][0]
+    assert failure["title"] == "A job that fails" and "the disk went away" in failure["error"] and failure["finished_at"]
+    assert report["drives"] == {"error": "OSError: drive enumeration failed"}
+    assert report["database"]["songs"] == 9, "the other parts are still there"
