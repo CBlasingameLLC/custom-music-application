@@ -6,8 +6,10 @@ Fresh user profile, an unrelated working directory, no config, no database.
 Launches `<exe> dashboard`, then checks that the bundled web UI is served and
 that the token gate, library scan, cover art (Pillow), Range streaming (what
 the in-app player uses), the library tools (organize with undo, duplicates with
-the review folder and the Recycle Bin), settings and backup all work from the
-frozen binary, and that nothing leaks into the working directory.
+the review folder and the Recycle Bin), device sync to a folder, the Spotify
+import (which needs pandas inside the bundle), the scrobbler status and
+diagnostics, settings and backup all work from the frozen binary, and that
+nothing leaks into the working directory.
 
 Standard library only, so it runs on any CI runner without installing anything.
 """
@@ -25,6 +27,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -158,6 +161,55 @@ def library_tools(client: Client, music: Path, count: int) -> None:
     check(not (music / "_duplicates_review").exists(), "the emptied review folder is gone")
 
 
+def devices_and_accounts(client: Client, scratch: Path, count: int) -> None:
+    """A folder standing in for a card, the account helpers, and the Spotify import (pandas has to work in here)."""
+    card = scratch / "card"
+    card.mkdir()
+    status, device = client.json("/api/devices", "POST", {"path": str(card)})
+    check(status == 201 and device["connected"] and device["default_scheme"], f"a folder becomes a device (HTTP {status})")
+    status, volumes = client.json("/api/devices/volumes")
+    check(status == 200 and isinstance(volumes["items"], list), "drives can be listed")
+    _, started = client.json(f"/api/devices/{device['id']}/preview", "POST", {"sources": [{"kind": "all"}]})
+    preview = wait_job(client, started["job"]["id"])
+    result = preview.get("result") or {}
+    check(preview["status"] == "done" and result.get("to_copy", 0) >= 1 and result["to_copy"] + result["skipped"] == count and result["enough_space"],
+          f"sync preview lists what would be copied ({result or preview.get('error')})")
+    check(not list(card.rglob("*.mp3")), "a preview writes nothing to the device")
+    status, started = client.json(f"/api/devices/{device['id']}/sync", "POST", {"job_id": preview["id"]})
+    done = wait_job(client, started["job"]["id"])
+    copied = (done.get("result") or {}).get("copied", 0)
+    check(status == 200 and done["status"] == "done" and copied == result["to_copy"] and not done["result"]["errors"],
+          f"songs are copied to the device ({done.get('result') or done.get('error')})")
+    check(len(list(card.rglob("*.mp3"))) == copied, "the copied files are on the device")
+
+    status, scrobbler = client.json("/api/scrobbler")
+    check(status == 200 and scrobbler["state"] == "off" and not scrobbler["has_token"], f"the scrobbler is idle without a token ({scrobbler.get('state')})")
+    status, tested = client.json("/api/settings/test/musicbrainz", "POST", {})
+    check(status == 200 and tested["ok"] is False and "contact" in tested["message"], "Test connection explains what is missing")
+    status, report = client.json("/api/system/diagnostics")
+    check(status == 200 and report["app"]["installed"] is True and report["database"]["songs"] == count and report["database"]["schema_version"] >= 6,
+          f"the diagnostics report describes the installed app ({report.get('app')})")
+
+    export = scratch / "spotify-export.zip"
+    rows = [
+        {"ts": "2024-01-15T10:00:00Z", "ms_played": 210000, "master_metadata_track_name": "Song One", "master_metadata_album_artist_name": "Artist A",
+         "master_metadata_album_album_name": "Album A", "spotify_track_uri": "spotify:track:aaa111"},
+        {"ts": "2024-01-17T09:00:00Z", "ms_played": 900000, "master_metadata_track_name": None, "master_metadata_album_artist_name": None,
+         "master_metadata_album_album_name": None, "spotify_track_uri": None, "episode_name": "A podcast"},
+    ]
+    with zipfile.ZipFile(export, "w") as archive:
+        archive.writestr("Spotify Extended Streaming History/Streaming_History_Audio_2024_0.json", json.dumps(rows))
+    _, started = client.json("/api/history/import/preview", "POST", {"path": str(export)})
+    read = wait_job(client, started["job"]["id"])
+    check(read["status"] == "done" and read["result"]["music_rows"] == 1 and read["result"]["podcast_rows_skipped"] == 1,
+          f"a Spotify export is read ({read.get('result') or read.get('error')})")
+    status, started = client.json("/api/history/import/apply", "POST", {"job_id": read["id"]})
+    added = wait_job(client, started["job"]["id"])
+    check(status == 200 and added["status"] == "done" and added["result"]["inserted"] == 1, f"the plays are added ({added.get('result') or added.get('error')})")
+    status, imports = client.json("/api/history/imports")
+    check(status == 200 and len(imports["items"]) == 1 and imports["items"][0]["plays"] == 1, "the import is listed so it can be undone")
+
+
 def run(exe: Path, fixtures: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix="mtk-smoke-"))
     profile, elsewhere, music = scratch / "profile", scratch / "elsewhere", scratch / "music"
@@ -229,6 +281,7 @@ def run(exe: Path, fixtures: Path) -> None:
         check(status == 206 and len(body) == 100 and headers.get("content-range", "").startswith("bytes 0-99/"),
               f"Range streaming for the player ({status} {headers.get('content-range')})")
         library_tools(client, music, len(mp3s))
+        devices_and_accounts(client, scratch, len(mp3s))
         check(client.request(f"/api/tracks/{track['id']}/info")[0] == 200, "song details")
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
         check(client.request("/api/home")[0] == 200, "Home data")

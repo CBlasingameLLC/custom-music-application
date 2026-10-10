@@ -10,6 +10,8 @@ app_name = "custom-music-application"
 enabled = true
 username = ""         # your ListenBrainz username (used to fetch recommendations)
 user_token = ""       # from listenbrainz.org/profile/ (used to submit/backfill listens)
+scrobble = true       # send plays from the in-app player to ListenBrainz (needs the token above)
+now_playing = false   # also show what is playing right now (never kept as a listen)
 
 [lastfm]
 enabled = false       # secondary/optional — ListenBrainz is primary
