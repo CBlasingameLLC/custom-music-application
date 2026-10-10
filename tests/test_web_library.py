@@ -235,6 +235,25 @@ class TestFacetsSearchHome:
         assert [t["title"] for t in home["favorites"]] == ["Glacier"]
         assert home["totals"]["plays"] == 1
 
+    def test_home_shelves_are_ordered_by_plays_and_by_recency(self, web) -> None:
+        by_title = ids_by_title(web.client)
+        for title, started in (("Drift", 3000), ("Glacier", 1000), ("Glacier", 5000), ("Wires", 4000)):
+            web.client.post("/api/plays", json={"track_id": by_title[title], "ms_played": 90000, "started_at": 1_700_000_000 + started})
+
+        home = web.client.get("/api/home").json()
+
+        assert [t["title"] for t in home["most_played"]] == ["Glacier", "Drift", "Wires"]  # two plays, then one each in the library's order
+        assert [t["title"] for t in home["recent"]] == ["Glacier", "Wires", "Drift"]
+        assert [(t["title"], t["plays"]) for t in home["most_played"]][0] == ("Glacier", 2)
+
+    def test_home_offers_each_album_once_and_random_albums_are_real_ones(self, web) -> None:
+        home = web.client.get("/api/home").json()
+
+        albums = {"Northern Lights": 3, "Low Tide": 1, "Back Roads": 2, "Static Hearts": 3}
+        assert {a["album"]: a["tracks"] for a in home["recently_added"]} == albums
+        assert {a["album"]: a["tracks"] for a in home["random_albums"]} == albums
+        assert all(a["cover_track_id"] for a in home["random_albums"] + home["recently_added"])
+
 
 class TestRatingsAndFavorites:
     def test_patch_sets_and_clears(self, web) -> None:

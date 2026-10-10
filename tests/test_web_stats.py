@@ -64,3 +64,86 @@ def test_an_empty_history_gives_an_empty_overview_not_an_error(web) -> None:
 
     assert result["empty"] is True and result["totals"]["plays"] == 0
     assert web.client.get("/api/stats/years").json() == {"items": []}
+
+
+# ------------------------------------------------------------------------------------------- reusing what was worked out
+
+
+@pytest.fixture
+def counted(monkeypatch):
+    """Count how often the figures are really worked out."""
+    from musictoolkit.history import stats
+
+    real = stats.overview
+    calls = []
+
+    def counting(conn, spec="all", offset_minutes=0, limit=10, now=None):
+        calls.append((spec, offset_minutes, limit))
+        return real(conn, spec, offset_minutes, limit, now)
+
+    monkeypatch.setattr(stats, "overview", counting)
+    return calls
+
+
+def test_a_period_is_worked_out_once_while_the_history_is_unchanged(listened, counted) -> None:
+    first = listened.client.get("/api/stats/overview", params={"range": "year:2025"}).json()
+    second = listened.client.get("/api/stats/overview", params={"range": "year:2025"}).json()
+
+    assert first == second and len(counted) == 1
+
+
+def test_another_period_time_zone_or_size_is_a_different_question(listened, counted) -> None:
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+    listened.client.get("/api/stats/overview", params={"range": "year:2024"})
+    listened.client.get("/api/stats/overview", params={"range": "year:2025", "tz": 120})
+    listened.client.get("/api/stats/overview", params={"range": "year:2025", "limit": 3})
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+
+    assert len(counted) == 4
+
+
+def test_a_new_play_makes_the_figures_be_worked_out_again(listened, counted) -> None:
+    before = listened.client.get("/api/stats/overview", params={"range": "year:2025"}).json()
+    with listened.ctx.db() as conn:
+        conn.execute("INSERT INTO play_history (source, played_at_epoch, ms_played, raw_artist_name, raw_track_name) VALUES ('future_scrobble', ?, 1000, 'New', 'Song')", (epoch(2025, 5, 5),))
+        conn.commit()
+
+    after = listened.client.get("/api/stats/overview", params={"range": "year:2025"}).json()
+
+    assert len(counted) == 2 and after["totals"]["plays"] == before["totals"]["plays"] + 1
+
+
+def test_removing_a_play_makes_the_figures_be_worked_out_again(listened, counted) -> None:
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+    with listened.ctx.db() as conn:
+        conn.execute("DELETE FROM play_history WHERE id = (SELECT MIN(id) FROM play_history)")
+        conn.commit()
+
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+
+    assert len(counted) == 2
+
+
+def test_what_was_worked_out_is_not_kept_for_ever(listened, counted, monkeypatch) -> None:
+    from musictoolkit.web.routers import stats as router
+
+    clock = [1000.0]
+    monkeypatch.setattr(router.time, "monotonic", lambda: clock[0])
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+
+    clock[0] += router.CACHE_SECONDS - 1
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+    clock[0] += 2
+    listened.client.get("/api/stats/overview", params={"range": "year:2025"})
+
+    assert len(counted) == 2
+
+
+def test_the_memory_kept_for_figures_is_bounded(listened, counted, monkeypatch) -> None:
+    from musictoolkit.web.routers import stats as router
+
+    monkeypatch.setattr(router, "CACHE_ENTRIES", 3)
+    for year in range(2015, 2023):
+        listened.client.get("/api/stats/overview", params={"range": f"year:{year}"})
+
+    assert len(listened.ctx.stats_cache) == 3

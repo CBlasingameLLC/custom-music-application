@@ -175,10 +175,20 @@ def test_each_month_has_its_most_played_song(conn) -> None:
         play(conn, epoch(2025, 1, 10), "A", "January song")
     play(conn, epoch(2025, 1, 11), "A", "Other")
     play(conn, epoch(2025, 2, 10), "B", "February song")
+    play(conn, epoch(2025, 3, 10), "C", "March song")
 
     favourites = stats.overview(conn, "year:2025")["month_favorites"]
 
-    assert [(f["month"], f["title"], f["plays"]) for f in favourites] == [("2025-01", "January song", 3), ("2025-02", "February song", 1)]
+    assert [(f["month"], f["title"], f["plays"]) for f in favourites] == [("2025-01", "January song", 3), ("2025-02", "February song", 1), ("2025-03", "March song", 1)]
+
+
+def test_a_song_of_each_month_is_not_worked_out_for_fewer_than_three_months(conn) -> None:
+    play(conn, epoch(2025, 1, 10), "A", "January song")
+    play(conn, epoch(2025, 2, 10), "B", "February song")
+
+    overview = stats.overview(conn, "year:2025")
+
+    assert len(overview["by_month"]) == 2 and overview["month_favorites"] == [], "two months are a comparison, and the screen shows the list from three"
 
 
 def test_the_years_to_choose_from_follow_the_viewers_calendar(conn) -> None:

@@ -54,18 +54,27 @@ def resolve_range(spec: str, offset_minutes: int, now: datetime | None = None) -
 
 
 # One row per play in the period, with the names the play carries (or the song's tags if it carries none).
-PLAYS = """
-WITH p AS (
-  SELECT h.id AS id, h.track_id AS track_id, h.played_at_epoch AS at, h.played_at_epoch + :off AS ts,
-         COALESCE(h.ms_played, 0) AS ms,
-         COALESCE(NULLIF(TRIM(h.raw_artist_name), ''), NULLIF(TRIM(t.artist), '')) AS artist,
-         COALESCE(NULLIF(TRIM(h.raw_track_name), ''), NULLIF(TRIM(t.title), '')) AS title,
-         COALESCE(NULLIF(TRIM(h.raw_album_name), ''), NULLIF(TRIM(t.album), '')) AS album,
-         NULLIF(TRIM(t.genre), '') AS genre
-  FROM play_history h LEFT JOIN tracks t ON t.id = h.track_id
-  WHERE h.played_at_epoch >= :start AND h.played_at_epoch < :end
-)
+NAMED_PLAYS = """
+SELECT h.track_id AS track_id, h.played_at_epoch AS at, h.played_at_epoch + :off AS ts, COALESCE(h.ms_played, 0) AS ms,
+       COALESCE(NULLIF(TRIM(h.raw_artist_name), ''), NULLIF(TRIM(t.artist), '')) AS artist,
+       COALESCE(NULLIF(TRIM(h.raw_track_name), ''), NULLIF(TRIM(t.title), '')) AS title,
+       COALESCE(NULLIF(TRIM(h.raw_album_name), ''), NULLIF(TRIM(t.album), '')) AS album,
+       NULLIF(TRIM(t.genre), '') AS genre
+FROM play_history h LEFT JOIN tracks t ON t.id = h.track_id
+WHERE h.played_at_epoch >= :start AND h.played_at_epoch < :end
 """
+# The same plays grouped once by artist, song, album and genre (names compared without regard to case). Every ranking
+# below reads this table of a few tens of thousands of rows instead of grouping every play again: on a long history
+# that is the difference between seconds and a fraction of a second.
+GROUPED = f"""
+CREATE TEMP TABLE pg AS
+SELECT LOWER(artist) AS ak, LOWER(title) AS tk, LOWER(album) AS bk, LOWER(genre) AS gk,
+       MIN(artist) AS artist, MIN(title) AS title, MIN(album) AS album, MIN(genre) AS genre,
+       COUNT(*) AS n, SUM(ms) AS ms, MAX(track_id) AS track_id, MIN(at) AS first
+FROM ({NAMED_PLAYS}) GROUP BY ak, tk, bk, gk
+"""
+FAVORITE_MONTHS = 12  # "song of each month" looks back this far, however long the period is
+MIN_MONTHS_FOR_FAVORITES = 3  # it needs months to compare; the screen shows it from three on
 
 
 def _limit(value: int) -> int:
@@ -80,6 +89,15 @@ def years(conn: sqlite3.Connection, offset_minutes: int) -> list[dict[str, int]]
         (clamp_offset(offset_minutes) * 60,),
     ).fetchall()
     return [{"year": int(r["year"]), "plays": r["plays"]} for r in rows]
+
+
+def heard_before(conn: sqlite3.Connection, keys: list[str], start: int) -> set[str]:
+    """Which of these artists (lower-cased, as the figures group them) have a play before `start`. A play carries the
+    name it was played under, and an index on that name makes each question a single lookup."""
+    return {
+        key for key in keys
+        if conn.execute("SELECT 1 FROM play_history WHERE LOWER(TRIM(raw_artist_name)) = ? AND played_at_epoch < ? LIMIT 1", (key, start)).fetchone()
+    }
 
 
 def _longest_streak(days: list[str]) -> dict[str, Any]:
@@ -111,84 +129,108 @@ def overview(conn: sqlite3.Connection, spec: str = "all", offset_minutes: int = 
     start, end, title = resolve_range(spec, offset, now)
     limit = _limit(limit)
     args = {"off": offset * 60, "start": start, "end": end}
+    result: dict[str, Any] = {"range": spec, "title": title, "start": start, "end": end, "offset_minutes": offset}
 
-    def rows(sql: str, extra: dict[str, Any] | None = None) -> list[sqlite3.Row]:
-        return conn.execute(PLAYS + sql, {**args, **(extra or {})}).fetchall()
-
-    totals = rows(
-        "SELECT COUNT(*) AS plays, COALESCE(SUM(ms), 0) AS ms, COUNT(DISTINCT LOWER(artist)) AS artists, "
-        "COUNT(DISTINCT LOWER(artist) || '|' || LOWER(title)) AS tracks, "
-        "COUNT(DISTINCT date(ts, 'unixepoch')) AS days, MIN(at) AS first, MAX(at) AS last FROM p"
-    )[0]
-    result: dict[str, Any] = {
-        "range": spec, "title": title, "start": start, "end": end, "offset_minutes": offset,
-        "totals": {
-            "plays": totals["plays"], "minutes": round(totals["ms"] / 60000), "artists": totals["artists"],
-            "tracks": totals["tracks"], "active_days": totals["days"], "first_play": totals["first"], "last_play": totals["last"],
-        },
-    }
-    if not totals["plays"]:
-        return {**result, "empty": True, "top_artists": [], "top_tracks": [], "top_albums": [], "top_genres": [], "by_month": [],
-                "by_hour": [0] * 24, "by_weekday": [0] * 7, "by_day": [], "streak": _longest_streak([]), "discoveries": {"count": 0, "items": []},
-                "month_favorites": []}
-
-    result["empty"] = False
-    result["top_artists"] = [
-        {"name": r["name"], "plays": r["plays"], "minutes": round(r["ms"] / 60000), "track_id": r["track_id"]}
-        for r in rows(
-            "SELECT MIN(artist) AS name, COUNT(*) AS plays, SUM(ms) AS ms, MAX(track_id) AS track_id FROM p WHERE artist IS NOT NULL "
-            "GROUP BY LOWER(artist) ORDER BY plays DESC, ms DESC, name LIMIT :n", {"n": limit})
-    ]
-    result["top_tracks"] = [
-        {"title": r["title"], "artist": r["artist"], "album": r["album"], "plays": r["plays"], "minutes": round(r["ms"] / 60000), "track_id": r["track_id"]}
-        for r in rows(
-            "SELECT MIN(title) AS title, MIN(artist) AS artist, MIN(album) AS album, COUNT(*) AS plays, SUM(ms) AS ms, MAX(track_id) AS track_id "
-            "FROM p WHERE title IS NOT NULL GROUP BY LOWER(artist), LOWER(title) ORDER BY plays DESC, ms DESC, title LIMIT :n", {"n": limit})
-    ]
-    result["top_albums"] = [
-        {"album": r["album"], "artist": r["artist"], "plays": r["plays"], "track_id": r["track_id"]}
-        for r in rows(
-            "SELECT MIN(album) AS album, MIN(artist) AS artist, COUNT(*) AS plays, MAX(track_id) AS track_id FROM p WHERE album IS NOT NULL "
-            "GROUP BY LOWER(artist), LOWER(album) ORDER BY plays DESC, album LIMIT :n", {"n": limit})
-    ]
-    result["top_genres"] = [
-        {"genre": r["genre"], "plays": r["plays"]}
-        for r in rows("SELECT MIN(genre) AS genre, COUNT(*) AS plays FROM p WHERE genre IS NOT NULL GROUP BY LOWER(genre) ORDER BY plays DESC, genre LIMIT :n", {"n": limit})
-    ]
-
-    months = {r["month"]: r for r in rows(
-        "SELECT strftime('%Y-%m', ts, 'unixepoch') AS month, COUNT(*) AS plays, SUM(ms) AS ms FROM p GROUP BY month")}
-    ordered = sorted(months)
-    result["by_month"] = [
-        {"month": key, "plays": months[key]["plays"] if key in months else 0, "minutes": round(months[key]["ms"] / 60000) if key in months else 0}
+    # When: two cheap groupings of the plays alone (no join, whole-number arithmetic): by day, and by hour of the day.
+    # The month and weekday figures and the streak come from the days.
+    by_day_rows = conn.execute(
+        "SELECT (played_at_epoch + :off) / 86400 AS day, COUNT(*) AS plays, SUM(COALESCE(ms_played, 0)) AS ms, MIN(played_at_epoch) AS first, MAX(played_at_epoch) AS last "
+        "FROM play_history WHERE played_at_epoch >= :start AND played_at_epoch < :end GROUP BY day", args).fetchall()
+    if not by_day_rows:
+        return {**result, "empty": True,
+                "totals": {"plays": 0, "minutes": 0, "artists": 0, "tracks": 0, "active_days": 0, "first_play": None, "last_play": None},
+                "top_artists": [], "top_tracks": [], "top_albums": [], "top_genres": [], "by_month": [], "by_hour": [0] * 24, "by_weekday": [0] * 7,
+                "by_day": [], "streak": _longest_streak([]), "discoveries": {"count": 0, "items": []}, "month_favorites": []}
+    day_plays: dict[str, int] = {}
+    month_plays: dict[str, list[int]] = {}
+    by_weekday = [0] * 7
+    epoch_day = date(1970, 1, 1)
+    for r in by_day_rows:
+        day = epoch_day + timedelta(days=r["day"])  # a whole number of days since 1970 is the viewer's calendar day
+        text = day.isoformat()
+        day_plays[text] = r["plays"]
+        month = month_plays.setdefault(text[:7], [0, 0])
+        month[0] += r["plays"]
+        month[1] += r["ms"]
+        by_weekday[day.weekday()] += r["plays"]  # Monday first
+    by_hour = [0] * 24
+    for r in conn.execute(
+        "SELECT ((played_at_epoch + :off) % 86400) / 3600 AS hour, COUNT(*) AS plays FROM play_history "
+        "WHERE played_at_epoch >= :start AND played_at_epoch < :end GROUP BY hour", args):
+        by_hour[r["hour"]] = r["plays"]
+    days = sorted(day_plays)
+    ordered = sorted(month_plays)
+    by_month = [
+        {"month": key, "plays": month_plays[key][0] if key in month_plays else 0, "minutes": round(month_plays[key][1] / 60000) if key in month_plays else 0}
         for key in _month_keys(ordered[0], ordered[-1])
     ]
-    by_hour = [0] * 24
-    for r in rows("SELECT CAST(strftime('%H', ts, 'unixepoch') AS INTEGER) AS hour, COUNT(*) AS plays FROM p GROUP BY hour"):
-        by_hour[r["hour"]] = r["plays"]
-    by_weekday = [0] * 7
-    for r in rows("SELECT CAST(strftime('%w', ts, 'unixepoch') AS INTEGER) AS day, COUNT(*) AS plays FROM p GROUP BY day"):
-        by_weekday[(r["day"] + 6) % 7] = r["plays"]  # SQLite counts Sunday as 0; weeks here start on Monday
-    result["by_hour"], result["by_weekday"] = by_hour, by_weekday
+    result.update(
+        by_month=by_month, by_hour=by_hour, by_weekday=by_weekday, streak=_longest_streak(days),
+        by_day=[{"date": d, "plays": day_plays[d]} for d in days] if (end - start) <= 370 * 86400 else [],
+    )
 
-    days = [(r["day"], r["plays"]) for r in rows("SELECT date(ts, 'unixepoch') AS day, COUNT(*) AS plays FROM p GROUP BY day ORDER BY day")]
-    result["by_day"] = [{"date": d, "plays": n} for d, n in days] if (end - start) <= 370 * 86400 else []
-    result["streak"] = _longest_streak([d for d, _ in days])
+    # What: the names, grouped once and ranked from the groups.
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA cache_size = -65536")  # the join to the songs thrashes the default 2 MB page cache on a big library
+    conn.execute("DROP TABLE IF EXISTS temp.pg")
+    conn.execute(GROUPED, args)
+    try:
+        def rows(sql: str, extra: dict[str, Any] | None = None) -> list[sqlite3.Row]:
+            return conn.execute(sql, extra or {}).fetchall()
 
-    new = conn.execute(
-        PLAYS.replace("WHERE h.played_at_epoch >= :start AND h.played_at_epoch < :end", "")
-        + "SELECT MIN(artist) AS name, MIN(at) AS first, COUNT(*) AS plays FROM p WHERE artist IS NOT NULL GROUP BY LOWER(artist) "
-          "HAVING MIN(at) >= :start AND MIN(at) < :end ORDER BY plays DESC, name",
-        args,
-    ).fetchall()
-    result["discoveries"] = {"count": len(new), "items": [{"name": r["name"], "plays": r["plays"], "first_play": r["first"]} for r in new[:limit]]}
+        distinct_artists = rows("SELECT COUNT(DISTINCT ak) AS n FROM pg")[0]["n"]
+        distinct_tracks = rows("SELECT COUNT(*) AS n FROM (SELECT 1 FROM pg WHERE ak IS NOT NULL AND tk IS NOT NULL GROUP BY ak, tk)")[0]["n"]
+        result["totals"] = {
+            "plays": sum(r["plays"] for r in by_day_rows), "minutes": round(sum(r["ms"] for r in by_day_rows) / 60000), "artists": distinct_artists,
+            "tracks": distinct_tracks, "active_days": len(days), "first_play": min(r["first"] for r in by_day_rows), "last_play": max(r["last"] for r in by_day_rows),
+        }
+        result["empty"] = False
+        result["top_artists"] = [
+            {"name": r["name"], "plays": r["plays"], "minutes": round(r["ms"] / 60000), "track_id": r["track_id"]}
+            for r in rows(
+                "SELECT MIN(artist) AS name, SUM(n) AS plays, SUM(ms) AS ms, MAX(track_id) AS track_id FROM pg WHERE ak IS NOT NULL "
+                "GROUP BY ak ORDER BY plays DESC, ms DESC, name LIMIT :n", {"n": limit})
+        ]
+        result["top_tracks"] = [
+            {"title": r["title"], "artist": r["artist"], "album": r["album"], "plays": r["plays"], "minutes": round(r["ms"] / 60000), "track_id": r["track_id"]}
+            for r in rows(
+                "SELECT MIN(title) AS title, MIN(artist) AS artist, MIN(album) AS album, SUM(n) AS plays, SUM(ms) AS ms, MAX(track_id) AS track_id "
+                "FROM pg WHERE title IS NOT NULL GROUP BY ak, tk ORDER BY plays DESC, ms DESC, title LIMIT :n", {"n": limit})
+        ]
+        result["top_albums"] = [
+            {"album": r["album"], "artist": r["artist"], "plays": r["plays"], "track_id": r["track_id"]}
+            for r in rows(
+                "SELECT MIN(album) AS album, MIN(artist) AS artist, SUM(n) AS plays, MAX(track_id) AS track_id FROM pg WHERE album IS NOT NULL "
+                "GROUP BY ak, bk ORDER BY plays DESC, album LIMIT :n", {"n": limit})
+        ]
+        result["top_genres"] = [
+            {"genre": r["genre"], "plays": r["plays"]}
+            for r in rows("SELECT MIN(genre) AS genre, SUM(n) AS plays FROM pg WHERE genre IS NOT NULL GROUP BY gk ORDER BY plays DESC, genre LIMIT :n", {"n": limit})
+        ]
 
-    result["month_favorites"] = [
+        # Artists heard for the first time in this period (every artist is new over all time, so nothing to ask there).
+        candidates = rows("SELECT ak AS key, MIN(artist) AS name, MIN(first) AS first, SUM(n) AS plays FROM pg WHERE ak IS NOT NULL GROUP BY ak ORDER BY plays DESC, name")
+        if start > 0 and conn.execute("SELECT 1 FROM play_history WHERE played_at_epoch < ? LIMIT 1", (start,)).fetchone():
+            heard = heard_before(conn, [r["key"] for r in candidates], start)
+            candidates = [r for r in candidates if r["key"] not in heard]
+        result["discoveries"] = {"count": len(candidates), "items": [{"name": r["name"], "plays": r["plays"], "first_play": r["first"]} for r in candidates[:limit]]}
+    finally:
+        conn.execute("DROP TABLE IF EXISTS temp.pg")
+
+    result["month_favorites"] = [] if len(by_month) < MIN_MONTHS_FOR_FAVORITES else _month_favorites(conn, by_month[-FAVORITE_MONTHS:][0]["month"], offset, args)
+    return result
+
+
+def _month_favorites(conn: sqlite3.Connection, first_month: str, offset: int, args: dict[str, int]) -> list[dict[str, Any]]:
+    """The most played song of each month, from `first_month` on."""
+    year, month = (int(part) for part in first_month.split("-"))
+    from_epoch = max(args["start"], int(datetime(year, month, 1, tzinfo=timezone(timedelta(minutes=offset))).timestamp()))
+    return [
         {"month": r["month"], "title": r["title"], "artist": r["artist"], "plays": r["plays"], "track_id": r["track_id"]}
-        for r in rows(
+        for r in conn.execute(
             "SELECT month, title, artist, plays, track_id FROM ("
             " SELECT strftime('%Y-%m', ts, 'unixepoch') AS month, MIN(title) AS title, MIN(artist) AS artist, COUNT(*) AS plays, MAX(track_id) AS track_id,"
             "  ROW_NUMBER() OVER (PARTITION BY strftime('%Y-%m', ts, 'unixepoch') ORDER BY COUNT(*) DESC, MIN(title)) AS rank"
-            " FROM p WHERE title IS NOT NULL GROUP BY month, LOWER(artist), LOWER(title)) WHERE rank = 1 ORDER BY month")
+            f" FROM ({NAMED_PLAYS}) WHERE title IS NOT NULL GROUP BY month, LOWER(artist), LOWER(title)) WHERE rank = 1 ORDER BY month",
+            {**args, "start": from_epoch})
     ]
-    return result

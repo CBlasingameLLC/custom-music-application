@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from musictoolkit.media import art, info, lrclib, lyrics
 from musictoolkit.web.context import AppContext, get_ctx
 from musictoolkit.web.queries import (
-    ALBUM_ARTIST_SQL,
-    ALBUM_SQL,
+    ALBUM_ARTIST_FIND,
+    ALBUM_FIND,
     parse_album_key,
     tracks_by_ids,
 )
@@ -126,7 +126,7 @@ def album_art(key: str, size: int = 256, ctx: AppContext = Depends(get_ctx)) -> 
     album_artist, album = parse_album_key(key)
     with ctx.db() as conn:
         rows = conn.execute(
-            f"SELECT t.file_path FROM tracks t WHERE t.is_missing = 0 AND {ALBUM_ARTIST_SQL} = ? AND {ALBUM_SQL} = ? "
+            f"SELECT t.file_path FROM tracks t WHERE t.is_missing = 0 AND {ALBUM_ARTIST_FIND} = ? AND {ALBUM_FIND} = ? "
             f"ORDER BY COALESCE(t.disc_number, 0), COALESCE(t.track_number, 0), t.id LIMIT 6",
             (album_artist, album),
         ).fetchall()

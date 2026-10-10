@@ -30,11 +30,11 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | Area | Features |
 |---|---|
 | **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
-| **Browse** | Home shelves, Songs (virtualized; checked against a synthetic 100,000-song library, every screen answers in well under a second), Albums, Artists, Favorites, Recently played, instant search |
+| **Browse** | Home shelves, Songs (virtualized; timed against a synthetic library of 100,000 songs and 300,000 plays with `scripts/perf_synthetic.py`: Home, Songs, Albums, Artists, mixes and radio answer in under half a second), Albums, Artists, Favorites, Recently played, instant search |
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
 | **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded, a `.lrc` file beside the song, or, if you turn it on, lrclib.net; synced highlighting), folders added from Settings |
-| **Stats** | Your listening in numbers: hours listened, plays, artists, songs, longest streak, and your most played artist, song, busiest day and hour. Charts of plays by month, by hour and by weekday, a grid of every day for up to a year, and top artists, songs, albums and genres, for the last 30 days, the last 12 months, any year, or all time. Every chart has a table version, and every mark answers the pointer and the arrow keys |
+| **Stats** | Your listening in numbers: hours listened, plays, artists, songs, longest streak, and your most played artist, song, busiest day and hour. Charts of plays by month, by hour and by weekday, a grid of every day for up to a year, and top artists, songs, albums and genres, for the last 30 days, the last 12 months, any year, or all time. Every chart has a table version, and every mark answers the pointer and the arrow keys. The first look at years of history takes a few seconds (300,000 plays: about four); the answer is then kept until the history changes |
 | **Mixes** | A "Made for you" shelf on Home, new every day: On repeat, Rediscover, On this day, New in your library, Never played, Your favorites, decades and genres, as many as have enough songs. Open one to play it, shuffle it or save it as a playlist. **Start radio** (a song's menu, or the player bar) queues songs that go with it |
 | **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
 | **Discover** | **New releases** by artists you play (the release radar: albums, EPs and singles from the last two months or announced for the next six weeks, from ListenBrainz or MusicBrainz), and new-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
@@ -183,6 +183,7 @@ in `src/musictoolkit/web/routers/`.
 pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
 pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts...
 python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
+python scripts/perf_synthetic.py                                    # time every screen on 100,000 invented songs and 300,000 plays
 cd desktop && npm test       # the update logic of the desktop shell
 ```
 

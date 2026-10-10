@@ -356,32 +356,18 @@ def search(q: str, limit: int = 8, ctx: AppContext = Depends(get_ctx)) -> dict:
 
 @router.get("/home")
 def home(ctx: AppContext = Depends(get_ctx)) -> dict:
-    played = {"rules": [{"field": "unplayed", "op": "is", "value": False}]}
     with ctx.db() as conn:
-        def tracks(sort: str, rules: dict | None, limit: int = 12) -> list[dict]:
-            sel = build_selection(conn, rules=rules, sort=sort, direction="desc")
-            return list_tracks(conn, sel, 0, limit)["items"]
-
-        def albums(order: str, limit: int = 12) -> list[dict]:
-            inner = (
-                f"SELECT {ALBUM_ARTIST_SQL} AS aa, {ALBUM_SQL} AS al, t.year AS year, t.duration_seconds AS dur, "
-                f"t.date_added AS added, t.id AS id FROM tracks t WHERE t.is_missing = 0"
-            )
-            rows = conn.execute(
-                f"SELECT aa, al, MIN(year) AS year, COUNT(*) AS n, SUM(dur) AS dur, MAX(added) AS added, "
-                f"MIN(id) AS first_id FROM ({inner}) GROUP BY aa, al ORDER BY {order} LIMIT ?",
-                (limit,),
-            ).fetchall()
-            return [_album_dict(r) for r in rows]
-
         totals = conn.execute(
             "SELECT COUNT(*) AS tracks, (SELECT COUNT(*) FROM play_history) AS plays FROM tracks WHERE is_missing = 0"
         ).fetchone()
+        favorites = build_selection(
+            conn, rules={"rules": [{"field": "favorite", "op": "is", "value": True}]}, sort="added", direction="desc"
+        )
         return {
             "totals": {"tracks": totals["tracks"], "plays": totals["plays"]},
-            "recent": tracks("last_played", played),
-            "most_played": tracks("plays", played, 10),
-            "favorites": tracks("added", {"rules": [{"field": "favorite", "op": "is", "value": True}]}, 10),
-            "recently_added": albums("added DESC"),
-            "random_albums": albums("RANDOM()"),
+            "recent": queries.played_leaders(conn, "last_played", 12),
+            "most_played": queries.played_leaders(conn, "plays", 10),
+            "favorites": queries.page_tracks(conn, favorites, 0, 10),
+            "recently_added": [_album_dict(r) for r in queries.newest_albums(conn, 12)],
+            "random_albums": [_album_dict(r) for r in queries.random_albums(conn, 12, totals["tracks"])],
         }
