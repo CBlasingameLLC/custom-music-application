@@ -224,7 +224,7 @@ const failed = (part) => part && part.error;
 /** The report as rows: { ok: true | false | null, label, detail }. null means "just so you know". */
 function diagnosticRows(report, keys, update) {
   const rows = [];
-  const { database: db, library, drives, devices, services, jobs } = report;
+  const { database: db, library, drives, devices, phones, services, jobs } = report;
   if (failed(db)) rows.push({ ok: false, label: 'Library database', detail: db.error });
   else {
     rows.push({ ok: true, label: 'Library database', detail: `${fmt.bytes(db.size)} · ${fmt.plural(db.songs, 'song')} · ${fmt.plural(db.plays, 'play')} recorded · ${fmt.plural(db.playlists, 'playlist')}` });
@@ -236,7 +236,9 @@ function diagnosticRows(report, keys, update) {
   if (failed(drives)) rows.push({ ok: false, label: 'Drives', detail: drives.error });
   else rows.push({ ok: null, label: 'Drives', detail: drives.length ? drives.map((d) => `${d.mount_path} (${[d.fs, d.removable ? 'removable' : null].filter(Boolean).join(', ')})`).join(' · ') : 'None found.' });
   if (failed(devices)) rows.push({ ok: false, label: 'Devices', detail: devices.error });
-  else for (const d of devices) rows.push({ ok: d.connected, label: `Device “${d.label}”`, detail: `${d.connected ? 'connected' : 'not connected'} · ${fmt.plural(d.synced, 'song')} copied${d.last_synced_at ? ` · last synced ${fmt.date(d.last_synced_at)}` : ''}` });
+  else for (const d of devices) rows.push({ ok: d.connected, label: `${d.kind === 'mtp' ? 'Phone or player' : 'Device'} “${d.label}”`, detail: `${d.connected ? 'connected' : d.kind === 'mtp' ? 'not connected (plug it in, unlock it and choose File transfer)' : 'not connected'} · ${fmt.plural(d.synced, 'song')} copied${d.last_synced_at ? ` · last synced ${fmt.date(d.last_synced_at)}` : ''}` });
+  if (failed(phones)) rows.push({ ok: false, label: 'Phones and players', detail: phones.error });
+  else if (phones?.supported) rows.push({ ok: phones.available, label: 'Phones and players without a drive letter', detail: phones.available ? 'the helper that talks to them is installed' : phones.reason });
   if (!failed(services)) {
     const lb = services.listenbrainz;
     const sc = lb.scrobbler;

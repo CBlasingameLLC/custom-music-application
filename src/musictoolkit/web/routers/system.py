@@ -12,7 +12,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, HTTPException
 
 from musictoolkit import __version__
-from musictoolkit.sync import device_detect
+from musictoolkit.sync import device_detect, mtp
 from musictoolkit.web.context import AppContext, get_ctx
 
 logger = logging.getLogger("musictoolkit")
@@ -133,14 +133,26 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
     def devices() -> list[dict]:
         with ctx.db() as conn:
             rows = conn.execute(
-                "SELECT d.label, d.last_seen_mount_path AS path, d.last_synced_at, "
+                "SELECT d.label, d.kind, d.last_seen_mount_path AS path, d.mtp_serial, d.mtp_storage, d.mtp_storage_name, d.last_synced_at, "
                 "(SELECT COUNT(*) FROM sync_manifest m WHERE m.device_id = d.id AND m.status = 'synced') AS synced "
                 "FROM devices d ORDER BY d.id"
             ).fetchall()
-        return [
-            {"label": r["label"], "path": r["path"], "connected": Path(r["path"]).is_dir(), "synced": r["synced"], "last_synced_at": r["last_synced_at"]}
-            for r in rows
-        ]
+        plugged_in = mtp.list_devices()["devices"] if any(r["kind"] == "mtp" for r in rows) else []
+        out = []
+        for r in rows:
+            if r["kind"] == "mtp":
+                connected = mtp.find(plugged_in, r["mtp_serial"], r["mtp_storage"], r["mtp_storage_name"])[1] is not None
+            else:
+                connected = Path(r["path"]).is_dir()
+            out.append({
+                "label": r["label"], "kind": r["kind"], "path": r["path"] if r["kind"] != "mtp" else None, "connected": connected,
+                "synced": r["synced"], "last_synced_at": r["last_synced_at"],
+            })
+        return out
+
+    def phones() -> dict:
+        ready, reason = mtp.availability()
+        return {"supported": sys.platform == "win32", "available": ready, "reason": reason}
 
     def services() -> dict:
         cfg = ctx.config
@@ -173,6 +185,7 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
         "library": _section(library),
         "drives": _section(drives),
         "devices": _section(devices),
+        "phones": _section(phones),
         "services": _section(services),
         "jobs": _section(jobs),
         "settings": {"auto_update": ctx.config.app.auto_update, "rescan_on_launch": ctx.config.app.rescan_on_launch},

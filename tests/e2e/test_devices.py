@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
-from musictoolkit.sync import device_detect
+from musictoolkit.sync import device_detect, mtp
 from tests.e2e.conftest import add_library, api
+from tests.test_mtp import FAKE, SERIAL, control, write_device
 
 expect.set_options(timeout=15_000)
 
@@ -199,3 +202,89 @@ class TestDevices:
         offer.get_by_role("button", name="Use it").click()
         expect(page.get_by_role("heading", name="MUSIC", exact=True)).to_be_visible()
         expect(page.locator(".page-header")).to_contain_text(str(card))
+
+
+class TestPhones:
+    """A phone without a drive letter: found by the helper (here the stand-in), added from the dialog, copied to."""
+
+    @pytest.fixture
+    def phones(self, tmp_path, monkeypatch) -> Path:
+        root = tmp_path / "phones"
+        root.mkdir()
+        monkeypatch.setenv("MTK_MTP_HELPER", json.dumps([sys.executable, str(FAKE), str(root)]))
+        mtp.forget_listing()
+        yield root
+        mtp.forget_listing()
+
+    def open_add_dialog(self, page):
+        open_devices(page)
+        page.locator(".page-actions").get_by_role("button", name="Add a device").click()
+        return page.locator(".modal").get_by_label("Phones and players without a drive letter")
+
+    def test_a_phone_is_added_from_the_dialog_and_gets_the_songs(self, page, live, phones):
+        write_device(phones)
+        add_library(page, live)
+
+        section = self.open_add_dialog(page)
+        expect(section).to_contain_text("Pixel (Pixel 8) · Internal storage")
+        expect(section).to_contain_text("experimental")
+        section.get_by_role("button", name="Add", exact=True).click()
+        expect(page.get_by_role("heading", name="Pixel", exact=True)).to_be_visible()
+        expect(page.get_by_text("has not been tried on every model")).to_be_visible()
+        expect(page.get_by_role("button", name="Open folder")).to_have_count(0)
+
+        choose_genre(page, "Folk")
+        page.get_by_role("button", name=PREVIEW).click()
+        expect(stat(page, "to copy")).to_have_text("2")
+        assert files_on(phones / SERIAL / "s1") == [], "a preview must not write anything to the phone"
+        page.get_by_role("button", name=re.compile(r"^Copy 2 songs")).click()
+        expect(page.locator(".callout", has_text="Copied 2 songs")).to_be_visible()
+        assert files_on(phones / SERIAL / "s1" / "Music") == [
+            "The Fernwoods/Back Roads/01 - Gravel Dust.mp3",
+            "The Fernwoods/Back Roads/02 - Porch Light.mp3",
+        ]
+        expect(page.locator(".device-status")).to_contain_text("2 songs copied")
+
+        page.get_by_role("button", name="All devices").click()
+        card = page.locator(".device-card", has_text="Pixel")
+        expect(card).to_contain_text("Internal storage / Music")
+        expect(card.locator(".badge", has_text="experimental")).to_be_visible()
+        card.get_by_role("button", name="More about Pixel").click()
+        expect(page.get_by_role("menuitem", name="Choose its folder again…")).to_have_count(0)
+
+    def test_the_music_folder_on_the_phone_can_be_chosen(self, page, live, phones):
+        write_device(phones)
+        add_library(page, live)
+
+        section = self.open_add_dialog(page)
+        section.get_by_label("Folder for the music on the phone").fill("Tunes/Gym")
+        section.get_by_role("button", name="Add", exact=True).click()
+
+        expect(page.locator(".page-header")).to_contain_text("Internal storage / Tunes/Gym")
+
+    def test_nothing_plugged_in_says_what_to_do_and_looking_again_finds_it(self, page, live, phones):
+        add_library(page, live)
+        section = self.open_add_dialog(page)
+        expect(section).to_contain_text("unlock its screen, and choose “File transfer”")
+
+        write_device(phones)  # the person plugs it in and unlocks it
+        section.get_by_role("button", name="Look again").click()
+
+        expect(section).to_contain_text("Pixel (Pixel 8) · Internal storage")
+
+    def test_an_unplugged_phone_says_what_to_do_and_cannot_be_synced(self, page, live, phones):
+        write_device(phones)
+        add_library(page, live)
+        added = api(page, "/devices/mtp", "POST", {"serial": SERIAL, "storage": "s1"})
+        control(phones, unplugged=[SERIAL])
+        mtp.forget_listing()
+
+        open_devices(page)
+        card = page.locator(".device-card", has_text="Pixel")
+        expect(card.locator(".badge.warn", has_text="Not connected")).to_be_visible()
+        expect(card).to_contain_text("choose File transfer")
+
+        page.get_by_role("link", name="Pixel", exact=True).click()
+        expect(page.get_by_role("alert")).to_contain_text("Plug it in, unlock it, and choose File transfer")
+        expect(page.get_by_role("button", name=PREVIEW)).to_be_disabled()
+        assert added["kind"] == "mtp"

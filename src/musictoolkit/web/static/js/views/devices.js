@@ -109,6 +109,53 @@ function SourceEditor({ sources, onChange, disabled }) {
 
 // ------------------------------------------------------------ adding a device
 
+function PhonesSection({ close, onAdded }) {
+  const [looks, setLooks] = useState(0);
+  const { data, loading } = useAsync(() => api('/devices/mtp', { params: looks ? { fresh: true } : {} }), [looks]);
+  const [folder, setFolder] = useState('Music');
+  const [busy, setBusy] = useState(false);
+
+  async function add(device, storage) {
+    setBusy(true);
+    try {
+      const added = await api('/devices/mtp', { method: 'POST', body: { serial: device.serial, storage: storage.id, folder } });
+      close();
+      onAdded(added);
+    } catch (error) {
+      notifyError(error);
+      setBusy(false);
+    }
+  }
+
+  const found = (data?.devices || []).flatMap((d) => d.storages.map((s) => ({ device: d, storage: s })));
+  return html`<section class="phones" aria-label="Phones and players without a drive letter">
+    <h3>Phones and players without a drive letter<span class="badge warn">experimental</span></h3>
+    ${loading && !data ? html`<${Spinner} />` : data && !data.available
+      ? html`<p class="subtle">${data.reason}</p>`
+      : html`
+        ${data?.error && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>${data.error}</span></p>`}
+        ${!data?.error && found.length === 0 && html`<p class="subtle">None found. Plug the phone in with a USB cable, unlock its screen, and choose “File transfer” in the notification on it. Then look again.</p>`}
+        ${found.length > 0 && html`<div class="volume-list">
+          ${found.map(({ device, storage }) => html`<div class="volume-row" key=${device.serial + storage.id}>
+            <${Icon} name="phone" size=${20} />
+            <div class="volume-main">
+              <strong>${device.name}${device.model && device.model !== device.name ? ` (${device.model})` : ''} · ${storage.name}</strong>
+              <span class="subtle">${storage.capacity ? `${fmt.bytes(storage.free)} free of ${fmt.bytes(storage.capacity)}` : ''}</span>
+            </div>
+            ${storage.device_id
+              ? html`<${Button} small onClick=${() => { close(); go(`/devices/${storage.device_id}`); }}>Open<//>`
+              : html`<${Button} small kind="primary" disabled=${busy} title="Add ${device.name}, ${storage.name}" onClick=${() => add(device, storage)}>Add<//>`}
+          </div>`)}
+        </div>`}
+        <div class="phones-actions">
+          <label class="field"><span>Folder for the music on the phone</span>
+            <input type="text" aria-label="Folder for the music on the phone" spellcheck="false" value=${folder} onInput=${(e) => setFolder(e.target.value)} />
+          </label>
+          <${Button} icon="refresh" disabled=${busy || loading} onClick=${() => setLooks((n) => n + 1)}>Look again<//>
+        </div>`}
+  </section>`;
+}
+
 function AddDeviceBody({ close, onAdded }) {
   const { data, loading } = useAsync(() => api('/devices/volumes'), []);
   const [busy, setBusy] = useState(false);
@@ -148,7 +195,8 @@ function AddDeviceBody({ close, onAdded }) {
       </div>`)}
       ${!data?.items?.length && html`<p class="subtle">No drives found. Plug the device in and open this again.</p>`}
     </div>`}
-    <div class="modal-actions"><${Button} icon="folder" disabled=${busy} onClick=${browse}>Choose a folder…<//></div>`;
+    <div class="modal-actions"><${Button} icon="folder" disabled=${busy} onClick=${browse}>Choose a folder…<//></div>
+    <${PhonesSection} close=${close} onAdded=${onAdded} />`;
 }
 
 export function openAddDevice(onAdded) {
@@ -200,20 +248,21 @@ function DeviceCard({ device, onChanged }) {
       notifyError(error);
     }
   }
+  const phone = device.kind === 'mtp';
   const menu = (event) => openMenu(event, [
     { icon: 'edit', label: 'Rename', action: rename },
-    { icon: 'folder', label: 'Choose its folder again…', action: () => relocate() },
+    ...(phone ? [] : [{ icon: 'folder', label: 'Choose its folder again…', action: () => relocate() }]),
     { icon: 'trash', label: 'Forget this device', danger: true, action: forget },
   ]);
 
   return html`<article class="device-card ${device.connected ? '' : 'offline'}">
-    <span class="device-icon"><${Icon} name="drive" size=${24} /></span>
+    <span class="device-icon"><${Icon} name=${phone ? 'phone' : 'drive'} size=${24} /></span>
     <div class="device-main">
-      <h3><a href=${href(`/devices/${device.id}`)}>${device.label}</a>${!device.connected && html`<span class="badge warn">Not connected</span>`}</h3>
-      <p class="subtle path">${device.path}${device.volume_label && device.volume_label !== device.label ? ` (${device.volume_label})` : ''}${device.fs ? ` · ${device.fs}` : ''}${device.removable ? ' · removable' : ''}</p>
+      <h3><a href=${href(`/devices/${device.id}`)}>${device.label}</a>${phone && html`<span class="badge">experimental</span>`}${!device.connected && html`<span class="badge warn">Not connected</span>`}</h3>
+      <p class="subtle path">${device.path}${device.volume_label && device.volume_label !== device.label ? ` (${device.volume_label})` : ''}${device.fs ? ` · ${device.fs}` : ''}${device.removable && !phone ? ' · removable' : ''}</p>
       ${device.connected && html`<${Capacity} device=${device} /><p class="subtle">${roomText(device)}</p>`}
       ${device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>A different drive is using ${device.path} now. Plug the right device in, or choose its folder again.</span></p>`}
-      ${!device.connected && !device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>Not connected. Plug it in, or choose its folder again if its drive letter changed.</span></p>`}
+      ${!device.connected && !device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>${phone ? device.note : 'Not connected. Plug it in, or choose its folder again if its drive letter changed.'}</span></p>`}
       ${device.moved_to && html`<p class="note"><${Icon} name="info" size=${14} /><span>It looks like it is on ${device.moved_to} now. <button class="link" onClick=${() => relocate(device.moved_to)}>Use ${device.moved_to}</button></span></p>`}
       <p class="subtle">${device.synced ? `${fmt.plural(device.synced, 'song')} copied (${fmt.bytes(device.synced_bytes)})` : 'Nothing copied yet'}${device.last_synced_at ? ` · last synced ${ago(device.last_synced_at)}` : ''}</p>
     </div>
@@ -434,6 +483,7 @@ export function DeviceView({ id }) {
   if (error) return html`<${PageHeader} title="Device" /><p class="subtle">${error.message} <a href=${href('/devices')}>Back to devices</a></p>`;
   if (!device || !form) return html`<${PageHeader} title="Device" /><${Spinner} />`;
 
+  const phone = device.kind === 'mtp';
   const presets = layouts?.presets || [];
   const layoutChoice = form.scheme.trim() === (device.default_scheme || '') ? '' : presets.find((p) => p.scheme === form.scheme.trim())?.scheme ?? '__custom';
   const current = plan && plan.key === keyOf(form);
@@ -447,15 +497,16 @@ export function DeviceView({ id }) {
   const lists = r ? [['copy', r.to_copy], ['prune', r.to_prune], ['skipped', r.skipped]].filter(([, n]) => n > 0) : [];
 
   return html`
-    <${PageHeader} title=${device.label} subtitle=${`${device.path}${device.fs ? ` · ${device.fs}` : ''}`}>
+    <${PageHeader} title=${device.label} subtitle=${phone ? `${device.volume_label ? `${device.volume_label} · ` : ''}${device.path}` : `${device.path}${device.fs ? ` · ${device.fs}` : ''}`}>
       <${Button} icon="chevron-left" onClick=${() => go('/devices')}>All devices<//>
-      ${desktop?.openPath && device.connected && html`<${Button} icon="folder" onClick=${() => desktop.openPath(device.path)}>Open folder<//>`}
+      ${desktop?.openPath && device.connected && !phone && html`<${Button} icon="folder" onClick=${() => desktop.openPath(device.path)}>Open folder<//>`}
     <//>
+    ${phone && html`<div class="callout" role="note"><p><${Icon} name="info" size=${16} /><span>Copying to phones and players without a drive letter is new, and has not been tried on every model. Start with a small choice (one playlist, say) and check that it plays. Keep the phone unlocked while it copies.</span></p></div>`}
     <div class="device-status">
       <${Capacity} device=${device} />
       <span class="subtle">${device.connected ? roomText(device) : 'Not connected'}${device.synced ? ` · ${fmt.plural(device.synced, 'song')} copied (${fmt.bytes(device.synced_bytes)})` : ''}${device.last_synced_at ? ` · last synced ${ago(device.last_synced_at)}` : ''}</span>
     </div>
-    ${!device.connected && html`<div class="callout warn" role="alert"><p><${Icon} name="alert" size=${16} /><span>${device.different_drive ? `A different drive is using ${device.path} now.` : 'This device is not connected.'}${device.moved_to ? ` It looks like it is on ${device.moved_to} now.` : ''} Plug it in, or go back and choose its folder again.</span></p></div>`}
+    ${!device.connected && html`<div class="callout warn" role="alert"><p><${Icon} name="alert" size=${16} /><span>${phone ? device.note : html`${device.different_drive ? `A different drive is using ${device.path} now.` : 'This device is not connected.'}${device.moved_to ? ` It looks like it is on ${device.moved_to} now.` : ''} Plug it in, or go back and choose its folder again.`}</span></p></div>`}
 
     <h2 class="section-title">What goes on this device</h2>
     <${SourceEditor} sources=${form.sources} disabled=${busy} onChange=${(sources) => setForm((f) => ({ ...f, sources }))} />
@@ -528,5 +579,7 @@ export function DeviceView({ id }) {
       </div>
       ${shown.total > shown.items.length && html`<p class="more-row"><${Button} onClick=${more}>Show more (${fmt.number(shown.total - shown.items.length)} left)<//></p>`}`}`}
 
-    <p class="hint-card subtle"><${Icon} name="info" size=${14} /> Songs are copied, never moved, and each file is written under a temporary name and renamed when complete, so unplugging mid-copy never leaves half a song. Your choices are remembered for this device.</p>`;
+    <p class="hint-card subtle"><${Icon} name="info" size=${14} /> ${phone
+      ? 'Songs are copied, never moved. A phone cannot rename a file, so a copy that is cut short is deleted again, and anything that still looks too small next time is copied again. Some players do not show .m3u8 playlists in their own playlist screen. Your choices are remembered for this device.'
+      : 'Songs are copied, never moved, and each file is written under a temporary name and renamed when complete, so unplugging mid-copy never leaves half a song. Your choices are remembered for this device.'}</p>`;
 }
