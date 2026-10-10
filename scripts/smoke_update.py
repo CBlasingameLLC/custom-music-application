@@ -41,8 +41,10 @@ class Feed(http.server.SimpleHTTPRequestHandler):
 
 
 def installed_version(exe: Path) -> str:
+    """The version stamped on the exe, as semver. Windows keeps four parts (0.3.0.0); the app and latest.yml say 0.3.0."""
     command = f"(Get-Item -LiteralPath '{exe}').VersionInfo.ProductVersion"
-    return subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True).stdout.strip()
+    raw = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True).stdout.strip()
+    return ".".join(raw.split(".")[:3])
 
 
 def running(image: str) -> bool:
