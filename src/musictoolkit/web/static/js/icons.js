@@ -61,6 +61,8 @@ const P = {
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
 };
 
+const escapeText = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
 export function Icon({ name, size = 18, fill = false, class: className = '', title }) {
   const body = P[name] || P.music;
   return html`<svg
@@ -75,6 +77,6 @@ export function Icon({ name, size = 18, fill = false, class: className = '', tit
     stroke-linejoin="round"
     aria-hidden=${title ? undefined : 'true'}
     role=${title ? 'img' : undefined}
-    dangerouslySetInnerHTML=${{ __html: (title ? `<title>${title}</title>` : '') + body }}
+    dangerouslySetInnerHTML=${{ __html: (title ? `<title>${escapeText(title)}</title>` : '') + body }}
   />`;
 }

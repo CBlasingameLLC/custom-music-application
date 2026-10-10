@@ -54,12 +54,14 @@ def _extract_json_files(source: Path, work_dir: Path) -> list[Path]:
     if source.suffix.lower() == ".zip":
         try:
             with zipfile.ZipFile(source) as zf:
-                members = [i for i in zf.infolist() if Path(i.filename).match(_AUDIO_HISTORY_GLOB)]
+                members = [i for i in zf.infolist() if not i.is_dir() and Path(i.filename).match(_AUDIO_HISTORY_GLOB)]
                 _check_size(sum(i.file_size for i in members))
-                zf.extractall(work_dir, members=[i.filename for i in members])
+                # extract() says where each file really went: the library drops "..", drive letters and leading
+                # slashes from the names in the archive, so a path rebuilt from the name could point elsewhere.
+                unpacked = {Path(zf.extract(member, work_dir)) for member in members}
         except zipfile.BadZipFile:
             raise ValueError("That file is not a valid ZIP archive.") from None
-        return sorted(work_dir / i.filename for i in members)
+        return sorted(unpacked)
     raise ValueError(f"Expected a directory or .zip file, got: {source}")
 
 
