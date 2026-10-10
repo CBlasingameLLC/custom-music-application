@@ -85,6 +85,8 @@ What is different on a phone:
 - Some players do not list `.m3u8` playlists in their own playlist screen, and a phone's music app may need a
   moment (or a restart) to notice new songs.
 - A phone that does not say how much room it has is not stopped early; it simply refuses when it is full.
+- A USB stick, an SD card or a player in mass-storage mode has a drive letter, so it is added as a drive, not
+  here. Windows also lists such drives among its portable devices; the app leaves them out of this list.
 - It is labelled *experimental* because it has been checked against a stand-in for a phone and against Windows'
   own interface, not yet against every real model. If a model misbehaves, Settings, Diagnostics shows whether the
   helper is installed and what Windows reports, and the logs folder has the details.

@@ -27,6 +27,13 @@ With a few hundred artists in `Music` that is seconds per song. The helper reads
 answers `stat`, `list` and folder creation from memory; only `put` and `delete` still go through the library's own path
 lookup. A new helper starts for every preview and every sync, so what changed on the phone in between is always seen.
 
+## What it lists
+
+`devices` returns everything Windows Portable Devices lists, including drives that already have a letter (a USB
+stick, an SD card, the build machine's own disk), whose storage id is the drive letter (`E:\`). The helper does not
+judge that; `phones_only()` in `src/musictoolkit/sync/mtp.py` drops those devices, so that a drive is added as a
+drive. A device that lists no storage at all (locked, charging only) is kept and reported with its reason.
+
 ## Error codes
 
 Every refusal carries a `code` that Music Toolkit acts on: `no_space` (stop, the device is full), `disconnected`

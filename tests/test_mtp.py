@@ -148,6 +148,51 @@ def test_listing_devices_never_raises_and_is_reused_for_a_moment(phones, monkeyp
     assert missing["available"] is False and missing["error"] is None and missing["reason"]
 
 
+# A stand-in that answers `devices` with whatever it is given (as JSON) and nothing else.
+LISTS_ONLY = (
+    "import json, sys\n"
+    "devices = json.loads(sys.argv[1])\n"
+    "print(json.dumps({'event': 'ready', 'version': 1}), flush=True)\n"
+    "for line in sys.stdin:\n"
+    "    request = json.loads(line)\n"
+    "    if request['cmd'] == 'close':\n"
+    "        break\n"
+    "    print(json.dumps({'id': request['id'], 'ok': True, 'devices': devices}), flush=True)\n"
+)
+
+
+def listed(serial: str, name: str, *storage_ids: str) -> dict:
+    return {
+        "id": f"dev:{serial}", "serial": serial, "name": name, "manufacturer": "", "model": "",
+        "storages": [{"id": sid, "name": sid, "capacity": 10, "free": 5} for sid in storage_ids],
+    }
+
+
+def test_drives_that_already_have_a_letter_are_not_phones() -> None:
+    plugged_in = [
+        listed("DISK", "Temp", "D:\\"),  # what the Windows build machine itself lists: its own D: drive
+        listed("STICK", "Flash drive", "E:"),
+        listed("CARD", "Card reader", "F:/"),
+        listed("PHONE", "Pixel", "s10001", "s20001"),
+        {**listed("LOCKED", "Locked phone"), "error": "The device is locked"},
+        listed("ODD", "A device with a drive and a real storage", "G:\\", "s10001"),
+    ]
+
+    assert [d["serial"] for d in mtp.phones_only(plugged_in)] == ["PHONE", "LOCKED", "ODD"], "a locked phone has no storage yet and stays"
+
+
+def test_a_drive_is_neither_listed_nor_selectable_as_a_phone(monkeypatch) -> None:
+    command = [sys.executable, "-c", LISTS_ONLY, json.dumps([listed("DISK", "Temp", "D:\\"), listed("PHONE", "Pixel", "s10001")])]
+    monkeypatch.setenv("MTK_MTP_HELPER", json.dumps(command))
+
+    assert [d["serial"] for d in mtp.list_devices(fresh=True)["devices"]] == ["PHONE"]
+
+    with MtpHelper(command) as running:
+        with pytest.raises(TargetError, match="not connected") as drive:
+            MtpTarget.connect(running, serial="DISK", storage="D:\\", base="Music")
+    assert drive.value.errno == errno.ENODEV
+
+
 def test_a_device_is_found_by_serial_and_its_storage_by_id_then_by_name() -> None:
     devices = [{"id": "dev-a", "serial": "SER1", "storages": [{"id": "s2", "name": "Internal storage"}, {"id": "s3", "name": "SD card"}]}]
 

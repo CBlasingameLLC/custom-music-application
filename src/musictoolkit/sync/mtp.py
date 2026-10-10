@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shlex
 import subprocess
 import sys
@@ -202,6 +203,16 @@ class MtpHelper:
 
 
 LISTING_TIMEOUT = 25.0  # a phone that is asleep or waiting to be unlocked can keep the helper busy for a while
+_VOLUME_ID = re.compile(r"^[A-Za-z]:[\\/]?$")
+
+
+def phones_only(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Windows Portable Devices also lists the drives that already have a letter (a USB stick, an SD card, a player in
+    mass-storage mode), with the letter as the storage id (`E:\\`; a phone's storage ids are opaque handles). Those are
+    synced as a folder, which is faster and what the Add a device dialog already offers, so they are not phones here.
+    A device that shows no storage at all (locked, charging only) stays: it is a phone that needs unlocking."""
+    return [d for d in devices if not (d.get("storages") and all(_VOLUME_ID.match(str(s.get("id", ""))) for s in d["storages"]))]
+
 
 _cache: dict[str, Any] = {"at": 0.0, "value": None}
 _listing_lock = threading.Lock()
@@ -236,7 +247,7 @@ def list_devices(fresh: bool = False) -> dict[str, Any]:
         else:
             try:
                 with MtpHelper() as helper:
-                    result = {"available": True, "reason": None, "error": None, "devices": helper.call("devices", timeout=LISTING_TIMEOUT)["devices"]}
+                    result = {"available": True, "reason": None, "error": None, "devices": phones_only(helper.call("devices", timeout=LISTING_TIMEOUT)["devices"])}
             except (MtpUnavailable, TargetError) as exc:
                 result = {"available": True, "reason": None, "error": exc.strerror if isinstance(exc, TargetError) and exc.strerror else str(exc), "devices": []}
         _cache.update(at=time.monotonic(), value=result)
@@ -282,7 +293,7 @@ class MtpTarget:
         cls, helper: MtpHelper, *, serial: str, storage: str, base: str, label: str | None = None, storage_name: str | None = None
     ) -> "MtpTarget":
         """Find the device among those plugged in (by serial number), open it, and check that its storage is there."""
-        found, store = find(helper.call("devices", timeout=LISTING_TIMEOUT)["devices"], serial, storage, storage_name)
+        found, store = find(phones_only(helper.call("devices", timeout=LISTING_TIMEOUT)["devices"]), serial, storage, storage_name)
         if found is None:
             raise TargetError(errno.ENODEV, NOT_CONNECTED)
         if store is None:

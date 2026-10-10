@@ -4,7 +4,9 @@
 
 No phone is plugged into a build machine, so this proves what can be proved without one: the program
 starts, says it is ready, answers a refusal as a refusal, and asks Windows Portable Devices what is
-plugged in (nothing). Whether copying works on a given phone can only be checked with that phone.
+plugged in. A build machine may list its own drives there (Windows lists every drive that has a letter);
+the app filters those out, and this checks that it does. Whether copying works on a given phone can
+only be checked with that phone.
 
 Run it with the Python that has Music Toolkit installed (it uses the app's own client for the helper).
 """
@@ -36,7 +38,7 @@ def main() -> None:
     if not Path(exe).is_file():
         sys.exit(f"{exe} does not exist")
 
-    from musictoolkit.sync.mtp import MtpHelper, MtpUnavailable
+    from musictoolkit.sync.mtp import MtpHelper, MtpUnavailable, phones_only
     from musictoolkit.sync.targets import TargetError
 
     done = subprocess.run([exe, "--selftest"], capture_output=True, text=True, timeout=120)
@@ -48,13 +50,17 @@ def main() -> None:
         pass
     check(done.returncode == 0 and selftest.get("ok") is True, "--selftest asks Windows Portable Devices what is plugged in")
     check(selftest.get("version") == 1, "it speaks protocol version 1")
-    check(selftest.get("devices") == 0, f"nothing is plugged into this machine ({selftest.get('devices')})")
+    check(isinstance(selftest.get("devices"), int), f"it counts what Windows lists ({selftest.get('devices')})")
 
     try:
         with MtpHelper([exe]) as helper:
             check(True, "it starts and says it is ready")
             devices = helper.call("devices")["devices"]
-            check(devices == [], f"the device list is empty ({devices})")
+            shaped = isinstance(devices, list) and all(
+                isinstance(d, dict) and d.get("id") and d.get("name") and isinstance(d.get("storages"), list) for d in devices
+            )
+            check(shaped, f"every device it lists has an id, a name and storages ({devices})")
+            check(phones_only(devices) == [], f"no phone is plugged into this machine; drives are not phones ({phones_only(devices)})")
 
             for cmd, args in (("nonsense", {}), ("stat", {"storage": "s1", "path": "x"}), ("put", {"storage": "s1", "path": "x", "source": "y"})):
                 try:
@@ -69,7 +75,8 @@ def main() -> None:
             except TargetError as error:
                 check(error.errno == errno.ENOENT, f"opening a device that is not there says so ({error.strerror})")
 
-            check(helper.call("devices")["devices"] == [], "it still answers after refusing things")
+            again = helper.call("devices")["devices"]
+            check(isinstance(again, list) and phones_only(again) == [], "it still answers after refusing things")
     except (MtpUnavailable, TargetError) as error:
         check(False, f"talking to the helper: {error}")
 
