@@ -31,7 +31,11 @@ function TagEditor({ ids, close }) {
       })
       .catch((error) => { notifyError(error); close(); });
   }, []);
-  useEffect(() => { if (data) first.current?.focus(); }, [!!data]);
+  useEffect(() => {
+    // Start in the first field, unless the person already clicked into another one: stealing the focus back
+    // would swallow whatever they had just started typing there.
+    if (data && !document.activeElement?.closest?.('.tag-form')) first.current?.focus();
+  }, [!!data]);
 
   if (!data) return html`<${Spinner} />`;
   const single = data.count === 1;
