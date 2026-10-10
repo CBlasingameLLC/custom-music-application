@@ -20,6 +20,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The library's licence travels with its dll, in the build output and so in the installer. -->
+    <None Include="THIRD-PARTY-LICENSES.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- MIT licensed wrapper around Windows Portable Devices (https://github.com/Bassman2/MediaDevices). One dll, no dependencies. -->
     <PackageReference Include="MediaDevices" Version="1.10.1" />
     <!-- Lets this build on a machine without the .NET Framework targeting pack (Linux, for a compile check). -->
