@@ -6,7 +6,7 @@
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "package": "electron-builder --win",
+    "package": "electron-builder --win --publish never",
     "test": "node --test"
   },
   "dependencies": {

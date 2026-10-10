@@ -130,6 +130,9 @@ jobs:
         working-directory: desktop
         run: npm test
 
+      # `--publish never` (see the package script): on a push to main, electron-builder notices it is
+      # running in CI and tries to upload the installer to GitHub by itself, then fails for want of a
+      # token. Pull requests are exempt, which is how that went unnoticed. The release job publishes.
       - name: Build installer
         working-directory: desktop
         run: npm run package
@@ -163,7 +166,7 @@ jobs:
       # the real build (the `update` job).
       - name: Build an older-versioned installer for the update test
         working-directory: desktop
-        run: node_modules\.bin\electron-builder.cmd --win --config.extraMetadata.version=0.0.1 --config.directories.output=release-old
+        run: node_modules\.bin\electron-builder.cmd --win --publish never --config.extraMetadata.version=0.0.1 --config.directories.output=release-old
 
       # Installs the installer that was just built and drives the installed
       # app's real window: backend start, token handoff, bridge, streaming
