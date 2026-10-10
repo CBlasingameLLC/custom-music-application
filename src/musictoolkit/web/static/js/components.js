@@ -1,7 +1,7 @@
 // Small shared building blocks: covers, ratings, cards, shelves, and the overlay hosts.
-import { html, hashHue, useEffect, useRef, useState, useStore, fmt } from './lib.js';
+import { api, html, hashHue, useEffect, useRef, useState, useStore, fmt } from './lib.js';
 import { Icon } from './icons.js';
-import { closeMenu, dismissToast, href, enc, menu, modals, toasts } from './state.js';
+import { closeMenu, dismissToast, href, enc, jobs, menu, modals, notifyError, toasts } from './state.js';
 
 const THUMBS = [64, 128, 256, 512, 1024];
 const pickThumb = (cssPixels) => THUMBS.find((t) => t >= cssPixels * (window.devicePixelRatio || 1)) || 1024;
@@ -75,6 +75,23 @@ export function Button({ icon, children, kind = '', onClick, title, disabled, ty
   >
     ${icon && html`<${Icon} name=${icon} size=${small ? 15 : 17} />`}${children && html`<span>${children}</span>`}
   </button>`;
+}
+
+/** The running background job of one of these kinds: what it is doing, how far along, and a Cancel button. */
+export function JobBanner({ kinds }) {
+  const { items } = useStore(jobs);
+  const job = items.find((j) => kinds.includes(j.kind) && (j.status === 'running' || j.status === 'queued'));
+  if (!job) return null;
+  const pct = job.total ? Math.round((job.done / job.total) * 100) : null;
+  return html`<div class="job-banner" role="status">
+    <span class="spinner small"></span>
+    <div class="job-banner-body">
+      <strong>${job.title}${pct !== null ? ` · ${pct}%` : ''}</strong>
+      <div class="progress"><div style=${{ width: (pct ?? 8) + '%' }}></div></div>
+      <span class="subtle">${job.message || (job.status === 'queued' ? 'Waiting for the previous task to finish…' : '')}</span>
+    </div>
+    <button class="chip-btn" onClick=${() => api(`/jobs/${job.id}/cancel`, { method: 'POST' }).catch(notifyError)}>Cancel</button>
+  </div>`;
 }
 
 export function IconButton({ icon, title, onClick, active, size = 18, class: className = '' }) {
@@ -178,6 +195,7 @@ export function ToastHost() {
       (t) => html`<div class="toast ${t.kind}" key=${t.id}>
         <${Icon} name=${t.kind === 'error' ? 'alert' : t.kind === 'success' ? 'check' : 'info'} size=${16} />
         <span>${t.text}</span>
+        ${t.action && html`<button class="toast-action" onClick=${() => { dismissToast(t.id); t.action.onClick(); }}>${t.action.label}</button>`}
         <button class="icon-btn" aria-label="Dismiss" onClick=${() => dismissToast(t.id)}><${Icon} name="x" size=${14} /></button>
       </div>`,
     )}

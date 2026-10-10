@@ -14,7 +14,11 @@ logger = logging.getLogger("musictoolkit")
 
 COMMIT_EVERY = 250  # files; keeps write transactions short and a cancelled scan's progress intact
 
-AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".wav", ".wma", ".aiff", ".ape"}
+AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".opus", ".aac", ".wav", ".wma", ".aiff", ".ape"}
+
+# Where the duplicate finder parks the copies it removes from the library. Scans never look in here, so a
+# quarantined song stays out of the library until it is restored.
+QUARANTINE_DIR = "_duplicates_review"
 
 
 @dataclass
@@ -26,8 +30,18 @@ class ScanResult:
     errors: int = 0
 
 
+def in_quarantine(path: Path, root: Path) -> bool:
+    try:
+        return any(part.lower() == QUARANTINE_DIR for part in path.relative_to(root).parts[:-1])
+    except ValueError:
+        return False
+
+
 def find_audio_files(root: Path) -> list[Path]:
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS)
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS and not in_quarantine(p, root)
+    )
 
 
 def _parse_leading_int(value: str) -> int | None:
@@ -86,6 +100,11 @@ def _read_basic_tags(path: Path) -> dict:
         fields["year"] = _parse_leading_int(date_raw[:4])
 
     return fields
+
+
+def read_basic_tags(path: Path) -> dict:
+    """The tag fields the library stores, read from the file itself."""
+    return _read_basic_tags(path)
 
 
 def compute_content_hash(path: Path) -> str:
@@ -164,7 +183,7 @@ def scan_library(
             conn.execute(
                 """
                 UPDATE tracks SET
-                    file_size = ?, file_mtime = ?, duration_seconds = ?,
+                    file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?,
                     title = ?, artist = ?, album_artist = ?, album = ?,
                     track_number = ?, disc_number = ?, year = ?, genre = ?,
                     format = ?, bitrate = ?, date_last_scanned = ?, is_missing = 0

@@ -10,6 +10,10 @@ import { PlaylistsView, PlaylistView } from './views/playlists.js';
 import { NowPlayingView } from './views/nowplaying.js';
 import { SettingsView } from './views/settings.js';
 import { DevicesView, DiscoverView, HistoryView } from './views/discover.js';
+import { EnrichView, ToolsView } from './views/tools.js';
+import { OrganizeView } from './views/organize.js';
+import { DuplicatesView } from './views/duplicates.js';
+import { MissingView } from './views/missing.js';
 
 function View() {
   const { parts, query } = useStore(route);
@@ -30,6 +34,12 @@ function View() {
     case 'discover': return html`<${DiscoverView} />`;
     case 'devices': return html`<${DevicesView} />`;
     case 'history': return html`<${HistoryView} />`;
+    case 'tools':
+      if (second === 'enrich') return html`<${EnrichView} />`;
+      if (second === 'organize') return html`<${OrganizeView} />`;
+      if (second === 'duplicates') return html`<${DuplicatesView} />`;
+      if (second === 'missing') return html`<${MissingView} />`;
+      return html`<${ToolsView} />`;
     case 'settings': return html`<${SettingsView} />`;
     default: return html`<${Empty} icon="search" title="That page doesn't exist"><a href="#/">Go home</a><//>`;
   }

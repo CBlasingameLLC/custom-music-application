@@ -142,4 +142,4 @@ function stopBackend() {
   }
 }
 
-module.exports = { startBackend, stopBackend };
+module.exports = { startBackend, stopBackend, DATA_DIR };

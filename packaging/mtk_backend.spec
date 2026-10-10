@@ -8,6 +8,8 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 repo_root = Path(SPECPATH).resolve().parent
 migrations_dir = repo_root / "src" / "musictoolkit" / "db" / "migrations"
 static_dir = repo_root / "src" / "musictoolkit" / "web" / "static"
@@ -41,6 +43,8 @@ hiddenimports = [
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     "pandas._libs.tslibs.base",
+    # send2trash chooses its Windows implementation (pywin32 or ctypes) at import time.
+    *collect_submodules("send2trash"),
 ]
 
 a = Analysis(

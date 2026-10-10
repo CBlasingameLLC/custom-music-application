@@ -78,14 +78,19 @@ def page(browser, live):
     page = context.new_page()
     problems: list[str] = []
     # A song without cover art answers its image request with 404; the UI draws a placeholder.
-    page.on(
-        "console",
-        lambda m: problems.append(f"console: {m.text}") if m.type == "error" and "status of 404" not in m.text else None,
-    )
+    # A test that deliberately provokes a refusal adds the status to page.allowed_statuses first.
+    page.allowed_statuses = {404}
+
+    def expected(text: str) -> bool:
+        return any(f"status of {code}" in text for code in page.allowed_statuses)
+
+    page.on("console", lambda m: problems.append(f"console: {m.text}") if m.type == "error" and not expected(m.text) else None)
     page.on("pageerror", lambda e: problems.append(f"uncaught: {e}"))
     page.on(
         "response",
-        lambda r: problems.append(f"HTTP {r.status}: {r.url}") if r.status >= 400 and "/api/art/" not in r.url else None,
+        lambda r: problems.append(f"HTTP {r.status}: {r.url}")
+        if r.status >= 400 and "/api/art/" not in r.url and r.status not in page.allowed_statuses
+        else None,
     )
     page.goto(live.url)
     page.wait_for_selector(".sidebar")

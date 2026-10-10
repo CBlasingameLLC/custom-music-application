@@ -3,7 +3,7 @@ import { api, fmt, html, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
-import { bumpLibrary, desktop, library, loadAbout, loadSettings, notifyError, openModal, setTheme, toast, trackJob, ui } from '../state.js';
+import { bumpLibrary, desktop, library, loadAbout, loadSettings, notifyError, openModal, setTheme, toast, trackJob, ui, updates } from '../state.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -107,10 +107,34 @@ function AccountsCard({ settings }) {
 function LayoutsCard({ settings }) {
   const [organize, setOrganize] = useState(settings.library.canonical_scheme);
   const [device, setDevice] = useState(settings.sync.device_scheme);
-  return html`<${Card} icon="layers" title="Folder layouts" hint="How files are named when you tidy the library or copy music to a player. Fields: {album_artist} {artist} {album} {title} {track:02d} {year} {ext}">
+  return html`<${Card} icon="layers" title="Folder layouts" hint="How files are named when you tidy the library or copy music to a player. Fields: {album_artist} {artist} {album} {title} {track:02d} {disc} {year} {ext}. Use Library tools, Organize files to preview and apply it.">
     <label class="field"><span>Tidy up the library as</span><input type="text" value=${organize} onInput=${(e) => setOrganize(e.target.value)} /></label>
     <label class="field"><span>Copy to players as</span><input type="text" value=${device} onInput=${(e) => setDevice(e.target.value)} /></label>
     <${Button} onClick=${() => save({ library: { canonical_scheme: organize }, sync: { device_scheme: device } })}>Save layouts<//>
+  <//>`;
+}
+
+function UpdatesCard({ settings }) {
+  const { status } = useStore(updates);
+  if (!desktop?.update || !status) return null;
+  const busy = ['checking', 'downloading', 'ready'].includes(status.state);
+  const line = {
+    idle: 'Not checked yet.',
+    checking: 'Checking for a newer version…',
+    'up-to-date': `You have the latest version (${status.current}).${status.checkedAt ? ` Checked ${fmt.ago(status.checkedAt / 1000)}.` : ''}`,
+    downloading: `Downloading version ${status.version}… ${status.percent}%`,
+    ready: `Version ${status.version} is ready. It installs when you close the app, or now if you restart.`,
+    error: status.error || 'The last check did not work.',
+    disabled: 'Updates only work in the installed app.',
+  }[status.state] || '';
+  return html`<${Card} icon="download" title="Updates" hint="New versions come from this project's page on GitHub. They download in the background and install when you close the app. Nothing is sent but the request for the version file.">
+    <p class="status-line ${status.state}" role="status">${line}</p>
+    ${status.state === 'downloading' && html`<div class="progress"><div style=${{ width: status.percent + '%' }}></div></div>`}
+    <${Switch} checked=${settings.app.auto_update} onChange=${async (on) => { if (await save({ app: { auto_update: on } })) desktop.update.setAuto(on); }}>Look for updates automatically<//>
+    <div class="row-actions">
+      <${Button} icon="refresh" disabled=${busy || status.state === 'disabled'} onClick=${() => desktop.update.check()}>Check for updates<//>
+      ${status.state === 'ready' && html`<${Button} kind="primary" icon="check" onClick=${() => desktop.update.install()}>Restart and install ${status.version}<//>`}
+    </div>
   <//>`;
 }
 
@@ -152,6 +176,7 @@ export function SettingsView() {
       <${LibraryCard} settings=${settings} about=${about} />
       <${AccountsCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
+      <${UpdatesCard} settings=${settings} />
       <${DataCard} about=${about} />
     </div>`;
 }

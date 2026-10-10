@@ -1,7 +1,9 @@
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } = require('electron');
-const { startBackend, stopBackend } = require('./backend.js');
+const { startBackend, stopBackend, DATA_DIR } = require('./backend.js');
+const { createUpdater } = require('./updater.js');
 
 // Chromium's own media-key handling would swallow the keys before the global
 // shortcuts registered below ever see them.
@@ -11,6 +13,7 @@ if (process.platform === 'win32') app.setAppUserModelId('com.cblasingame.musicto
 let win = null;
 let backendOrigin = null;
 let quitting = false;
+let updater = null;
 
 const MEDIA_KEYS = {
   MediaPlayPause: 'playpause',
@@ -79,6 +82,70 @@ function registerBridge() {
     openExternally(url);
     return null;
   });
+
+  handle('update-status', () => updater.status());
+  handle('update-check', () => updater.check());
+  handle('update-install', () => updater.install());
+  handle('update-auto', (on) => updater.setAuto(on));
+}
+
+function updaterLog(message) {
+  try {
+    fs.mkdirSync(path.join(DATA_DIR, 'logs'), { recursive: true });
+    fs.appendFileSync(path.join(DATA_DIR, 'logs', 'updater.log'), `${new Date().toISOString()} ${String(message).trim()}\n`);
+  } catch {
+    // a log that cannot be written must never stop the app
+  }
+}
+
+// The "check for updates automatically" switch lives in the app's settings (Settings page); ask the backend.
+function readAutoUpdateSetting({ port, token }) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/settings', headers: { 'X-MTK-Token': token }, timeout: 3000 }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body).app.auto_update !== false);
+        } catch {
+          resolve(true);
+        }
+      });
+    });
+    req.on('error', () => resolve(true));
+    req.on('timeout', () => { req.destroy(); resolve(true); });
+  });
+}
+
+function startUpdater(started) {
+  let autoUpdater = null;
+  if (app.isPackaged) {
+    try {
+      ({ autoUpdater } = require('electron-updater'));
+      autoUpdater.logger = { info: updaterLog, warn: updaterLog, error: updaterLog, debug: () => {} };
+      // Test hook (scripts/smoke_update.py): read releases from a local web server instead of GitHub.
+      // Loopback addresses only, so it can never point an installed app at somebody else's server.
+      const feed = process.env.MTK_UPDATE_FEED;
+      if (feed && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(feed)) {
+        autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+        updaterLog(`using the local update feed ${feed}`);
+      }
+    } catch (err) {
+      updaterLog(`electron-updater could not be loaded: ${err && err.stack ? err.stack : err}`);
+      autoUpdater = null;
+    }
+  }
+  updater = createUpdater({
+    autoUpdater,
+    isPackaged: Boolean(autoUpdater),
+    currentVersion: app.getVersion(),
+    onStatus: (status) => {
+      if (win && !win.isDestroyed()) win.webContents.send('update-status', status);
+    },
+    log: updaterLog,
+  });
+  readAutoUpdateSetting(started).then((on) => updater.setAuto(on));
 }
 
 function registerMediaKeys() {
@@ -152,6 +219,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     backendOrigin = `http://127.0.0.1:${started.port}`;
 
+    startUpdater(started);
     registerBridge();
     registerMediaKeys();
     createWindow(`${backendOrigin}/?token=${encodeURIComponent(started.token)}`);

@@ -108,3 +108,87 @@ def test_a_template_that_leaves_the_library_proposes_nothing(tmp_path: Path) -> 
 
     for scheme in ("/elsewhere/{title}.{ext}", "\\elsewhere\\{title}.{ext}", "../{title}.{ext}"):
         assert organizer.propose_organization(conn, library, scheme).proposals == []
+
+
+def _plan(conn, library: Path, scheme: str = SCHEME):
+    return organizer.propose_organization(conn, library, scheme)
+
+
+def test_an_untagged_song_has_no_made_up_track_number(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "test.db")
+    library = (tmp_path / "library").resolve()
+    library.mkdir()
+    (library / "mystery.mp3").write_bytes(b"x")
+    _insert_track(conn, str(library / "mystery.mp3"))
+
+    [proposal] = _plan(conn, library).proposals
+
+    assert proposal.new_path == library / "Unknown Artist" / "Unknown Album" / "mystery.mp3"
+    conn.close()
+
+
+def test_organizing_twice_changes_nothing_the_second_time(tmp_path: Path) -> None:
+    """Untitled songs borrow their title from the file name; that must not grow a prefix on every run."""
+    conn = connect(tmp_path / "test.db")
+    library = (tmp_path / "library").resolve()
+    library.mkdir()
+    for name in ("mystery.mp3", "03 - Loose Song.mp3", "99 Problems.mp3"):
+        (library / name).write_bytes(b"x")
+        _insert_track(conn, str(library / name))
+
+    first = _plan(conn, library)
+    assert organizer.apply_organization(conn, first.proposals, library) == 3
+    second = _plan(conn, library)
+
+    assert second.proposals == [] and second.unchanged == 3
+    names = sorted(p.name for p in library.rglob("*.mp3"))
+    assert names == ["03 - Loose Song.mp3", "99 Problems.mp3", "mystery.mp3"]
+    conn.close()
+
+
+def test_the_file_name_supplies_what_the_tags_lack(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "test.db")
+    library = (tmp_path / "library").resolve()
+    library.mkdir()
+    only_title = library / "07 - Named.mp3"
+    only_title.write_bytes(b"x")
+    _insert_track(conn, str(only_title), title="Named", artist="A", album="B")  # a title but no track number
+    only_track = library / "x.mp3"
+    only_track.write_bytes(b"y")
+    _insert_track(conn, str(only_track), artist="A", album="B", track_number=4)  # a track number but no title
+
+    targets = {p.old_path.name: p.new_path.relative_to(library).as_posix() for p in _plan(conn, library).proposals}
+
+    assert targets == {"07 - Named.mp3": "A/B/07 - Named.mp3", "x.mp3": "A/B/04 - x.mp3"}
+    assert organizer.propose_organization(conn, library, SCHEME).collisions == []
+    conn.close()
+
+
+def test_a_missing_year_leaves_no_zero_behind(tmp_path: Path) -> None:
+    conn = connect(tmp_path / "test.db")
+    library = (tmp_path / "library").resolve()
+    library.mkdir()
+    for name, year in (("a.mp3", None), ("b.mp3", 1999)):
+        (library / name).write_bytes(b"x")
+        _insert_track(conn, str(library / name), artist="Ar", album="Al", title=name[0].upper(), track_number=1, year=year)
+
+    scheme = "{album_artist}/{year} - {album}/{track:02d} - {title}.{ext}"
+    got = {p.old_path.name: p.new_path.relative_to(library).as_posix() for p in _plan(conn, library, scheme).proposals}
+
+    assert got == {"a.mp3": "Ar/Al/01 - A.mp3", "b.mp3": "Ar/1999 - Al/01 - B.mp3"}
+    conn.close()
+
+
+def test_punctuation_around_a_missing_number_is_tidied() -> None:
+    blank = organizer._BLANK
+    cases = {
+        f"{blank} - Song.mp3": "Song.mp3",
+        f"{blank}. Song.mp3": "Song.mp3",
+        f"Album ({blank})": "Album",
+        f"Album - {blank}": "Album",
+        f"A - {blank} - B": "A - B",
+        f"Song - {blank}.mp3": "Song.mp3",
+        "Ordinary - Name.mp3": "Ordinary - Name.mp3",
+    }
+    for text, expected in cases.items():
+        assert organizer._drop_blanks(text) == expected, text

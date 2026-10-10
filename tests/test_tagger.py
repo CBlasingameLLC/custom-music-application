@@ -95,3 +95,50 @@ def test_apply_tags_writes_file_and_marks_matched(tmp_path: Path, monkeypatch) -
     assert on_disk["title"] == ["Real Title"]
     assert on_disk["artist"] == ["Real Artist"]
     conn.close()
+
+
+def test_leading_track_numbers_are_not_mistaken_for_an_artist() -> None:
+    guess = tagger._guess_from_filename
+    assert guess(Path("01 - Glacier.mp3")) == (None, "Glacier")
+    assert guess(Path("07. Aurora Vale - Glacier.mp3")) == ("Aurora Vale", "Glacier")
+    assert guess(Path("(3) Mara Quinn - Wires.mp3")) == ("Mara Quinn", "Wires")
+    assert guess(Path("Disc 2 05 - Drift.mp3")) == (None, "Drift")
+    assert guess(Path("Just A Title.mp3")) == (None, "Just A Title")
+    assert guess(Path("1999.mp3")) == (None, "1999")  # a bare number is a title, not a prefix
+
+
+def test_persisted_proposals_wait_for_review_and_are_not_looked_up_twice(tmp_path: Path, monkeypatch) -> None:
+    conn = connect(tmp_path / "test.db")
+    library = tmp_path / "library"
+    library.mkdir()
+    track_id = _insert_sparse_track(conn, str((library / "a.mp3").resolve()))
+    (library / "a.mp3").write_bytes(b"x")
+
+    calls = []
+
+    def fake(artist, title):
+        calls.append(title)
+        return {"id": "mb-1", "title": "Found It", "ext:score": "88", "artist-credit-phrase": "Someone"}
+
+    monkeypatch.setattr(tagger.musicbrainz_client, "best_match", fake)
+    first = tagger.propose_tags(conn, None, persist=True)
+    assert len(first.proposals) == 1 and len(calls) == 1
+    # waiting for review: the track is untouched and is not offered for a second lookup
+    assert conn.execute("SELECT tag_source FROM tracks WHERE id = ?", (track_id,)).fetchone()["tag_source"] is None
+    assert tagger.find_sparse_tracks(conn) == []
+    tagger.propose_tags(conn, None, persist=True)
+    assert len(calls) == 1
+    row = conn.execute("SELECT status, confidence FROM tag_proposals WHERE track_id = ?", (track_id,)).fetchone()
+    assert (row["status"], row["confidence"]) == ("pending", 0.88)
+    conn.close()
+
+
+def test_progress_and_limit(tmp_path: Path, monkeypatch) -> None:
+    conn = connect(tmp_path / "test.db")
+    for n in range(5):
+        _insert_sparse_track(conn, str((tmp_path / f"{n}.mp3").resolve()))
+    monkeypatch.setattr(tagger.musicbrainz_client, "best_match", lambda artist, title: None)
+    seen = []
+    result = tagger.propose_tags(conn, None, on_progress=lambda d, t: seen.append((d, t)), limit=3)
+    assert result.skipped_no_match == 3 and seen[0] == (0, 3) and seen[-1] == (3, 3)
+    conn.close()

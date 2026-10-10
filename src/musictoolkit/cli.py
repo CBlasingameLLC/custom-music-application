@@ -124,7 +124,7 @@ def organize(
         typer.echo(f"  COLLISION (skipped): {old} -> {new}")
 
     if apply:
-        moved = organizer.apply_organization(conn, result.proposals)
+        moved = organizer.apply_organization(conn, result.proposals, Path(path))
         typer.echo(f"Moved {moved} files.")
     elif result.proposals:
         typer.echo("Dry run — pass --apply to write these changes.")

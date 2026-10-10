@@ -30,9 +30,10 @@ export function dismissToast(id) {
   toasts.set((s) => ({ items: s.items.filter((t) => t.id !== id) }));
 }
 
-export function toast(text, kind = 'info', ms = 4500) {
+/** `action` is an optional { label, onClick } shown as a button in the toast (e.g. Undo). */
+export function toast(text, kind = 'info', ms = 4500, action = null) {
   const id = ++toastCounter;
-  toasts.set((s) => ({ items: [...s.items.slice(-3), { id, text, kind }] }));
+  toasts.set((s) => ({ items: [...s.items.slice(-3), { id, text, kind, action }] }));
   if (ms) setTimeout(() => dismissToast(id), ms);
   return id;
 }
@@ -150,7 +151,7 @@ onJobFinished((job) => {
     const r = job.result || {};
     toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing`, 'success');
   }
-  if (job.status === 'done') {
+  if (job.status === 'done' || job.status === 'cancelled') {
     bumpLibrary();
     loadFacets().catch(() => {});
     loadAbout().catch(() => {});
@@ -193,3 +194,21 @@ export function openModal({ title, render, width = 480, onClose }) {
 
 /** Present only inside the Electron app; the browser build falls back to typed paths. */
 export const desktop = window.mtk || null;
+
+// ------------------------------------------------------------ app updates (desktop only)
+
+/** { state: idle | checking | up-to-date | downloading | ready | error | disabled, current, version, percent, error, checkedAt } */
+export const updates = createStore({ status: null });
+
+if (desktop?.update) {
+  const apply = (status) => {
+    if (!status) return;
+    const before = updates.get().status;
+    updates.set({ status });
+    if (status.state === 'ready' && before?.state !== 'ready') {
+      toast(`Music Toolkit ${status.version} is ready to install.`, 'info', 0, { label: 'Restart now', onClick: () => desktop.update.install() });
+    }
+  };
+  desktop.update.status().then(apply).catch(() => {});
+  desktop.update.onStatus(apply);
+}

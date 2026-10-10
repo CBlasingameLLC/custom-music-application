@@ -5,8 +5,9 @@
 Fresh user profile, an unrelated working directory, no config, no database.
 Launches `<exe> dashboard`, then checks that the bundled web UI is served and
 that the token gate, library scan, cover art (Pillow), Range streaming (what
-the in-app player uses), settings and backup all work from the frozen binary,
-and that nothing leaks into the working directory.
+the in-app player uses), the library tools (organize with undo, duplicates with
+the review folder and the Recycle Bin), settings and backup all work from the
+frozen binary, and that nothing leaks into the working directory.
 
 Standard library only, so it runs on any CI runner without installing anything.
 """
@@ -87,6 +88,16 @@ class Client:
         return status, json.loads(payload or b"null")
 
 
+def wait_job(client: Client, job_id: str, tries: int = 300) -> dict:
+    job: dict = {"status": "unknown"}
+    for _ in range(tries):
+        time.sleep(0.2)
+        _, job = client.json(f"/api/jobs/{job_id}")
+        if job["status"] in ("done", "error", "cancelled"):
+            break
+    return job
+
+
 def stop(process: subprocess.Popen) -> None:
     if WINDOWS:
         # The onefile bootloader's child must die with it; /T walks the tree.
@@ -98,6 +109,53 @@ def stop(process: subprocess.Popen) -> None:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def library_tools(client: Client, music: Path, count: int) -> None:
+    """Organize (preview, apply, undo) and the duplicate finder (search, review folder, Recycle Bin)."""
+    _, info = client.json("/api/tools/organize/info")
+    root, scheme = info["roots"][0]["path"], info["scheme"]
+    _, started = client.json("/api/tools/organize/preview", "POST", {"root": root, "scheme": scheme})
+    job = wait_job(client, started["job"]["id"])
+    check(job["status"] == "done" and job["result"]["moves"] > 0, f"organize preview plans moves ({job.get('result') or job.get('error')})")
+    status, started = client.json("/api/tools/organize/apply", "POST", {"root": root, "scheme": scheme, "remember": False})
+    job = wait_job(client, started["job"]["id"])
+    result = job.get("result") or {}
+    check(job["status"] == "done" and result.get("moved", 0) > 0 and not result.get("errors"),
+          f"organize moved files ({result.get('moved')} moved, {result.get('errors') or job.get('error')})")
+    check(not list(music.glob("*.mp3")), "no song is left loose in the library folder")
+    _, started = client.json("/api/tools/organize/undo", "POST", {"batch_id": result["batch_id"]})
+    job = wait_job(client, started["job"]["id"])
+    check(job["status"] == "done" and (job.get("result") or {}).get("moved") == result["moved"],
+          f"organize undo puts every file back ({job.get('result') or job.get('error')})")
+    check(len(list(music.glob("*.mp3"))) == count, "the original files are back where they were")
+
+    # a second copy of a song, found by its content, parked in the review folder, then sent to the Recycle Bin
+    twin_dir = music / "copies"
+    twin_dir.mkdir()
+    shutil.copy(next(music.glob("tone_12s.mp3")), twin_dir / "tone_12s copy.mp3")
+    _, started = client.json("/api/library/scan", "POST")
+    wait_job(client, started["job"]["id"])
+    _, started = client.json("/api/tools/duplicates/scan", "POST", {"exact": True})
+    scan = wait_job(client, started["job"]["id"])
+    check(scan["status"] == "done" and scan["result"]["groups"] >= 1, f"duplicate search finds the copy ({scan.get('result') or scan.get('error')})")
+    _, page = client.json(f"/api/tools/duplicates/groups/{started['job']['id']}")
+    group = next(g for g in page["items"] if any("copy" in m["path"] for m in g["members"]))
+    check(group["identical"], "the copy is recognised as byte for byte identical")
+    keeper = group["keeper"]
+    choice = {"key": group["key"], "keeper": keeper, "remove": [m["id"] for m in group["members"] if m["id"] != keeper]}
+    _, moved = client.json("/api/tools/duplicates/quarantine", "POST", {"job_id": started["job"]["id"], "choices": [choice]})
+    job = wait_job(client, moved["job"]["id"])
+    check(job["status"] == "done" and job["result"]["moved"] == len(choice["remove"]), f"copy moved to the review folder ({job.get('result') or job.get('error')})")
+    check((music / "_duplicates_review").is_dir(), "the review folder exists inside the library folder")
+    _, review = client.json("/api/tools/duplicates/review")
+    check(review["count"] == len(choice["remove"]), f"review folder lists the copy ({review.get('count')})")
+    status, deleted = client.json("/api/tools/duplicates/delete", "POST", {"everything": True, "confirm": "DELETE"})
+    job = wait_job(client, deleted["job"]["id"])
+    result = job.get("result") or {}
+    check(job["status"] == "done" and result.get("moved") == len(choice["remove"]) and not result.get("errors"),
+          f"copy sent to the Recycle Bin ({result.get('errors') or job.get('error') or 'ok'})")
+    check(not (music / "_duplicates_review").exists(), "the emptied review folder is gone")
 
 
 def run(exe: Path, fixtures: Path) -> None:
@@ -170,6 +228,7 @@ def run(exe: Path, fixtures: Path) -> None:
         status, headers, body = client.request(f"/api/tracks/{track['id']}/stream", headers={"Range": "bytes=0-99"})
         check(status == 206 and len(body) == 100 and headers.get("content-range", "").startswith("bytes 0-99/"),
               f"Range streaming for the player ({status} {headers.get('content-range')})")
+        library_tools(client, music, len(mp3s))
         check(client.request(f"/api/tracks/{track['id']}/info")[0] == 200, "song details")
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
         check(client.request("/api/home")[0] == 200, "Home data")

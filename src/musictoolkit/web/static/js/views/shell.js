@@ -5,7 +5,7 @@ import { Cover, IconButton } from '../components.js';
 import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
 import { QueueList } from './nowplaying.js';
 import { setFavorite } from '../tracks.js';
-import { enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui } from '../state.js';
+import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
 // ------------------------------------------------------------ sidebar
 
@@ -19,6 +19,7 @@ function NavItem({ to, icon, label, match }) {
 export function Sidebar() {
   const playlists = useStore(library, (s) => s.playlists);
   const about = useStore(library, (s) => s.about);
+  const update = useStore(updates, (s) => s.status);
   useEffect(() => { loadPlaylists().catch(() => {}); }, []);
   const starts = (prefix) => (path) => path === prefix || path.startsWith(prefix + '/');
   return html`<nav class="sidebar" aria-label="Main">
@@ -41,6 +42,7 @@ export function Sidebar() {
     </div>
     <div class="nav-group">
       <div class="nav-label">Manage</div>
+      <${NavItem} to="/tools" icon="wrench" label="Library tools" match=${starts('/tools')} />
       <${NavItem} to="/devices" icon="drive" label="Devices" />
       <${NavItem} to="/settings" icon="sliders" label="Settings" />
     </div>
@@ -49,7 +51,8 @@ export function Sidebar() {
       <div class="nav-scroll">${playlists.slice(0, 40).map((p) => html`<a class="nav-item small" href=${href(`/playlist/${p.id}`)} key=${p.id} title=${p.name}>
         <${Icon} name=${p.kind === 'smart' ? 'sparkles' : 'list'} size=${15} /><span>${p.name}</span></a>`)}</div>
     </div>`}
-    <div class="sidebar-foot">${about ? `v${about.version} · ${fmt.plural(about.tracks, 'song')}` : ''}</div>
+    <div class="sidebar-foot">${about ? `v${about.version} · ${fmt.plural(about.tracks, 'song')}` : ''}
+      ${update?.state === 'ready' && html`<button class="update-pill" onClick=${() => desktop.update.install()} title="Close the app and install the update now">Update ready · restart</button>`}</div>
   </nav>`;
 }
 
@@ -90,6 +93,15 @@ function TasksPill() {
 function summarize(job) {
   const r = job.result || {};
   if (job.kind === 'scan') return `${r.added || 0} added · ${r.updated || 0} changed · ${r.unchanged || 0} unchanged${r.missing ? ` · ${r.missing} missing` : ''}${r.offline_roots?.length ? ` · ${r.offline_roots.length} folder(s) not found` : ''}`;
+  if (job.kind === 'tags') return `${r.edited || 0} updated${r.unchanged ? ` · ${r.unchanged} already matched` : ''}${r.errors?.length ? ` · ${r.errors.length} failed` : ''}`;
+  if (job.kind === 'organize-preview') return `${r.moves || 0} to move · ${r.unchanged || 0} already in place${r.collisions ? ` · ${r.collisions} names taken` : ''}`;
+  if (job.kind === 'organize') return `${r.moved || 0} moved${r.skipped ? ` · ${r.skipped} left alone` : ''}${r.tidied_folders ? ` · ${r.tidied_folders} empty folders removed` : ''}`;
+  if (job.kind === 'organize-undo') return `${r.moved || 0} put back${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
+  if (job.kind === 'dedupe-scan') return `${r.groups || 0} songs found more than once · ${r.copies || 0} extra copies`;
+  if (job.kind === 'dedupe') return `${r.moved || 0} moved to the review folder${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
+  if (job.kind === 'dedupe-restore') return `${r.moved || 0} restored${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
+  if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
+  if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   return job.message || 'Finished';
 }
 

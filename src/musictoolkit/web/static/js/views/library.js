@@ -5,6 +5,7 @@ import { AlbumCard, ArtistCard, Button, Cover, Empty, InfiniteSentinel, PageHead
 import { addMusicFolder } from '../dialogs.js';
 import { emptyFilters, FilterBar, filtersToRules } from '../filters.js';
 import { addToQueue, playQueue } from '../player.js';
+import { openTagEditor } from '../tagtools.js';
 import { enc, go, href, library, notifyError, route, toast } from '../state.js';
 import { staticFetch, TrackTable } from '../tracks.js';
 
@@ -186,6 +187,7 @@ export function AlbumView({ albumKey }) {
           <${Button} kind="primary" icon="play" onClick=${() => play(0, false)}>Play<//>
           <${Button} icon="shuffle" onClick=${() => play(0, true)}>Shuffle<//>
           <${Button} icon="queue" onClick=${() => { addToQueue(album.tracks); toast(`Added "${album.album}" to the queue`); }}>Add to queue<//>
+          <${Button} icon="edit" onClick=${() => openTagEditor(album.tracks.map((t) => t.id))}>Edit tags<//>
         </div>
       </div>
     </div>

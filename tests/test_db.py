@@ -103,3 +103,34 @@ def test_track_uniqueness_on_file_path(tmp_path: Path) -> None:
             pass
     finally:
         conn.close()
+
+
+def test_upgrade_from_v4_the_0_2_0_schema_adds_the_library_tools_tables(tmp_path: Path) -> None:
+    """0.2.0 shipped schema v4. Its library, play history and settings must survive the move to the
+    library-tools schema, and the new tables must be there, empty, ready to use."""
+    db_path = tmp_path / "v4.db"
+    old = sqlite3.connect(db_path)
+    for version, _name, sql in _migration_files():
+        if version <= 4:
+            old.executescript(sql)
+            old.execute(f"PRAGMA user_version = {version}")
+    old.execute("INSERT INTO tracks (file_path, title, artist, rating, favorite) VALUES ('/m/a.mp3', 'Song', 'Band', 4, 1)")
+    old.execute(
+        "INSERT INTO play_history (track_id, source, played_at_epoch, ms_played) VALUES (1, 'future_scrobble', 1700000000, 30000)"
+    )
+    old.execute("INSERT INTO kv (key, value) VALUES ('queue', '[1]')")
+    old.commit()
+    old.close()
+
+    conn = connect(db_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST_VERSION
+        track = conn.execute("SELECT * FROM tracks").fetchone()
+        assert (track["title"], track["rating"], track["favorite"], track["is_missing"]) == ("Song", 4, 1, 0)
+        assert conn.execute("SELECT COUNT(*) FROM play_history").fetchone()[0] == 1
+        assert conn.execute("SELECT value FROM kv WHERE key = 'queue'").fetchone()[0] == "[1]"
+        for table in ("tag_edits", "tag_proposals", "file_moves"):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        conn.close()
