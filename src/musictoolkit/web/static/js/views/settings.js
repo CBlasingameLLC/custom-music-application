@@ -61,6 +61,13 @@ function LibraryCard({ settings, about }) {
   <//>`;
 }
 
+function OnlineCard({ settings }) {
+  return html`<${Card} icon="globe" title="Online lookups" hint="Off until you turn them on. Each one sends only what it needs to find an answer, and the answers are kept inside the app: nothing is ever written into your music folders.">
+    <${Switch} checked=${settings.app.lyrics_lrclib} onChange=${(v) => save({ app: { lyrics_lrclib: v } })}>Look up lyrics on lrclib.net when a song has none<//>
+    <p class="note"><${Icon} name="info" size=${14} /><span>Sends the artist, title, album and length of the song that is showing its lyrics. Lyrics in the file or in a <code>.lrc</code> file beside it always come first. You can also look up one song at a time from its lyrics page, with this switched off.</span></p>
+  <//>`;
+}
+
 /** Tries the saved key or token against its service. `before` saves anything typed but not yet saved. */
 function TestButton({ service, before }) {
   const [result, setResult] = useState(null); // null | 'working' | { ok, message }
@@ -335,6 +342,7 @@ export function SettingsView() {
     <div class="settings">
       <${LibraryCard} settings=${settings} about=${about} />
       <${AccountsCard} settings=${settings} />
+      <${OnlineCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       <${DiagnosticsCard} />

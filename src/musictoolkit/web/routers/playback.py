@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from musictoolkit.media import art, info, lyrics
+from musictoolkit.media import art, info, lrclib, lyrics
 from musictoolkit.web.context import AppContext, get_ctx
 from musictoolkit.web.queries import (
     ALBUM_ARTIST_SQL,
@@ -76,9 +76,36 @@ def track_info(track_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
     }
 
 
+def _online_lyrics(ctx: AppContext, track_id: int, *, fetch: bool, force: bool) -> dict:
+    """The answer for a song whose file has no lyrics: what lrclib.net is known to have (kept in the app's database),
+    asking it when `fetch` says that is allowed. `online` says how that went: found, none, off or unreachable."""
+    with ctx.db() as conn:
+        track = conn.execute("SELECT id, artist, title, album, duration_seconds AS duration FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        answer = lrclib.resolve(conn, track, fetch=fetch, force=force)
+    result: dict = {"source": None, "synced": None, "plain": None, "instrumental": False, "online": answer["state"]}
+    if answer["state"] == "found":
+        result.update(source="lrclib", synced=answer["synced"], plain=answer["plain"], instrumental=answer["instrumental"])
+    if answer.get("message"):
+        result["message"] = answer["message"]
+    return result
+
+
 @router.get("/tracks/{track_id}/lyrics")
 def track_lyrics(track_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
-    return lyrics.lyrics_for(_track_file(ctx, track_id))
+    """Lyrics from the file (embedded, or a .lrc beside it); failing that, from lrclib.net if the person turned that on."""
+    own = lyrics.lyrics_for(_track_file(ctx, track_id))
+    if own["source"] is not None:
+        return {**own, "instrumental": False, "online": None}
+    return _online_lyrics(ctx, track_id, fetch=ctx.config.app.lyrics_lrclib, force=False)
+
+
+@router.post("/tracks/{track_id}/lyrics/lookup")
+def lookup_lyrics(track_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Look this one song up on lrclib.net now, whether or not automatic lookups are on (the person pressed Look up)."""
+    own = lyrics.lyrics_for(_track_file(ctx, track_id))
+    if own["source"] is not None:
+        return {**own, "instrumental": False, "online": None}
+    return _online_lyrics(ctx, track_id, fetch=True, force=True)
 
 
 def _art_response(path: Path, size: int, ctx: AppContext) -> Response:

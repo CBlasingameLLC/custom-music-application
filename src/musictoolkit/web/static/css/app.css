@@ -469,6 +469,8 @@ input.short { width: 90px; }
 .lyrics.synced p.past { color: var(--text-dim); }
 .lyrics.synced p.active { color: var(--text); transform: scale(1.04); }
 .lyrics.synced p:hover { color: var(--text-dim); }
+.lyrics-credit { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; }
+.lyrics-credit a { text-decoration: underline; }
 .lyrics.plain pre { white-space: pre-wrap; font: 16px/1.7 var(--font); color: var(--text-dim); margin: 0; }
 .sound h3 { margin: 18px 0 8px; }
 .sound h3:first-child { margin-top: 0; }
