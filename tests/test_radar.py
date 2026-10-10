@@ -115,6 +115,13 @@ def test_a_cover_with_a_strange_id_is_dropped_but_the_release_stays() -> None:
     assert release.art_url is None
 
 
+def test_a_name_far_longer_than_any_real_one_is_cut_short() -> None:
+    (from_lb,) = radar.from_listenbrainz([lb(name="A" * 5000, title="T" * 5000)], SINCE, UNTIL)
+    (from_mb,) = radar.from_musicbrainz("B" * 5000, [mb(title="T" * 5000, credit=("B" * 5000, ARTIST))], SINCE, UNTIL)
+
+    assert len(from_lb.artist) == len(from_lb.title) == len(from_mb.artist) == len(from_mb.title) == radar.MAX_NAME
+
+
 def test_junk_instead_of_a_list_is_nothing() -> None:
     assert radar.from_listenbrainz(None, SINCE, UNTIL) == radar.from_listenbrainz("x", SINCE, UNTIL) == radar.from_listenbrainz([None, 5, "x"], SINCE, UNTIL) == []
 

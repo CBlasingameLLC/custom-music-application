@@ -25,6 +25,7 @@ FUTURE_DAYS = 45  # and how far ahead announced releases are shown
 MAX_ARTISTS = 40  # artists asked about one by one on MusicBrainz (about a second each)
 MIN_SEEDS_FROM_PLAYS = 10  # fewer artists than this in the history are topped up from the library
 WANTED_KINDS = ("Album", "EP", "Single")
+MAX_NAME = 300  # characters of an artist or title kept from a service: no real name is longer, and nothing else needs room
 NOT_AN_ARTIST = {"", "unknown", "unknown artist", "various", "various artists"}
 MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 STOP_AFTER_FAILURES = 3  # artists in a row that MusicBrainz would not answer about: it is down or refusing us, so stop
@@ -47,6 +48,10 @@ class Release:
     date: str  # as the service gave it: YYYY-MM-DD, or YYYY-MM
     source: str  # listenbrainz or musicbrainz
     art_url: str | None = None
+
+
+def _clip(text: Any) -> str:
+    return str(text)[:MAX_NAME]
 
 
 def _norm(text: Any) -> str:
@@ -91,7 +96,7 @@ def from_listenbrainz(entries: Any, since: date, until: date) -> list[Release]:
         art = None
         if isinstance(art_release, str) and MBID.fullmatch(art_release) and isinstance(art_id, int) and not isinstance(art_id, bool):
             art = f"https://coverartarchive.org/release/{art_release}/{art_id}-250.jpg"
-        found.append(Release(mbid, str(artist), artist_ids[0] if artist_ids else None, str(title), kind, str(entry["release_date"]), "listenbrainz", art))
+        found.append(Release(mbid, _clip(artist), artist_ids[0] if artist_ids else None, _clip(title), kind, str(entry["release_date"]), "listenbrainz", art))
     return found
 
 
@@ -116,7 +121,7 @@ def from_musicbrainz(artist: str, groups: Any, since: date, until: date) -> list
         if not (credit and isinstance(mbid, str) and MBID.fullmatch(mbid) and title and day and kind) or not since <= day <= until:
             continue
         artist_id = credit.get("id") if isinstance(credit.get("id"), str) and MBID.fullmatch(credit["id"]) else None
-        found.append(Release(mbid, str(credit.get("name") or artist), artist_id, str(title), kind, str(group["first-release-date"]), "musicbrainz"))
+        found.append(Release(mbid, _clip(credit.get("name") or artist), artist_id, _clip(title), kind, str(group["first-release-date"]), "musicbrainz"))
     return found
 
 

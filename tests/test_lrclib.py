@@ -56,6 +56,40 @@ def service(monkeypatch):
 
 # ------------------------------------------------------------------------------------------- asking
 
+def test_an_answer_larger_than_any_lyrics_is_refused_not_read_into_memory(service, monkeypatch) -> None:
+    service({"/get": (200, HIT)})
+    monkeypatch.setattr(lrclib, "MAX_BYTES", 100)
+
+    with pytest.raises(lrclib.LrclibError, match="too large"):
+        lrclib.lookup("Aurora Vale", "Glacier", "Northern Lights", 200.4)
+
+
+def test_a_slow_trickle_of_an_answer_is_cut_off(service, monkeypatch) -> None:
+    service({"/get": (200, HIT)})
+    monkeypatch.setattr(lrclib, "DEADLINE", -1.0)  # already past
+
+    with pytest.raises(lrclib.LrclibError, match="too slow"):
+        lrclib.lookup("Aurora Vale", "Glacier", "Northern Lights", 200.4)
+
+
+def test_a_redirect_is_not_followed(service) -> None:
+    lrclib_service = service({"/elsewhere": (200, HIT)})
+    lrclib_service.redirects["/get"] = "/elsewhere"
+
+    with pytest.raises(lrclib.LrclibError, match="error 302"):
+        lrclib.lookup("Aurora Vale", "Glacier", "Northern Lights", 200.4)
+    assert lrclib_service.count("/elsewhere") == 0
+
+
+def test_an_answer_that_is_not_json_is_trouble_not_a_crash(service) -> None:
+    lrclib_service = service({})
+    lrclib_service.routes["/get"] = lambda query: (200, None)  # an empty body
+
+    with pytest.raises(lrclib.LrclibError, match="could not be read"):
+        lrclib.lookup("Aurora Vale", "Glacier", "Northern Lights", 200.4)
+
+
+
 
 def test_a_song_is_asked_for_by_artist_title_album_and_length_and_the_app_says_who_it_is(service) -> None:
     lrclib_service = service({"/get": (200, HIT)})

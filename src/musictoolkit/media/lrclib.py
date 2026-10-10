@@ -23,6 +23,8 @@ from musictoolkit.media.lyrics import parse_lrc
 
 BASE_URL = os.environ.get("MTK_LRCLIB_URL", "https://lrclib.net/api").rstrip("/")  # the variable is for tests and the packaged-app check
 TIMEOUT = 10.0
+MAX_BYTES = 2_000_000  # an answer is a few kilobytes of text; anything near this is not one
+DEADLINE = 30.0  # seconds for the whole of one answer, however slowly it trickles in
 USER_AGENT = f"Music Toolkit/{__version__} (https://github.com/CBlasingameLLC/custom-music-application)"
 DURATION_SLACK = 3.0  # seconds a version of the song may differ from the file and still keep its timing
 NONE_KEPT_FOR = 14 * 86400  # LRCLIB grows: a song it did not have is asked about again after two weeks
@@ -45,19 +47,27 @@ def query_key(artist: str | None, title: str | None, album: str | None, duration
 
 def _get(path: str, params: dict[str, Any]) -> Any | None:
     """One request. None means LRCLIB answered that it has no such thing; trouble of any kind raises LrclibError."""
+    started = time.monotonic()
     try:
-        response = requests.get(f"{BASE_URL}{path}", params=params, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT)
+        # No redirects (the address is fixed), and the answer is read in pieces so a huge or endless one is cut off.
+        with requests.get(f"{BASE_URL}{path}", params=params, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT, stream=True, allow_redirects=False) as response:
+            if response.status_code == 404:
+                return None
+            if response.status_code in (429, 503) or response.status_code >= 500:
+                raise LrclibError("LRCLIB is busy right now. Try again in a little while.")
+            if response.status_code != 200:
+                raise LrclibError(f"LRCLIB answered with error {response.status_code}.")
+            pieces, size = [], 0
+            for piece in response.iter_content(chunk_size=65536):
+                size += len(piece)
+                if size > MAX_BYTES or time.monotonic() - started > DEADLINE:
+                    raise LrclibError("LRCLIB sent an answer that was too large or too slow to use.")
+                pieces.append(piece)
     except requests.RequestException as exc:
         raise LrclibError(f"Could not reach LRCLIB ({type(exc).__name__}).") from exc
-    if response.status_code == 404:
-        return None
-    if response.status_code in (429, 503) or response.status_code >= 500:
-        raise LrclibError("LRCLIB is busy right now. Try again in a little while.")
-    if response.status_code != 200:
-        raise LrclibError(f"LRCLIB answered with error {response.status_code}.")
     try:
-        return response.json()
-    except ValueError as exc:
+        return json.loads(b"".join(pieces))
+    except ValueError as exc:  # includes bytes that are not UTF-8
         raise LrclibError("LRCLIB sent an answer that could not be read.") from exc
 
 

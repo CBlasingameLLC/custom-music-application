@@ -5,7 +5,8 @@
         service.requests[0]["query"]  # what was asked: {"artist_name": "..."}
 
 A route is a (status, JSON body) pair or a function of the query returning one; any path it does not know answers 404
-with an empty body. `service.requests` records every request (path, query, headers) in order.
+with an empty body. `service.requests` records every request (path, query, headers) in order. `service.redirects` maps
+a path to another path the service sends the client on to (302), to see whether a client follows it.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ class Service:
     def __init__(self, routes: dict[str, Route]) -> None:
         self.routes = dict(routes)
         self.requests: list[dict[str, Any]] = []
+        self.redirects: dict[str, str] = {}
         self.url = ""
 
     def count(self, path: str) -> int:
@@ -40,6 +42,12 @@ def serve(routes: dict[str, Route] | None = None) -> Iterator[Service]:
             parts = urlsplit(self.path)
             query = dict(parse_qsl(parts.query))
             service.requests.append({"path": parts.path, "query": query, "headers": dict(self.headers)})
+            if parts.path in service.redirects:
+                self.send_response(302)
+                self.send_header("Location", service.url + service.redirects[parts.path])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             route = service.routes.get(parts.path) or service.routes.get(parts.path.rstrip("/"))
             status, body = (route(query) if callable(route) else route) if route is not None else (404, None)
             payload = b"" if body is None else json.dumps(body).encode("utf-8")
