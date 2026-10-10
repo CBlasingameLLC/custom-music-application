@@ -246,10 +246,11 @@ FAKE_DESKTOP = """
   const listeners = new Set();
   let status = { state: 'idle', current: '0.3.0', version: null, percent: 0, error: null, checkedAt: null };
   const push = (patch) => { status = { ...status, ...patch }; listeners.forEach((l) => l({ ...status })); };
-  window.__bridge = { calls: [], push };
+  window.__bridge = { calls: [], push, keys: null };
   window.mtk = {
     selectFolder: async () => null, selectFile: async () => null, showItemInFolder: async () => null,
     openPath: async () => null, openExternal: async () => null, onMediaKey: () => () => {},
+    mediaKeys: async () => window.__bridge.keys || { playpause: true, next: true, previous: true, stop: true },
     update: {
       status: async () => ({ ...status }),
       check: async () => { window.__bridge.calls.push('check'); push({ state: 'checking' }); setTimeout(() => push({ state: 'up-to-date', checkedAt: Date.now() }), 80); return { ...status }; },

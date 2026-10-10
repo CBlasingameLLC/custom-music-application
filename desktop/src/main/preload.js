@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('mtk', {
   showItemInFolder: (target) => ipcRenderer.invoke('show-item-in-folder', target),
   openPath: (target) => ipcRenderer.invoke('open-path', target),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  // Which of play/pause, next, previous and stop this app managed to claim: { playpause: true, ... }.
+  mediaKeys: () => ipcRenderer.invoke('media-keys'),
   // Returns a function that stops listening.
   onMediaKey: (listener) => {
     mediaKeyListeners.add(listener);

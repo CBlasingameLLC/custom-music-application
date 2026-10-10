@@ -23,6 +23,7 @@ class AppContext:
     token: str | None = None  # None disables auth (tests); the desktop app always sets one
     jobs: JobManager = field(default_factory=JobManager)
     previews: dict[str, Any] = field(default_factory=dict)  # the last "show me first" result per tool, kept in memory
+    scrobbler: Any = None  # sends plays to ListenBrainz in the background (set up by create_app)
 
     @property
     def data_dir(self) -> Path:

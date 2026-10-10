@@ -38,12 +38,12 @@ export function Sidebar() {
       <div class="nav-label">Listen</div>
       <${NavItem} to="/recent" icon="clock" label="Recently played" />
       <${NavItem} to="/discover" icon="compass" label="Discover" />
-      <${NavItem} to="/history" icon="chart" label="Listening history" />
+      <${NavItem} to="/history" icon="chart" label="Listening history" match=${starts('/history')} />
     </div>
     <div class="nav-group">
       <div class="nav-label">Manage</div>
       <${NavItem} to="/tools" icon="wrench" label="Library tools" match=${starts('/tools')} />
-      <${NavItem} to="/devices" icon="drive" label="Devices" />
+      <${NavItem} to="/devices" icon="drive" label="Devices" match=${starts('/devices')} />
       <${NavItem} to="/settings" icon="sliders" label="Settings" />
     </div>
     ${playlists.length > 0 && html`<div class="nav-group playlists-nav">
@@ -102,6 +102,8 @@ function summarize(job) {
   if (job.kind === 'dedupe-restore') return `${r.moved || 0} restored${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
   if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
+  if (job.kind === 'sync-preview') return `${r.to_copy || 0} to copy · ${r.unchanged || 0} already there${r.to_prune ? ` · ${r.to_prune} no longer chosen` : ''}`;
+  if (job.kind === 'sync') return `${r.copied || 0} copied${r.pruned ? ` · ${r.pruned} removed` : ''}${r.errors_total ? ` · ${r.errors_total} failed` : ''}${r.aborted ? ` · stopped early` : ''}`;
   return job.message || 'Finished';
 }
 

@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.3.0)
+## What it does (v0.4.0)
 
 | Area | Features |
 |---|---|
@@ -34,9 +34,11 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
 | **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded or `.lrc`, synced highlighting), folders added from Settings |
-| **History** | Every listen is logged locally, with top-artist stats |
+| **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
 | **Discover** | New-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
-| **Devices** | See connected drives and removable media |
+| **Devices** | Copy music to a Walkman, phone, SD card or USB stick (anything that shows up as a drive): choose what goes on it, preview, copy only what changed. See below |
+| **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
+| **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, responsive down to a narrow window |
 | **Library tools** | Everything that changes your files shows a preview first, runs as a job with progress and a Cancel button, and can be undone. See below |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |
@@ -51,9 +53,31 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Find duplicates** | Finds the same song by MusicBrainz ID, by artist + title + length, and optionally by file content. You pick the copy to keep (best quality is suggested). The rest move to a `_duplicates_review` folder inside your library folder, hidden from the library; their plays, playlist entries, rating and favorite go to the copy you keep, and come back if you restore. Emptying the review folder sends files to the Recycle Bin after you type DELETE |
 | **Missing files** | Songs whose files cannot be found (usually an unplugged drive), grouped by folder. They keep their plays and playlists until you choose to forget them |
 
-Still command-line only for now (they ship with proper screens in 0.4.0):
-syncing to a player/SD card, importing Spotify history, scrobbling. See the
-table below.
+### Devices (Devices in the sidebar)
+
+1. **Add a device**: plug it in and pick it from the drives the app finds (a drive with a `Music` folder uses that
+   folder), or choose a folder yourself.
+2. **Choose what goes on it**: any mix of the whole library, favorites, playlists (manual or smart), a genre,
+   songs rated at least N stars, or recently added music. Pick the folder layout, and whether playlists
+   (as relative `.m3u8` files) and folder pictures come along.
+3. **Preview**: what would be copied (new, changed, moved), what is already there, what is no longer chosen,
+   and what is left out and why (FAT32's 4 GB limit, paths too long for the device, name clashes), against
+   the free space.
+4. **Copy**: only what changed. Each file is written under a temporary name and renamed when complete, so
+   unplugging mid-copy never leaves half a song; stop any time and carry on later.
+5. Songs no longer chosen are removed **only if you tick the box and confirm the exact number**, and only files
+   this app copied. A different drive that has taken over the drive letter is never written to.
+
+A player in **MTP mode** (no drive letter; many Walkmans and phones by default) is not supported yet: switch the
+player's USB connection to *mass storage* (MSC) if it offers that. MTP support is planned for 0.4.1.
+
+### Spotify history and ListenBrainz
+
+Listening history, then Import Spotify history walks through it: request the *Extended streaming history* from
+Spotify, choose the ZIP, see what is in it (plays, years, most played artists), add it. Importing twice adds
+nothing twice and every import can be undone. Sending it to your ListenBrainz account is optional and resumable.
+Plays you make in the app are sent to ListenBrainz in the background (Settings, Accounts) when you have saved a
+token: they are kept and retried if you are offline, and a rejected token is reported instead of retried forever.
 
 ### Keyboard
 
@@ -79,8 +103,8 @@ defaults to a dry run; pass `--apply` to execute.
 | `mtk dedupe [--apply] [--content-hash]` | Detect and quarantine likely duplicates, keeping the best copy of each |
 | `mtk devices` | List removable volumes |
 | `mtk import-playlist <path> [--name NAME]` | Import an M3U/M3U8 playlist |
-| `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Copy a selection onto a device |
-| `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History |
+| `mtk sync <target> [--playlist X \| --tag X \| --min-rating N \| --all] [--apply] [--prune]` | Copy a selection onto a device (the app's Devices page adds a preview, progress and confirmation) |
+| `mtk import-spotify <zip_or_folder> [--submit-listenbrainz]` | Import Spotify's Extended Streaming History (the app's Import Spotify history page walks through it) |
 | `mtk recommend [--source listenbrainz\|lastfm\|both] [--limit N]` | Fetch new-music recommendations |
 | `mtk review` | Triage pending recommendations |
 

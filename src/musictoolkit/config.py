@@ -39,6 +39,7 @@ class ListenBrainzConfig:
     username: str = ""
     user_token: str = ""
     scrobble: bool = True  # submit plays from the in-app player as they happen
+    now_playing: bool = False  # also tell ListenBrainz what is playing right now (shown for a few minutes, never kept)
 
 
 @dataclass

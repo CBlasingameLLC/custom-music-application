@@ -680,3 +680,76 @@ input.mono { font-size: 13.5px; }
 .status-line + .progress { margin: 0 0 12px; }
 .update-pill { display: block; margin-top: 6px; padding: 4px 10px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 .update-pill:hover { background: var(--accent); color: var(--on-accent); }
+
+/* ---- devices ---- */
+.device-list { display: grid; gap: 12px; }
+.device-card { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 16px 18px; border-radius: var(--radius); background: var(--bg-elev); border: 1px solid var(--border); }
+.device-card.offline { border-style: dashed; }
+.device-icon { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
+.device-main { min-width: 0; }
+.device-main h3 { margin: 0 0 2px; font-size: 16px; }
+.device-main h3 a { color: inherit; text-decoration: none; }
+.device-main h3 a:hover { text-decoration: underline; }
+.device-main p { margin: 3px 0; font-size: 13px; overflow-wrap: anywhere; }
+.device-actions { display: flex; align-items: center; gap: 8px; }
+.capacity { height: 6px; max-width: 360px; margin: 8px 0 3px; border-radius: 999px; background: var(--bg-active); overflow: hidden; }
+.capacity > div { height: 100%; border-radius: 999px; background: var(--accent); }
+.device-status { display: flex; flex-direction: column; gap: 4px; margin: -2px 0 4px; font-size: 13px; }
+.device-status .capacity { margin: 0; max-width: 420px; }
+.badge.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.volume-list { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.volume-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+.volume-list .volume-row + .volume-row { border-top: 1px solid var(--border); }
+.callout.nearby .volume-row { padding: 8px 0 0; border-top: 1px solid var(--border); }
+.volume-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.volume-main .subtle { font-size: 12.5px; overflow-wrap: anywhere; }
+.source-editor { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
+.source-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 34px; }
+.source-chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px 5px 13px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
+.source-chip button { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
+.source-chip button:hover:not(:disabled) { background: var(--bg-active); }
+.source-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.source-add select { max-width: 100%; }
+.option-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; }
+.option-list .check-row, .prune-row { align-items: flex-start; font-size: 13.5px; cursor: pointer; }
+.option-list .check-row input, .prune-row input { margin-top: 3px; }
+.prune-row { margin: 0 0 12px; padding-left: 0; }
+.reasons { margin: -6px 0 14px; font-size: 13px; }
+.sync-table { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.sync-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; padding: 9px 14px; font-size: 13px; }
+.sync-row + .sync-row { border-top: 1px solid var(--border); }
+.sync-row:hover { background: var(--bg-hover); }
+.sync-row .song { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sync-row .meta { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 10px; color: var(--text-dim); font-size: 12.5px; }
+.sync-row .where { grid-column: 1; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--text-dim); }
+.sync-row .detail { grid-column: 1; font-size: 12px; }
+.reason { padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; background: var(--bg-active); color: var(--text-dim); }
+.reason.new { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
+.reason.missing, .reason.damaged { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+@media (max-width: 720px) {
+  .device-card { grid-template-columns: 40px minmax(0, 1fr); gap: 12px; }
+  .device-icon { width: 40px; height: 40px; }
+  .device-actions { grid-column: 1 / -1; }
+}
+
+/* ---- connection tests and scrobbling status ---- */
+.test-result { display: inline-flex; align-items: flex-start; gap: 6px; font-size: 13px; line-height: 1.4; }
+.test-result svg { flex: none; margin-top: 2px; }
+.test-result.ok { color: var(--good); }
+.test-result.bad { color: var(--warn); }
+.status-line.rejected, .status-line.waiting { color: var(--warn); }
+.status-line.off { color: var(--text-dim); }
+
+/* ---- importing history ---- */
+.steps { margin: 6px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.5; }
+.section-title.small { margin: 18px 0 10px; font-size: 14px; color: var(--text-dim); }
+
+/* ---- diagnostics ---- */
+.diag-list { list-style: none; margin: 14px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.diag { display: grid; grid-template-columns: 18px minmax(120px, 190px) minmax(0, 1fr); gap: 4px 12px; align-items: baseline; padding: 9px 14px; font-size: 13px; }
+.diag + .diag { border-top: 1px solid var(--border); }
+.diag svg { align-self: center; color: var(--text-faint, var(--text-dim)); }
+.diag.ok svg { color: var(--good); }
+.diag.bad svg { color: var(--warn); }
+.diag span { color: var(--text-dim); overflow-wrap: anywhere; }
+@media (max-width: 720px) { .diag { grid-template-columns: 18px minmax(0, 1fr); } .diag span { grid-column: 2; } }

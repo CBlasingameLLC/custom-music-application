@@ -9,7 +9,9 @@ import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, S
 import { PlaylistsView, PlaylistView } from './views/playlists.js';
 import { NowPlayingView } from './views/nowplaying.js';
 import { SettingsView } from './views/settings.js';
-import { DevicesView, DiscoverView, HistoryView } from './views/discover.js';
+import { DiscoverView, HistoryView } from './views/discover.js';
+import { DeviceView, DevicesView } from './views/devices.js';
+import { ImportView } from './views/importer.js';
 import { EnrichView, ToolsView } from './views/tools.js';
 import { OrganizeView } from './views/organize.js';
 import { DuplicatesView } from './views/duplicates.js';
@@ -32,8 +34,8 @@ function View() {
     case 'now': return html`<${NowPlayingView} />`;
     case 'search': return html`<${SearchView} term=${second || ''} />`;
     case 'discover': return html`<${DiscoverView} />`;
-    case 'devices': return html`<${DevicesView} />`;
-    case 'history': return html`<${HistoryView} />`;
+    case 'devices': return second ? html`<${DeviceView} key=${second} id=${second} />` : html`<${DevicesView} />`;
+    case 'history': return second === 'import' ? html`<${ImportView} />` : html`<${HistoryView} />`;
     case 'tools':
       if (second === 'enrich') return html`<${EnrichView} />`;
       if (second === 'organize') return html`<${OrganizeView} />`;
