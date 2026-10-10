@@ -210,6 +210,30 @@ def devices_and_accounts(client: Client, scratch: Path, count: int) -> None:
     check(status == 200 and len(imports["items"]) == 1 and imports["items"][0]["plays"] == 1, "the import is listed so it can be undone")
 
 
+def phones(client: Client, scratch: Path, count: int) -> None:
+    """A phone without a drive letter, reached through a stand-in for the helper that the frozen backend starts itself."""
+    status, listing = client.json("/api/devices/mtp?fresh=true")
+    check(status == 200 and listing["available"] and not listing["error"] and [d["serial"] for d in listing["devices"]] == ["SER1"],
+          f"the backend starts the helper and lists the phone ({listing})")
+    status, device = client.json("/api/devices/mtp", "POST", {"serial": "SER1", "storage": "s1"})
+    check(status == 201 and device["kind"] == "mtp" and device["connected"] and device["free"], f"the phone becomes a device ({device})")
+    _, started = client.json(f"/api/devices/{device['id']}/preview", "POST", {"sources": [{"kind": "all"}]})
+    preview = wait_job(client, started["job"]["id"])
+    result = preview.get("result") or {}
+    check(preview["status"] == "done" and result.get("to_copy", 0) >= 1 and result["to_copy"] + result["skipped"] == count,
+          f"the phone's sync preview lists what would be copied ({result or preview.get('error')})")
+    music = scratch / "phones" / "SER1" / "s1" / "Music"
+    check(not list(music.rglob("*.mp3")), "a preview writes nothing to the phone")
+    status, started = client.json(f"/api/devices/{device['id']}/sync", "POST", {"job_id": preview["id"]})
+    done = wait_job(client, started["job"]["id"])
+    copied = (done.get("result") or {}).get("copied", 0)
+    check(status == 200 and done["status"] == "done" and copied == result["to_copy"] and not done["result"]["errors"],
+          f"songs are copied to the phone ({done.get('result') or done.get('error')})")
+    check(len(list(music.rglob("*.mp3"))) == copied, "the copied files are on the phone")
+    status, described = client.json(f"/api/devices/{device['id']}")
+    check(status == 200 and described["synced"] == copied, "the phone remembers what was copied")
+
+
 def run(exe: Path, fixtures: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix="mtk-smoke-"))
     profile, elsewhere, music = scratch / "profile", scratch / "elsewhere", scratch / "music"
@@ -225,6 +249,15 @@ def run(exe: Path, fixtures: Path) -> None:
     port = free_port()
     log_path = scratch / "backend.log"
     env = {**os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN}
+    # A stand-in for mtk-mtp.exe that keeps its "phones" in folders: the real one needs a phone plugged in.
+    fake_helper = fixtures.resolve().parent / "fake_mtp_helper.py"
+    if fake_helper.exists():
+        (scratch / "phones" / "SER1").mkdir(parents=True)
+        (scratch / "phones" / "SER1" / "device.json").write_text(json.dumps({
+            "name": "Smoke phone", "manufacturer": "Test", "model": "T1",
+            "storages": [{"id": "s1", "name": "Internal storage", "capacity": 50_000_000}],
+        }))
+        env["MTK_MTP_HELPER"] = json.dumps([sys.executable, str(fake_helper), str(scratch / "phones")])
     with open(log_path, "w") as log:
         kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {"start_new_session": True}
         process = subprocess.Popen(
@@ -282,6 +315,8 @@ def run(exe: Path, fixtures: Path) -> None:
               f"Range streaming for the player ({status} {headers.get('content-range')})")
         library_tools(client, music, len(mp3s))
         devices_and_accounts(client, scratch, len(mp3s))
+        if fake_helper.exists():
+            phones(client, scratch, len(mp3s))
         check(client.request(f"/api/tracks/{track['id']}/info")[0] == 200, "song details")
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
         check(client.request("/api/home")[0] == 200, "Home data")
