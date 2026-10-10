@@ -272,6 +272,20 @@ class TestPhones:
 
         expect(section).to_contain_text("Pixel (Pixel 8) · Internal storage")
 
+    def test_a_locked_phone_is_listed_with_what_to_do(self, page, live, phones):
+        write_device(phones, "LOCKED", name="Locked phone")
+        info = json.loads((phones / "LOCKED" / "device.json").read_text())
+        info["error"] = "The device is locked"
+        (phones / "LOCKED" / "device.json").write_text(json.dumps(info))
+        add_library(page, live)
+
+        section = self.open_add_dialog(page)
+
+        expect(section).to_contain_text("Locked phone")
+        expect(section).to_contain_text("The device is locked")
+        expect(section).to_contain_text("Unlock it, choose “File transfer”, then look again")
+        expect(section.get_by_role("button", name="Add", exact=True)).to_have_count(0)
+
     def test_an_unplugged_phone_says_what_to_do_and_cannot_be_synced(self, page, live, phones):
         write_device(phones)
         add_library(page, live)

@@ -288,3 +288,28 @@ def test_drive_letter_devices_are_unaffected_by_phones(web, phones, tmp_path) ->
     shutil.rmtree(card)
     assert web.client.get(f"/api/devices/{drive['id']}").json()["connected"] is False
     assert web.client.get(f"/api/devices/{phone['id']}").json()["connected"] is True
+
+
+def test_a_phone_that_does_not_report_its_room_can_still_be_synced(web, phones) -> None:
+    device = add_phone(web)
+    control(phones, free_unknown=True)
+    mtp.forget_listing()
+
+    described = web.client.get(f"/api/devices/{device['id']}").json()
+    assert described["connected"] is True and described["free"] is None
+    job = preview(web, device, FOLK)
+    assert job.result["enough_space"] is True
+    assert finish(web, run_sync(web, device, job)).result["copied"] == 2
+
+
+def test_a_phone_that_is_found_but_will_not_open_is_listed_with_the_reason(web, phones) -> None:
+    write_device(phones, "LOCKED", name="Locked phone")
+    info = json.loads((phones / "LOCKED" / "device.json").read_text())
+    info["error"] = "The device is locked"
+    (phones / "LOCKED" / "device.json").write_text(json.dumps(info))
+
+    listing = web.client.get("/api/devices/mtp", params={"fresh": True}).json()
+
+    locked = next(d for d in listing["devices"] if d["serial"] == "LOCKED")
+    assert (locked["storages"], locked["error"]) == ([], "The device is locked")
+    assert [d["serial"] for d in listing["devices"] if d["storages"]] == [SERIAL]

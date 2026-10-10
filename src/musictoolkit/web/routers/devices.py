@@ -416,7 +416,8 @@ def _connected_device(ctx: AppContext, conn, device_id: int) -> tuple[Any, Where
         if storage is None:
             raise HTTPException(status_code=409, detail=_mtp_trouble(listing, device))
         key = f"mtp:{row['mtp_serial']}:{storage['id']}:{row['mtp_base']}"
-        return row, Where(key, None, int(storage.get("free") or 0), int(storage["capacity"]) if storage.get("capacity") else None)
+        free = int(storage["free"]) if storage.get("free") is not None else mtp.UNKNOWN_FREE
+        return row, Where(key, None, free, int(storage["capacity"]) if storage.get("capacity") else None)
     described = _describe(conn, row)
     if described["different_drive"]:
         raise HTTPException(status_code=409, detail="A different drive is using that drive letter now. Check that the right device is plugged in.")

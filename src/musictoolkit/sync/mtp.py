@@ -41,6 +41,7 @@ CALL_TIMEOUT = 300.0  # seconds for one request (a long song over a slow USB por
 CODES = {"no_space": errno.ENOSPC, "disconnected": errno.ENODEV, "not_found": errno.ENOENT}
 LISTING_TTL = 3.0  # seconds a list of plugged-in devices is reused, so a busy screen does not start a helper per request
 DEFAULT_BASE = "Music"
+UNKNOWN_FREE = 2**62  # a device that does not say how much room it has is not held back; it refuses when it is full
 NOT_CONNECTED = "The phone or player is not connected. Plug it in, unlock it, and choose File transfer on the device."
 NO_STORAGE = "The device is connected but its storage is not available. Unlock it and choose File transfer."
 
@@ -287,7 +288,8 @@ class MtpTarget:
             return False
 
     def free_space(self) -> int:
-        return int(self.helper.call("free", storage=self.storage_id)["free"])
+        free = self.helper.call("free", storage=self.storage_id).get("free")
+        return int(free) if free is not None else UNKNOWN_FREE
 
     def capacity(self) -> int | None:
         total = self.storage.get("capacity")

@@ -3,9 +3,11 @@
     python tests/fake_mtp_helper.py <root>
 
 <root>/<serial>/device.json     {"name": "...", "manufacturer": "...", "model": "...", "storages": [{"id": "s1", "name": "Internal storage", "capacity": 1000000}]}
+                                ("error": "The device is locked" makes it show up but offer no storage)
 <root>/<serial>/<storage id>/   the storage's files
 <root>/control.json             optional, read before every command, to make things go wrong:
-                                {"unplugged": ["serial"], "noise": true, "fail_put": {"match": "Song B", "code": "no_space", "partial": true}}
+                                {"unplugged": ["serial"], "noise": true, "free_unknown": true,
+                                 "fail_put": {"match": "Song B", "code": "no_space", "partial": true}}
                                 (the command "hang" never answers)
 
 Real devices write straight to the final name (there is no rename on MTP), and so does this: a failing put with
@@ -39,14 +41,19 @@ class Fake:
     def unplugged(self, serial: str) -> bool:
         return serial in self.control().get("unplugged", [])
 
-    def describe(self, folder: Path) -> dict:
+    def describe(self, folder: Path, hide_free: bool = True) -> dict:
         info = json.loads((folder / "device.json").read_text())
         storages = []
         for s in info.get("storages", []):
             used = sum(f.stat().st_size for f in (folder / s["id"]).rglob("*") if f.is_file()) if (folder / s["id"]).is_dir() else 0
             storages.append({"id": s["id"], "name": s["name"], "capacity": s["capacity"], "free": max(0, s["capacity"] - used)})
-        return {"id": f"fake:{folder.name}", "serial": folder.name, "name": info.get("name", folder.name), "manufacturer": info.get("manufacturer", ""),
-                "model": info.get("model", ""), "storages": storages}
+        if hide_free and self.control().get("free_unknown"):
+            storages = [{**s, "free": None} for s in storages]  # a phone that does not say how much room it has
+        described = {"id": f"fake:{folder.name}", "serial": folder.name, "name": info.get("name", folder.name), "manufacturer": info.get("manufacturer", ""),
+                     "model": info.get("model", ""), "storages": storages}
+        if info.get("error"):  # found, but it will not open (locked, charging only)
+            described.update(storages=[], error=info["error"])
+        return described
 
     def where(self, storage: str, path: str) -> Path:
         assert self.device is not None
@@ -98,7 +105,7 @@ class Fake:
             source = Path(request["source"])
             size = source.stat().st_size
             failure = self.control().get("fail_put")
-            free = next(s for s in self.describe(self.device)["storages"] if s["id"] == storage)["free"]
+            free = next(s for s in self.describe(self.device, hide_free=False)["storages"] if s["id"] == storage)["free"]
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 free += target.stat().st_size

@@ -21,3 +21,8 @@ config.toml
 Thumbs.db
 .vscode/
 .idea/
+
+# The MTP helper (helpers/mtp) builds into its own out/ folder
+/helpers/mtp/out/
+/helpers/mtp/bin/
+/helpers/mtp/obj/

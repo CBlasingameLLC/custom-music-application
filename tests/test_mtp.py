@@ -245,3 +245,9 @@ def test_an_unplugged_device_says_so(target, phones, tmp_path) -> None:
     with pytest.raises(TargetError) as gone:
         target.size_of("a.mp3")
     assert gone.value.errno == errno.ENODEV
+
+
+def test_a_phone_that_does_not_say_how_much_room_it_has_is_not_held_back(phones, target) -> None:
+    control(phones, free_unknown=True)
+
+    assert target.free_space() == mtp.UNKNOWN_FREE

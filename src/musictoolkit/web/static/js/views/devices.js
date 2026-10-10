@@ -128,13 +128,23 @@ function PhonesSection({ close, onAdded }) {
   }
 
   const found = (data?.devices || []).flatMap((d) => d.storages.map((s) => ({ device: d, storage: s })));
+  const unready = (data?.devices || []).filter((d) => d.storages.length === 0); // plugged in, but showing nothing to copy to
   return html`<section class="phones" aria-label="Phones and players without a drive letter">
     <h3>Phones and players without a drive letter<span class="badge warn">experimental</span></h3>
     ${loading && !data ? html`<${Spinner} />` : data && !data.available
       ? html`<p class="subtle">${data.reason}</p>`
       : html`
         ${data?.error && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>${data.error}</span></p>`}
-        ${!data?.error && found.length === 0 && html`<p class="subtle">None found. Plug the phone in with a USB cable, unlock its screen, and choose “File transfer” in the notification on it. Then look again.</p>`}
+        ${!data?.error && (data?.devices || []).length === 0 && html`<p class="subtle">None found. Plug the phone in with a USB cable, unlock its screen, and choose “File transfer” in the notification on it. Then look again.</p>`}
+        ${unready.length > 0 && html`<div class="volume-list">
+          ${unready.map((device) => html`<div class="volume-row" key=${device.serial}>
+            <${Icon} name="phone" size=${20} />
+            <div class="volume-main">
+              <strong>${device.name}${device.model && device.model !== device.name ? ` (${device.model})` : ''}</strong>
+              <span class="subtle">${device.error || 'It is connected but offers nothing to copy to.'} Unlock it, choose “File transfer”, then look again.</span>
+            </div>
+          </div>`)}
+        </div>`}
         ${found.length > 0 && html`<div class="volume-list">
           ${found.map(({ device, storage }) => html`<div class="volume-row" key=${device.serial + storage.id}>
             <${Icon} name="phone" size=${20} />
