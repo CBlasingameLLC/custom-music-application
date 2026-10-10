@@ -10,6 +10,7 @@ import { PlaylistsView, PlaylistView } from './views/playlists.js';
 import { NowPlayingView } from './views/nowplaying.js';
 import { SettingsView } from './views/settings.js';
 import { DiscoverView, HistoryView } from './views/discover.js';
+import { StatsView } from './views/stats.js';
 import { DeviceView, DevicesView } from './views/devices.js';
 import { ImportView } from './views/importer.js';
 import { EnrichView, ToolsView } from './views/tools.js';
@@ -35,6 +36,7 @@ function View() {
     case 'search': return html`<${SearchView} term=${second || ''} />`;
     case 'discover': return html`<${DiscoverView} />`;
     case 'devices': return second ? html`<${DeviceView} key=${second} id=${second} />` : html`<${DevicesView} />`;
+    case 'stats': return html`<${StatsView} key=${query.range || ''} />`;
     case 'history': return second === 'import' ? html`<${ImportView} />` : html`<${HistoryView} />`;
     case 'tools':
       if (second === 'enrich') return html`<${EnrichView} />`;

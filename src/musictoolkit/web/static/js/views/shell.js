@@ -38,7 +38,8 @@ export function Sidebar() {
       <div class="nav-label">Listen</div>
       <${NavItem} to="/recent" icon="clock" label="Recently played" />
       <${NavItem} to="/discover" icon="compass" label="Discover" />
-      <${NavItem} to="/history" icon="chart" label="Listening history" match=${starts('/history')} />
+      <${NavItem} to="/stats" icon="chart" label="Stats" />
+      <${NavItem} to="/history" icon="calendar" label="Listening history" match=${starts('/history')} />
     </div>
     <div class="nav-group">
       <div class="nav-label">Manage</div>

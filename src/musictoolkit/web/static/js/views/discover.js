@@ -65,6 +65,7 @@ export function HistoryView() {
   const max = Math.max(1, ...(top?.items || []).map((a) => a.plays));
   return html`
     <${PageHeader} title="Listening history" subtitle=${top ? `${fmt.plural(top.total_plays, 'play')} recorded` : ''}>
+      <${Button} icon="chart" onClick=${() => go('/stats')}>See your stats<//>
       <${Button} icon="upload" onClick=${() => go('/history/import')}>Import Spotify history<//>
       <label class="sort-select"><span>Period</span><select value=${days} onChange=${(e) => setDays(Number(e.target.value))}>
         <option value="0">All time</option><option value="365">Last year</option><option value="30">Last 30 days</option><option value="7">Last 7 days</option></select></label>

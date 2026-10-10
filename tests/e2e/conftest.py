@@ -74,7 +74,9 @@ def live(tmp_path: Path):
 @pytest.fixture
 def page(browser, live):
     """A page already signed in to `live`. Any console error, uncaught exception or failed request fails the test."""
-    context = browser.new_context(viewport={"width": 1360, "height": 860})
+    # One locale and time zone everywhere, so the dates and hours the UI prints (and the days a play belongs to) do not
+    # depend on the machine the tests run on.
+    context = browser.new_context(viewport={"width": 1360, "height": 860}, locale="en-US", timezone_id="UTC")
     page = context.new_page()
     problems: list[str] = []
     # A song without cover art answers its image request with 404; the UI draws a placeholder.
