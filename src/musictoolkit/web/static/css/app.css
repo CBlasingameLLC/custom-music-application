@@ -739,3 +739,7 @@ input.mono { font-size: 13.5px; }
 .test-result.bad { color: var(--warn); }
 .status-line.rejected, .status-line.waiting { color: var(--warn); }
 .status-line.off { color: var(--text-dim); }
+
+/* ---- importing history ---- */
+.steps { margin: 6px 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.5; }
+.section-title.small { margin: 18px 0 10px; font-size: 14px; color: var(--text-dim); }
