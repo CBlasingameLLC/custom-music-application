@@ -30,7 +30,7 @@ def test_first_run_walks_a_new_user_to_a_playable_library(page, live):
     expect(page.get_by_text("Library updated: 9 added")).to_be_visible(timeout=60_000)
     expect(page.locator(".shelf").first).to_be_visible()
     expect(page.locator(".sidebar")).to_contain_text("9 songs")
-    page.get_by_role("link", name="Songs").click()
+    page.get_by_role("link", name="Songs", exact=True).click()
     expect(page.locator(".trow:not(.skeleton)")).to_have_count(9)
 
 

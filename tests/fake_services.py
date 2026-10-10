@@ -40,7 +40,7 @@ def serve(routes: dict[str, Route] | None = None) -> Iterator[Service]:
             parts = urlsplit(self.path)
             query = dict(parse_qsl(parts.query))
             service.requests.append({"path": parts.path, "query": query, "headers": dict(self.headers)})
-            route = service.routes.get(parts.path)
+            route = service.routes.get(parts.path) or service.routes.get(parts.path.rstrip("/"))
             status, body = (route(query) if callable(route) else route) if route is not None else (404, None)
             payload = b"" if body is None else json.dumps(body).encode("utf-8")
             self.send_response(status)

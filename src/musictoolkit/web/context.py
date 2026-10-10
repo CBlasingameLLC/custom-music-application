@@ -24,6 +24,7 @@ class AppContext:
     jobs: JobManager = field(default_factory=JobManager)
     previews: dict[str, Any] = field(default_factory=dict)  # the last "show me first" result per tool, kept in memory
     scrobbler: Any = None  # sends plays to ListenBrainz in the background (set up by create_app)
+    radar: Any = None  # looks for new releases about once a day when the person turned that on (set up by create_app)
 
     @property
     def data_dir(self) -> Path:

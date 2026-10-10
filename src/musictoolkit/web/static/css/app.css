@@ -507,6 +507,16 @@ input.short { width: 90px; }
 .reco-links { display: flex; gap: 8px; flex-wrap: wrap; }
 .reco-actions { display: flex; gap: 8px; flex: none; }
 .dash { color: var(--text-faint); }
+.release { align-items: flex-start; }
+.release .reco-main { flex: 1; }
+.release .badge { margin: 0 8px 0 0; }
+.release-art { width: 88px; flex: none; }
+.release-art .cover { border-radius: 8px; }
+.badge.soon { background: rgba(243, 185, 77, 0.18); color: var(--warn); }
+.radar-bar { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; flex-wrap: wrap; }
+.radar-foot { margin-top: 18px; font-size: 13px; }
+.radar-foot a { text-decoration: underline; }
+.link-btn { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; font: inherit; text-decoration: underline; }
 .drive-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 .drive { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: var(--radius); background: var(--bg-elev); border: 1px solid var(--border); }
 .drive.removable { border-color: var(--accent); }

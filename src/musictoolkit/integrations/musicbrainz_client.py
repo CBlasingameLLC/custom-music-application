@@ -23,6 +23,14 @@ def search_recording(artist: str, title: str, limit: int = 5) -> list[dict]:
     return result.get("recording-list", [])
 
 
+def search_release_groups(query: str, limit: int = 25) -> list[dict]:
+    """Release groups (an album, EP or single, however many editions it has) matching a Lucene query."""
+    if not _configured:
+        raise RuntimeError("musicbrainz_client.configure() must be called first")
+    result = musicbrainzngs.search_release_groups(query=query, limit=limit)
+    return result.get("release-group-list", [])
+
+
 def best_match(artist: str, title: str) -> dict | None:
     """Return MusicBrainz's single highest-relevance-score candidate, or None."""
     candidates = search_recording(artist, title)
