@@ -210,7 +210,7 @@ function DeviceCard({ device, onChanged }) {
     <span class="device-icon"><${Icon} name="drive" size=${24} /></span>
     <div class="device-main">
       <h3><a href=${href(`/devices/${device.id}`)}>${device.label}</a>${!device.connected && html`<span class="badge warn">Not connected</span>`}</h3>
-      <p class="subtle path">${device.path}${device.fs ? ` · ${device.fs}` : ''}${device.removable ? ' · removable' : ''}</p>
+      <p class="subtle path">${device.path}${device.volume_label && device.volume_label !== device.label ? ` (${device.volume_label})` : ''}${device.fs ? ` · ${device.fs}` : ''}${device.removable ? ' · removable' : ''}</p>
       ${device.connected && html`<${Capacity} device=${device} /><p class="subtle">${roomText(device)}</p>`}
       ${device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>A different drive is using ${device.path} now. Plug the right device in, or choose its folder again.</span></p>`}
       ${!device.connected && !device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>Not connected. Plug it in, or choose its folder again if its drive letter changed.</span></p>`}

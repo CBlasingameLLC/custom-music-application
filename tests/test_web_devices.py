@@ -65,6 +65,14 @@ def test_a_folder_becomes_a_device_with_room_and_nothing_synced(web, card) -> No
     assert [d["id"] for d in web.client.get("/api/devices").json()["items"]] == [device["id"]]
 
 
+def test_a_new_device_is_named_for_its_folder_or_for_a_whole_drive_after_the_drive() -> None:
+    folder = Path("/media/walkman/MUSIC")
+    assert devices_router._label_for(folder, "WALKMAN", None) == "MUSIC", "a folder on a drive keeps its own name"
+    assert devices_router._label_for(Path("/"), "WALKMAN", None) == "WALKMAN", "a whole drive takes the drive's name"
+    assert devices_router._label_for(Path("/"), None, None) == str(Path("/"))
+    assert devices_router._label_for(folder, "WALKMAN", "  Gym player ") == "Gym player", "the person's own name wins"
+
+
 def test_a_device_can_be_named_and_added_only_once(web, card) -> None:
     first = add_device(web, card, "My Walkman")
     again = add_device(web, card, "Something else")

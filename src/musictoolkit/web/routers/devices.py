@@ -102,6 +102,13 @@ def _usable_folder(ctx: AppContext, raw: str) -> Path:
     return path.resolve()
 
 
+def _label_for(path: Path, volume_label: str | None, given: str | None) -> str:
+    """What to call a new device: the person's own name; else, for a whole drive, the drive's name ("WALKMAN");
+    else the folder's name (a folder on a drive is better told apart by its own name than by the drive's)."""
+    whole_drive = path == Path(path.anchor)
+    return (given or "").strip() or (volume_label if whole_drive and volume_label else "") or path.name or str(path)
+
+
 def _describe(conn, row) -> dict[str, Any]:
     path = row["last_seen_mount_path"]
     exists = Path(path).is_dir()
@@ -193,7 +200,7 @@ def add_device(body: DeviceBody, ctx: AppContext = Depends(get_ctx)) -> dict:
             conn.execute("UPDATE devices SET last_seen_mount_path = ? WHERE id = ?", (str(path), existing["id"]))
             conn.commit()
             return _out(ctx, conn, _row(conn, existing["id"]))
-        label = (body.label or "").strip() or info.label or path.name or str(path)
+        label = _label_for(path, info.label, body.label)
         device_id = mirror.get_or_create_device(conn, str(path), label)
         conn.execute(
             "UPDATE devices SET volume_serial = ?, volume_label = ?, fs = ? WHERE id = ?",
