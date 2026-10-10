@@ -346,7 +346,7 @@ def preview_page(
         chosen = plan.to_copy[offset:offset + limit]
         items = [
             {"track_id": i.row["id"], "title": i.row["title"] or Path(i.row["file_path"]).stem, "artist": i.row["artist"],
-             "album": i.row["album"], "size": i.row["file_size"], "to": str(i.dest.relative_to(held["root"])).replace("\\", "/"),
+             "album": i.row["album"], "size": i.row["file_size"], "to": i.relative,
              "reason": i.reason}
             for i in chosen
         ]

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from musictoolkit.sync import device_detect, mirror
+from musictoolkit.sync import device_detect, mirror, targets
 from musictoolkit.web.routers import devices as devices_router
 from tests.conftest import ids_by_title
 
@@ -351,14 +351,14 @@ def test_pointing_a_device_at_a_different_drive_is_refused(web, card, tmp_path, 
 def test_a_second_sync_is_refused_while_one_runs_and_a_cancel_keeps_the_copies(web, card, monkeypatch) -> None:
     device = add_device(web, card)
     started, gate = threading.Event(), threading.Event()
-    real = mirror._copy_file
+    real = targets._copy_file
 
     def slow(source, dest):
         started.set()
         gate.wait(10)
         return real(source, dest)
 
-    monkeypatch.setattr(mirror, "_copy_file", slow)
+    monkeypatch.setattr(targets, "_copy_file", slow)
     job = preview(web, device)
     running = run_sync(web, device, job).json()["job"]
     assert started.wait(10)
@@ -369,7 +369,7 @@ def test_a_second_sync_is_refused_while_one_runs_and_a_cancel_keeps_the_copies(w
     finally:
         gate.set()
     assert web.ctx.jobs.wait(running["id"]).status == "cancelled"
-    monkeypatch.setattr(mirror, "_copy_file", real)
+    monkeypatch.setattr(targets, "_copy_file", real)
 
     synced = web.client.get(f"/api/devices/{device['id']}").json()["synced"]
     assert 1 <= synced < 9
