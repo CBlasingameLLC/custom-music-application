@@ -32,6 +32,7 @@ from musictoolkit.web.routers import (
     library,
     manage,
     missing,
+    mixes,
     organize,
     playback,
     playlists,
@@ -125,7 +126,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats, mixes):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)
