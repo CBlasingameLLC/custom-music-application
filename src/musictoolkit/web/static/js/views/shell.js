@@ -4,7 +4,7 @@ import { Icon } from '../icons.js';
 import { Cover, IconButton } from '../components.js';
 import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
 import { QueueList } from './nowplaying.js';
-import { setFavorite } from '../tracks.js';
+import { setFavorite, startRadio } from '../tracks.js';
 import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
 // ------------------------------------------------------------ sidebar
@@ -38,7 +38,8 @@ export function Sidebar() {
       <div class="nav-label">Listen</div>
       <${NavItem} to="/recent" icon="clock" label="Recently played" />
       <${NavItem} to="/discover" icon="compass" label="Discover" />
-      <${NavItem} to="/history" icon="chart" label="Listening history" match=${starts('/history')} />
+      <${NavItem} to="/stats" icon="chart" label="Stats" />
+      <${NavItem} to="/history" icon="calendar" label="Listening history" match=${starts('/history')} />
     </div>
     <div class="nav-group">
       <div class="nav-label">Manage</div>
@@ -101,6 +102,7 @@ function summarize(job) {
   if (job.kind === 'dedupe') return `${r.moved || 0} moved to the review folder${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
   if (job.kind === 'dedupe-restore') return `${r.moved || 0} restored${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
   if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
+  if (job.kind === 'radar') return `${r.new || 0} new ${r.new === 1 ? 'release' : 'releases'}${r.owned ? ` · ${r.owned} already in your library` : ''}${r.source ? ` · from ${r.source === 'listenbrainz' ? 'ListenBrainz' : 'MusicBrainz'}` : ''}`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   if (job.kind === 'sync-preview') return `${r.to_copy || 0} to copy · ${r.unchanged || 0} already there${r.to_prune ? ` · ${r.to_prune} no longer chosen` : ''}`;
   if (job.kind === 'sync') return `${r.copied || 0} copied${r.pruned ? ` · ${r.pruned} removed` : ''}${r.errors_total ? ` · ${r.errors_total} failed` : ''}${r.aborted ? ` · stopped early` : ''}`;
@@ -196,6 +198,7 @@ export function PlayerBar() {
     </div>
 
     <div class="pb-right">
+      ${track && html`<${IconButton} icon="radio" title="Start radio from this song" onClick=${() => startRadio(track)} />`}
       <${IconButton} icon="mic" title="Now Playing and lyrics" onClick=${() => go('/now')} />
       <${IconButton} icon="queue" title="Queue" active=${queueOpen} onClick=${() => ui.set({ queueOpen: !queueOpen })} />
       <${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />

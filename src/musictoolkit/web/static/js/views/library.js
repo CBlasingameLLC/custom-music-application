@@ -1,8 +1,9 @@
 // Browsing the library: home, songs, albums, artists, search.
-import { api, fmt, html, useAsync, useCallback, useDebounced, useEffect, useMemo, useRef, useState, useStore } from '../lib.js';
+import { api, fmt, html, useAsync, useCallback, useDebounced, useEffect, useMemo, useRef, useState, useStore, viewerOffset } from '../lib.js';
 import { Icon } from '../icons.js';
 import { AlbumCard, ArtistCard, Button, Cover, Empty, InfiniteSentinel, PageHeader, PlaylistCard, Shelf, Spinner, TrackCard } from '../components.js';
 import { addMusicFolder } from '../dialogs.js';
+import { MixCard, playMix } from './mixes.js';
 import { emptyFilters, FilterBar, filtersToRules } from '../filters.js';
 import { addToQueue, playQueue } from '../player.js';
 import { openTagEditor } from '../tagtools.js';
@@ -48,6 +49,7 @@ function greeting() {
 export function HomeView() {
   const rev = useLibraryRev();
   const { data, loading, error } = useAsync(() => api('/home'), [rev]);
+  const { data: mixes } = useAsync(() => api('/mixes', { params: { tz: viewerOffset() } }).catch(() => ({ items: [] })), [rev]);
   if (loading && !data) return html`<${Spinner} />`;
   if (error) return html`<${Empty} icon="alert" title="Couldn't load your library">${error.message}<//>`;
   if (!data.totals.tracks) return html`<${EmptyLibrary} />`;
@@ -59,6 +61,8 @@ export function HomeView() {
     <//>
     ${data.recent.length > 0 && html`<${Shelf} title="Jump back in" to="/recent">
       ${data.recent.map((t) => html`<${TrackCard} key=${t.id} track=${t} onPlay=${playTrackFrom(data.recent, 'Recently played')} />`)}<//>`}
+    ${mixes?.items.length > 0 && html`<${Shelf} title="Made for you" subtitle="new every day" to="/mixes">
+      ${mixes.items.map((m) => html`<${MixCard} key=${m.id} mix=${m} onPlay=${() => playMix(m.id)} />`)}<//>`}
     ${data.recently_added.length > 0 && html`<${Shelf} title="Recently added" to="/albums?sort=added">
       ${data.recently_added.map((a) => html`<${AlbumCard} key=${a.key} album=${a} onPlay=${(al) => playAlbum(al.key)} />`)}<//>`}
     ${data.favorites.length > 0 && html`<${Shelf} title="Your favorites" to="/favorites">

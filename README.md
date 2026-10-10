@@ -25,17 +25,19 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.4.1)
+## What it does (v0.5.0)
 
 | Area | Features |
 |---|---|
 | **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
-| **Browse** | Home shelves, Songs (virtualized; checked against a synthetic 100,000-song library, every screen answers in well under a second), Albums, Artists, Favorites, Recently played, instant search |
+| **Browse** | Home shelves, Songs (virtualized; timed against a synthetic library of 100,000 songs and 300,000 plays with `scripts/perf_synthetic.py`: Home, Songs, Albums, Artists, mixes and radio answer in under half a second), Albums, Artists, Favorites, Recently played, instant search |
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
-| **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded or `.lrc`, synced highlighting), folders added from Settings |
+| **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded, a `.lrc` file beside the song, or, if you turn it on, lrclib.net; synced highlighting), folders added from Settings |
+| **Stats** | Your listening in numbers: hours listened, plays, artists, songs, longest streak, and your most played artist, song, busiest day and hour. Charts of plays by month, by hour and by weekday, a grid of every day for up to a year, and top artists, songs, albums and genres, for the last 30 days, the last 12 months, any year, or all time. Every chart has a table version, and every mark answers the pointer and the arrow keys. The first look at years of history takes a few seconds (300,000 plays: about four); the answer is then kept until the history changes |
+| **Mixes** | A "Made for you" shelf on Home, new every day: On repeat, Rediscover, On this day, New in your library, Never played, Your favorites, decades and genres, as many as have enough songs. Open one to play it, shuffle it or save it as a playlist. **Start radio** (a song's menu, or the player bar) queues songs that go with it |
 | **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
-| **Discover** | New-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
+| **Discover** | **New releases** by artists you play (the release radar: albums, EPs and singles from the last two months or announced for the next six weeks, from ListenBrainz or MusicBrainz), and new-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
@@ -92,6 +94,21 @@ What is different on a phone:
   helper is installed and what Windows reports, and the logs folder has the details.
 
 A small helper program (`mtk-mtp.exe`, installed next to the app) does the talking to Windows Portable Devices.
+
+### Online lookups (Settings, Online lookups)
+
+Two features talk to a service on their own account, so both are **off until you turn them on**, and both also work
+one press at a time with the switch off:
+
+- **Lyrics** for a song whose file has none: sends the artist, title, album and length of that one song to
+  [lrclib.net](https://lrclib.net) (a free, community-run service). Lyrics in the file, or in a `.lrc` file beside it, always
+  come first. What comes back is kept in the app's database, never written next to your music: a song LRCLIB did not
+  have is asked about again after two weeks, a retagged song at once. Look up one song from its lyrics page (Now Playing).
+- **New releases** (Discover, New releases): with your ListenBrainz username it asks ListenBrainz, which knows your
+  listens; otherwise it asks MusicBrainz about the artists you play most, one request each, and needs a contact there
+  (Settings, Accounts). Live albums, compilations, remixes and soundtracks are left out, and so is anything already in your
+  library. Check by hand with the button, or let it look by itself about once a day. Nothing is downloaded: each
+  release has links to MusicBrainz, Bandcamp and YouTube.
 
 ### Spotify history and ListenBrainz
 
@@ -166,6 +183,7 @@ in `src/musictoolkit/web/routers/`.
 pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
 pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts...
 python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
+python scripts/perf_synthetic.py                                    # time every screen on 100,000 invented songs and 300,000 plays
 cd desktop && npm test       # the update logic of the desktop shell
 ```
 

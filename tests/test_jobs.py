@@ -56,6 +56,25 @@ def test_a_failing_job_reports_the_error_and_the_worker_survives() -> None:
     assert ok.status == "done"
 
 
+def test_an_error_written_for_the_person_is_shown_as_it_is() -> None:
+    class Plain(RuntimeError):
+        for_the_person = True
+
+    jobs = JobManager()
+
+    def fail(handle):
+        raise Plain("Add your username in Settings.")
+
+    def break_(handle):
+        raise ValueError("bad value")
+
+    kind = jobs.wait(jobs.submit("test", "x", break_).id)
+    plain = jobs.wait(jobs.submit("test", "y", fail).id)
+
+    assert kind.error == "ValueError: bad value", "an ordinary error names its kind"
+    assert plain.error == "Add your username in Settings." and plain.status == "error"
+
+
 def test_cancel_stops_a_running_job_at_its_next_check() -> None:
     jobs = JobManager()
     started = threading.Event()

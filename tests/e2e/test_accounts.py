@@ -24,7 +24,8 @@ def open_settings(page) -> None:
 
 
 def service(page, name: str):
-    return page.locator(".service", has_text=name)
+    """The block for one service, found by its heading (other blocks may mention it in their text)."""
+    return page.locator(".service", has=page.locator("h3", has_text=name))
 
 
 def test_listenbrainz_is_tested_with_what_was_just_typed(page, live, monkeypatch):

@@ -61,6 +61,15 @@ function LibraryCard({ settings, about }) {
   <//>`;
 }
 
+function OnlineCard({ settings }) {
+  return html`<${Card} icon="globe" title="Online lookups" hint="Off until you turn them on. Each one sends only what it needs to find an answer, and the answers are kept inside the app: nothing is ever written into your music folders.">
+    <${Switch} checked=${settings.app.lyrics_lrclib} onChange=${(v) => save({ app: { lyrics_lrclib: v } })}>Look up lyrics on lrclib.net when a song has none<//>
+    <p class="note"><${Icon} name="info" size=${14} /><span>Sends the artist, title, album and length of the song that is showing its lyrics. Lyrics in the file or in a <code>.lrc</code> file beside it always come first. You can also look up one song at a time from its lyrics page, with this switched off.</span></p>
+    <${Switch} checked=${settings.app.release_radar} onChange=${(v) => save({ app: { release_radar: v } })}>Look for new releases by artists I play, about once a day<//>
+    <p class="note"><${Icon} name="info" size=${14} /><span>With a ListenBrainz username (Accounts above) it asks ListenBrainz, which knows your listens. Otherwise it asks MusicBrainz about the artists you play most, one request each, and needs a contact there. The results appear on Discover, New releases, where you can also check by hand with this switched off. Nothing is downloaded.</span></p>
+  <//>`;
+}
+
 /** Tries the saved key or token against its service. `before` saves anything typed but not yet saved. */
 function TestButton({ service, before }) {
   const [result, setResult] = useState(null); // null | 'working' | { ok, message }
@@ -143,13 +152,13 @@ function AccountsCard({ settings }) {
   return html`<${Card} icon="globe" title="Accounts and services" hint="All optional and free. Nothing is sent anywhere until you turn it on. “Test connection” saves what you typed and tries it.">
     <div class="service">
       <h3>MusicBrainz <span class="badge">tag lookups</span></h3>
-      <p class="subtle">MusicBrainz asks apps to identify themselves with a contact address. Used when filling in missing song tags.</p>
+      <p class="subtle">MusicBrainz asks apps to identify themselves with a contact address. Used when filling in missing song tags, and to look for new releases when you do not use ListenBrainz.</p>
       <div class="inline-form"><input type="email" aria-label="MusicBrainz contact email" placeholder="you@example.com" value=${mb} onInput=${(e) => setMb(e.target.value)} />
         <${Button} onClick=${() => save({ musicbrainz: { contact: mb } })}>Save<//></div>
       <div class="row-actions"><${TestButton} service="musicbrainz" before=${saveMusicBrainz} /></div>
     </div>
     <div class="service">
-      <h3>ListenBrainz <span class="badge">recommendations and listening history</span></h3>
+      <h3>ListenBrainz <span class="badge">recommendations, new releases and listening history</span></h3>
       <p class="subtle">A free, non-profit home for your listening history. Create an account at listenbrainz.org, then copy your user token from its profile page.</p>
       <${Switch} checked=${lb.enabled} onChange=${(v) => save({ listenbrainz: { enabled: v } })}>Use ListenBrainz<//>
       <div class="form-grid">
@@ -335,6 +344,7 @@ export function SettingsView() {
     <div class="settings">
       <${LibraryCard} settings=${settings} about=${about} />
       <${AccountsCard} settings=${settings} />
+      <${OnlineCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       <${DiagnosticsCard} />

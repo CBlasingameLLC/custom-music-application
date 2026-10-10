@@ -2,9 +2,11 @@
 import { api, fmt, html, useAsync, useCallback, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Empty, PageHeader, Spinner } from '../components.js';
-import { go, href, library, notifyError, toast, trackJob } from '../state.js';
+import { go, href, library, notifyError, route, toast, trackJob } from '../state.js';
+import { ReleasesTab } from './releases.js';
 
 const TABS = [
+  ['releases', 'New releases'],
   ['new', 'New for you'],
   ['accepted', 'Wishlist'],
   ['owned', 'Already own'],
@@ -13,9 +15,11 @@ const TABS = [
 
 export function DiscoverView() {
   const rev = useStore(library, (s) => s.rev);
-  const [tab, setTab] = useState('new');
+  const { query } = useStore(route);
+  const [tab, setTab] = useState(TABS.some(([id]) => id === query.tab) ? query.tab : 'new');
   const [version, setVersion] = useState(0);
-  const { data, loading } = useAsync(() => api('/recommendations', { params: { status: tab, limit: 200 } }), [tab, rev, version]);
+  const [newReleases, setNewReleases] = useState(0);
+  const { data, loading } = useAsync(() => (tab === 'releases' ? Promise.resolve(null) : api('/recommendations', { params: { status: tab, limit: 200 } })), [tab, rev, version]);
 
   async function fetchMore() {
     try {
@@ -31,11 +35,11 @@ export function DiscoverView() {
   const counts = data?.counts || {};
   return html`
     <${PageHeader} title="Discover" subtitle="New music picked from your listening, minus everything you already own.">
-      <${Button} kind="primary" icon="compass" onClick=${fetchMore}>Get recommendations<//>
+      ${tab !== 'releases' && html`<${Button} kind="primary" icon="compass" onClick=${fetchMore}>Get recommendations<//>`}
     <//>
     <div class="tabs" role="tablist">${TABS.map(([id, label]) => html`<button role="tab" class="tab ${tab === id ? 'active' : ''}" aria-selected=${tab === id} onClick=${() => setTab(id)}>
-      ${label}${counts[id] ? html`<span class="count">${counts[id]}</span>` : ''}</button>`)}</div>
-    ${loading && !data ? html`<${Spinner} />` : data.items.length === 0
+      ${label}${(id === 'releases' ? newReleases : counts[id]) ? html`<span class="count">${id === 'releases' ? newReleases : counts[id]}</span>` : ''}</button>`)}</div>
+    ${tab === 'releases' ? html`<${ReleasesTab} onCounts=${setNewReleases} />` : loading && !data ? html`<${Spinner} />` : data.items.length === 0
       ? html`<${Empty} icon="compass" title=${tab === 'new' ? 'No suggestions yet' : 'Nothing here yet'}>
           <p>${tab === 'new' ? html`Press <strong>Get recommendations</strong>. It needs your ListenBrainz username (an imported listening history makes it far better). Add it in <a href=${href('/settings')}>Settings</a>.` : 'Suggestions you sort will show up here.'}</p>
         <//>`
@@ -53,7 +57,9 @@ export function DiscoverView() {
             : html`<${Button} small icon="refresh" onClick=${() => triage(item, 'new')}>Move back to New<//>`}
           </div>
         </article>`)}</div>`}
-    <p class="hint-card subtle"><${Icon} name="info" size=${14} /> Music Toolkit never downloads music. “Want it” keeps a wishlist; the links open Bandcamp, YouTube or MusicBrainz in your browser so you can listen first and buy what you love.</p>`;
+    <p class="hint-card subtle"><${Icon} name="info" size=${14} /> ${tab === 'releases'
+      ? 'Music Toolkit never downloads music. The links open MusicBrainz, Bandcamp or YouTube in your browser so you can listen first and buy what you love.'
+      : 'Music Toolkit never downloads music. “Want it” keeps a wishlist; the links open Bandcamp, YouTube or MusicBrainz in your browser so you can listen first and buy what you love.'}</p>`;
 }
 
 // ------------------------------------------------------------ history
@@ -65,6 +71,7 @@ export function HistoryView() {
   const max = Math.max(1, ...(top?.items || []).map((a) => a.plays));
   return html`
     <${PageHeader} title="Listening history" subtitle=${top ? `${fmt.plural(top.total_plays, 'play')} recorded` : ''}>
+      <${Button} icon="chart" onClick=${() => go('/stats')}>See your stats<//>
       <${Button} icon="upload" onClick=${() => go('/history/import')}>Import Spotify history<//>
       <label class="sort-select"><span>Period</span><select value=${days} onChange=${(e) => setDays(Number(e.target.value))}>
         <option value="0">All time</option><option value="365">Last year</option><option value="30">Last 30 days</option><option value="7">Last 7 days</option></select></label>

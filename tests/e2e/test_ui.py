@@ -30,7 +30,7 @@ def test_first_run_walks_a_new_user_to_a_playable_library(page, live):
     expect(page.get_by_text("Library updated: 9 added")).to_be_visible(timeout=60_000)
     expect(page.locator(".shelf").first).to_be_visible()
     expect(page.locator(".sidebar")).to_contain_text("9 songs")
-    page.get_by_role("link", name="Songs").click()
+    page.get_by_role("link", name="Songs", exact=True).click()
     expect(page.locator(".trow:not(.skeleton)")).to_have_count(9)
 
 
@@ -239,6 +239,26 @@ def test_layout_survives_a_narrow_window(page, live):
             assert page.evaluate("document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth"), (
                 f"horizontal page scroll at {width}px on {route}"
             )
+
+
+def test_the_sidebar_keeps_the_playlists_in_reach_in_a_short_window(page, live):
+    add_library(page, live)
+    names = ["Gym", "Road trip", "Sunday", "Focus"]
+    for name in names:
+        api(page, "/playlists", "POST", {"name": name})
+    page.reload()
+    page.wait_for_selector(".sidebar")
+
+    for height in (860, 700):
+        page.set_viewport_size({"width": 1360, "height": height})
+        area = page.locator(".playlists-nav").bounding_box()
+        assert area["height"] >= 90, f"the playlists have {area['height']}px at {height}px high"
+
+    last = page.locator(".sidebar").get_by_role("link", name=names[-1])
+    last.scroll_into_view_if_needed()
+    expect(last).to_be_visible()
+    last.click()
+    expect(page.get_by_role("heading", name=names[-1], exact=True)).to_be_visible()
 
 
 FAKE_DESKTOP = """

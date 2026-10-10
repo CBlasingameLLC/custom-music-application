@@ -1,5 +1,5 @@
 // Now Playing: big cover, synced lyrics, the queue, and the sound controls.
-import { api, fmt, html, useAsync, useEffect, useMemo, useRef, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, useAsync, useEffect, useMemo, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Cover, Empty, IconButton } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
@@ -76,11 +76,19 @@ function activeLine(lines, position) {
   return found;
 }
 
+function LyricsCredit() {
+  return html`<p class="lyrics-credit subtle"><${Icon} name="info" size=${13} /> Lyrics from <a href="https://lrclib.net" target="_blank" rel="noopener noreferrer">LRCLIB</a>. They are kept inside the app, not in your music folder.</p>`;
+}
+
+/** The lyrics tab. The file's own lyrics come first; failing those, lrclib.net if the person allows it (or presses Look up). */
 function Lyrics({ track }) {
-  const { data, loading } = useAsync(() => api(`/tracks/${track.id}/lyrics`), [track.id]);
+  const { data: loaded, loading } = useAsync(() => api(`/tracks/${track.id}/lyrics`), [track.id]);
+  const [looked, setLooked] = useState(null); // the answer to pressing Look up, for this song
+  const [looking, setLooking] = useState(false);
   const position = useStore(player, (s) => s.position);
   const box = useRef();
   const userScrolledAt = useRef(0);
+  const data = looked?.id === track.id ? looked.answer : loaded;
   const synced = data?.synced;
   const active = synced ? activeLine(synced, position) : -1;
 
@@ -90,15 +98,41 @@ function Lyrics({ track }) {
     if (line) box.current.scrollTo({ top: line.offsetTop - box.current.clientHeight / 2 + line.clientHeight / 2, behavior: 'smooth' });
   }, [active]);
 
-  if (loading && !data) return html`<p class="subtle pad">Looking for lyrics…</p>`;
-  if (synced) {
-    return html`<div class="lyrics synced" ref=${box} onWheel=${() => (userScrolledAt.current = Date.now())}>
-      ${synced.map((line, i) => html`<p class="${i === active ? 'active' : i < active ? 'past' : ''}" onClick=${() => seek(line.t)}>${line.text || '♪'}</p>`)}
-    </div>`;
+  async function lookUp() {
+    setLooking(true);
+    try {
+      setLooked({ id: track.id, answer: await api(`/tracks/${track.id}/lyrics/lookup`, { method: 'POST' }) });
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setLooking(false);
+    }
   }
-  if (data?.plain) return html`<div class="lyrics plain"><pre>${data.plain}</pre></div>`;
-  return html`<${Empty} icon="mic" title="No lyrics for this song">
-    <p>Lyrics are read from the file's tags, or from a <code>.lrc</code> file with the same name next to it (that is how timed, scrolling lyrics work).</p>
+
+  if (loading && !data) return html`<p class="subtle pad">Looking for lyrics…</p>`;
+  const credit = data?.source === 'lrclib' ? html`<${LyricsCredit} />` : null;
+  if (synced) {
+    return html`<${Fragment}>
+      <div class="lyrics synced" ref=${box} onWheel=${() => (userScrolledAt.current = Date.now())}>
+        ${synced.map((line, i) => html`<p class="${i === active ? 'active' : i < active ? 'past' : ''}" onClick=${() => seek(line.t)}>${line.text || '♪'}</p>`)}
+      </div>${credit}
+    <//>`;
+  }
+  if (data?.plain) return html`<${Fragment}><div class="lyrics plain"><pre>${data.plain}</pre></div>${credit}<//>`;
+  if (data?.instrumental) {
+    return html`<${Empty} icon="music" title="Instrumental"><p>LRCLIB lists this song as an instrumental, so there are no lyrics to show.</p><${LyricsCredit} /><//>`;
+  }
+  const lookButton = (label) => html`<${Button} icon="globe" disabled=${looking} onClick=${lookUp}>${looking ? 'Looking…' : label}<//>`;
+  const fileHelp = html`<p>Lyrics are read from the file's tags, or from a <code>.lrc</code> file with the same name next to it (that is how timed, scrolling lyrics work).</p>`;
+  if (data?.online === 'none') {
+    return html`<${Empty} icon="mic" title="No lyrics for this song">${fileHelp}<p>LRCLIB does not have this one either.</p>${lookButton('Ask again')}<//>`;
+  }
+  if (data?.online === 'unreachable') {
+    return html`<${Empty} icon="alert" title="Could not reach LRCLIB"><p>${data.message}</p>${lookButton('Try again')}<//>`;
+  }
+  return html`<${Empty} icon="mic" title="No lyrics for this song">${fileHelp}
+    <p>You can look this song up on <a href="https://lrclib.net" target="_blank" rel="noopener noreferrer">lrclib.net</a> (it sends the artist, title, album and length), or turn on automatic lookups in <a href=${href('/settings')}>Settings</a>.</p>
+    ${lookButton('Look up lyrics online')}
   <//>`;
 }
 

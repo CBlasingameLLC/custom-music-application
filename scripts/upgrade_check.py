@@ -123,9 +123,18 @@ def verify(exe: Path, profile: Path, facts_path: Path) -> None:
         check(settings["musicbrainz"]["contact"] == CONTACT, "the setting survived")
 
         # the new schema: tables that only exist after the newer migrations
-        for path in ("/api/tools/organize/batches", "/api/tools/duplicates/info", "/api/tools/missing/summary"):
+        for path in ("/api/tools/organize/batches", "/api/tools/duplicates/info", "/api/tools/missing/summary",
+                     "/api/stats/years", "/api/mixes", "/api/releases"):
             status, _ = client.json(path)
             check(status == 200, f"{path} works on the migrated database (HTTP {status})")
+
+        # Home reads the per-song play counts that the migration worked out from the old history, and the indexes it added
+        status, home = client.json("/api/home")
+        check(status == 200 and [t["id"] for t in home["most_played"]][:1] == [facts["first"]["id"]], "Home lists the most played song after the upgrade")
+        check(status == 200 and [t["id"] for t in home["favorites"]] == [facts["second"]["id"]], "Home lists the favorite after the upgrade")
+        client.json("/api/plays", "POST", {"track_id": facts["first"]["id"], "ms_played": 30000})
+        counted = client.json(f"/api/tracks/{facts['first']['id']}")[1]
+        check(counted["plays"] == facts["first"]["plays"] + 1, f"a new play is counted on the migrated database ({counted.get('plays')})")
 
         _, started = client.json("/api/library/scan", "POST")
         scan = wait_job(client, started["job"]["id"])

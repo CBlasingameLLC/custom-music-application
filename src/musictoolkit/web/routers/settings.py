@@ -23,7 +23,7 @@ EDITABLE: dict[str, set[str]] = {
     "listenbrainz": {"enabled", "username", "user_token", "scrobble", "now_playing"},
     "lastfm": {"enabled", "api_key", "api_secret"},
     "sync": {"device_scheme"},
-    "app": {"rescan_on_launch", "lyrics_lrclib", "auto_update"},
+    "app": {"rescan_on_launch", "lyrics_lrclib", "release_radar", "auto_update"},
 }
 TEMPLATE_FIELDS = {("library", "canonical_scheme"), ("sync", "device_scheme")}
 
@@ -46,7 +46,7 @@ def public_settings(cfg: Config) -> dict[str, Any]:
             "has_secret": bool(cfg.lastfm.api_secret),
         },
         "sync": {"device_scheme": cfg.sync.device_scheme},
-        "app": {"rescan_on_launch": cfg.app.rescan_on_launch, "lyrics_lrclib": cfg.app.lyrics_lrclib, "auto_update": cfg.app.auto_update},
+        "app": {"rescan_on_launch": cfg.app.rescan_on_launch, "lyrics_lrclib": cfg.app.lyrics_lrclib, "release_radar": cfg.app.release_radar, "auto_update": cfg.app.auto_update},
     }
 
 

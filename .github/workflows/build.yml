@@ -116,7 +116,7 @@ jobs:
         run: dotnet build helpers\mtp\MtkMtp.csproj -c Release -o helpers\mtp\out
 
       # No phone is plugged into a build machine. This proves what can be proved without one: the program
-      # starts, speaks the protocol, and Windows Portable Devices answers (with nothing listed).
+      # starts, speaks the protocol, and Windows Portable Devices answers (a drive-letter volume the runner lists is not taken for a phone).
       - name: Smoke-test the MTP helper
         run: .venv\Scripts\python.exe scripts\check_mtp_helper.py helpers\mtp\out\mtk-mtp.exe
 

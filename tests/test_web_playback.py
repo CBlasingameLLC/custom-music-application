@@ -102,7 +102,9 @@ def test_lyrics_embedded_in_the_file_are_found(web) -> None:
 
 def test_no_lyrics_is_an_empty_result_not_an_error(web) -> None:
     track_id = ids_by_title(web.client)["Wires"]
-    assert web.client.get(f"/api/tracks/{track_id}/lyrics").json() == {"source": None, "synced": None, "plain": None}
+    assert web.client.get(f"/api/tracks/{track_id}/lyrics").json() == {
+        "source": None, "synced": None, "plain": None, "instrumental": False, "online": "off",
+    }
 
 
 class TestPlayLogging:

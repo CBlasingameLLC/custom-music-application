@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -91,7 +92,20 @@ def get_cf_recommendations(user_name: str, user_token: str | None, count: int = 
     raw recording MBIDs + scores generated server-side by ListenBrainz, not
     a from-scratch recommender. Each entry needs a follow-up MusicBrainz
     lookup to resolve into an artist/track name."""
-    response = _send("GET", f"/cf/recommendation/user/{user_name}/recording", user_token, params={"count": count, "offset": offset})
+    response = _send("GET", f"/cf/recommendation/user/{quote(user_name, safe='')}/recording", user_token, params={"count": count, "offset": offset})
     if response.status_code != 200:
         raise _fail("recommendation fetch", response)
     return response.json().get("payload", {}).get("mbids", [])
+
+
+def get_fresh_releases(user_name: str, days: int = 60, user_token: str | None = None) -> list[dict]:
+    """New and announced releases by the artists this user listens to, as ListenBrainz works them out from the user's
+    listens. Each entry has artist_credit_name, artist_mbids, release_name, release_date, release_group_mbid,
+    release_group_primary_type, release_group_secondary_type and, when a cover exists, caa_id and caa_release_mbid."""
+    response = _send(
+        "GET", f"/user/{quote(user_name, safe='')}/fresh_releases", user_token,
+        params={"days": max(1, min(days, 90)), "past": "true", "future": "true", "sort": "release_date"},
+    )
+    if response.status_code != 200:
+        raise _fail("fresh releases", response)
+    return response.json().get("payload", {}).get("releases", [])

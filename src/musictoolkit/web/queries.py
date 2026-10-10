@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import random
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,11 +23,14 @@ ALBUM_ARTIST_SQL = "COALESCE(NULLIF(t.album_artist, ''), NULLIF(t.artist, ''), '
 ALBUM_SQL = "COALESCE(NULLIF(t.album, ''), 'Unknown Album')"
 ARTIST_SQL = "COALESCE(NULLIF(t.artist, ''), NULLIF(t.album_artist, ''), 'Unknown Artist')"
 
+# The same two names as ALBUM_ARTIST_SQL / ALBUM_SQL, spelt as idx_tracks_album_key spells them (migration 0010 says why):
+# for finding the songs of one album, never for grouping.
+ALBUM_ARTIST_FIND = "IFNULL(NULLIF(t.album_artist, ''), IFNULL(NULLIF(t.artist, ''), 'Unknown Artist'))"
+ALBUM_FIND = "IFNULL(NULLIF(t.album, ''), 'Unknown Album')"
+
+# plays and last_played for each song: one row per song, kept up to date by triggers (migration 0009)
 HISTORY_JOIN = """
-LEFT JOIN (
-  SELECT track_id, COUNT(*) AS plays, MAX(played_at_epoch) AS last_played
-  FROM play_history WHERE track_id IS NOT NULL GROUP BY track_id
-) h ON h.track_id = t.id
+LEFT JOIN track_plays h ON h.track_id = t.id
 """
 
 TRACK_COLUMNS = """
@@ -274,7 +278,7 @@ def build_selection(
 
     if album:
         album_artist, album_name = parse_album_key(album)
-        sel.where.append(f"{ALBUM_ARTIST_SQL} = ? AND {ALBUM_SQL} = ?")
+        sel.where.append(f"{ALBUM_ARTIST_FIND} = ? AND {ALBUM_FIND} = ?")
         sel.params.extend([album_artist, album_name])
         if sort == "artist":  # inside one album the natural order is disc/track
             sel.order = "COALESCE(t.disc_number, 0), COALESCE(t.track_number, 0), t.id"
@@ -337,14 +341,19 @@ def track_dict(row: sqlite3.Row) -> dict[str, Any]:
     return data
 
 
-def list_tracks(conn: sqlite3.Connection, sel: Selection, offset: int, limit: int) -> dict[str, Any]:
-    total = conn.execute(f"SELECT COUNT(*) AS c {sel.from_sql}", sel.params).fetchone()["c"]
+def page_tracks(conn: sqlite3.Connection, sel: Selection, offset: int, limit: int) -> list[dict[str, Any]]:
+    """One page of a selection, without counting how many songs match (a shelf has no use for that)."""
     extra = ", pt.position AS pos" if sel.playlist_position else ""
     rows = conn.execute(
         f"SELECT {TRACK_COLUMNS}{extra} {sel.from_sql} ORDER BY {sel.order} LIMIT ? OFFSET ?",
         [*sel.params, limit, offset],
     ).fetchall()
-    return {"total": total, "items": [track_dict(r) for r in rows]}
+    return [track_dict(r) for r in rows]
+
+
+def list_tracks(conn: sqlite3.Connection, sel: Selection, offset: int, limit: int) -> dict[str, Any]:
+    total = conn.execute(f"SELECT COUNT(*) AS c {sel.from_sql}", sel.params).fetchone()["c"]
+    return {"total": total, "items": page_tracks(conn, sel, offset, limit)}
 
 
 def tracks_by_ids(conn: sqlite3.Connection, ids: list[int]) -> list[dict[str, Any]]:
@@ -358,3 +367,101 @@ def tracks_by_ids(conn: sqlite3.Connection, ids: list[int]) -> list[dict[str, An
     ).fetchall()
     by_id = {r["id"]: track_dict(r) for r in rows}
     return [by_id[i] for i in ids if i in by_id]
+
+
+# --- shelves: the first few of a very large listing, without ordering all of it ----------------------------------------
+
+PLAYED_FIGURES = {"plays": "h.plays", "last_played": "h.last_played"}
+
+
+def played_leaders(conn: sqlite3.Connection, by: str, limit: int) -> list[dict[str, Any]]:
+    """The songs played most (by="plays") or most recently (by="last_played"), in the order the library lists them.
+
+    track_plays holds one row per song that has been played (a song with no plays has none), with an index on each
+    figure, so the figure of the song that just makes the cut is found by walking an index, and only the songs at or
+    above it are put in order: not every song ever played."""
+    column = PLAYED_FIGURES[by]
+    limit = max(1, limit)
+    start = "FROM track_plays h CROSS JOIN tracks t ON t.id = h.track_id WHERE t.is_missing = 0"
+    cut = conn.execute(f"SELECT {column} {start} ORDER BY {column} DESC LIMIT 1 OFFSET ?", (limit - 1,)).fetchone()
+    reach, params = (f" AND {column} >= ?", [cut[0]]) if cut is not None else ("", [])
+    rows = conn.execute(
+        f"SELECT {TRACK_COLUMNS} {start}{reach} ORDER BY {order_clause(by, 'desc')} LIMIT ?", [*params, limit]
+    ).fetchall()
+    return [track_dict(r) for r in rows]
+
+
+ALBUM_FIGURES = "MIN(t.year) AS year, COUNT(*) AS n, SUM(t.duration_seconds) AS dur, MAX(t.date_added) AS added, MIN(t.id) AS first_id"
+
+
+def albums_by_key(conn: sqlite3.Connection, keys: list[tuple[str, str]]) -> list[sqlite3.Row]:
+    """Each named album's figures (the library's own grouping), in the order asked; one the library lacks is left out.
+    The songs of one album are found through idx_tracks_album_key, so this costs the same in any size of library."""
+    found = []
+    for artist, album in keys:
+        row = conn.execute(
+            f"SELECT {ALBUM_ARTIST_SQL} AS aa, {ALBUM_SQL} AS al, {ALBUM_FIGURES} FROM tracks t "
+            f"WHERE t.is_missing = 0 AND {ALBUM_ARTIST_FIND} = ? AND {ALBUM_FIND} = ?",
+            (artist, album),
+        ).fetchone()
+        if row["n"]:
+            found.append(row)
+    return found
+
+
+def newest_albums(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    """The albums whose newest song was added most recently, newest first.
+
+    Songs are read newest first (idx_tracks_added) until `limit` different albums have turned up; grouping the whole
+    library to find them would take longer than every other part of the Home screen together."""
+    window = max(40, limit * 8)
+    while True:
+        rows = conn.execute(
+            f"SELECT {ALBUM_ARTIST_SQL} AS aa, {ALBUM_SQL} AS al FROM tracks t WHERE t.is_missing = 0 "
+            f"ORDER BY t.date_added DESC, t.id DESC LIMIT ?",
+            (window,),
+        ).fetchall()
+        keys = list(dict.fromkeys((r["aa"], r["al"]) for r in rows))
+        if len(keys) >= limit or len(rows) < window:  # enough albums, or the whole library has been read
+            return albums_by_key(conn, keys[:limit])
+        window *= 4
+
+
+SMALL_LIBRARY = 5000  # songs: up to this many, grouping everything to pick albums at random is quick
+MAX_PROBES = 600
+
+
+def random_albums(conn: sqlite3.Connection, limit: int, songs: int) -> list[sqlite3.Row]:
+    """Albums chosen at random, each album as likely as any other whatever its length. `songs` is how many songs
+    the library has.
+
+    A big library is not grouped: a random song is picked (a lookup by number), its album's figures are read, and the
+    album is kept with probability 1/(its songs), which makes every album equally likely. If that does not turn up
+    enough albums (a library of few, very long albums), the whole library is grouped as a small one is."""
+    if songs > SMALL_LIBRARY:
+        low = conn.execute("SELECT MIN(id) FROM tracks WHERE is_missing = 0").fetchone()[0]
+        high = conn.execute("SELECT MAX(id) FROM tracks WHERE is_missing = 0").fetchone()[0]
+        chosen: dict[tuple[str, str], sqlite3.Row] = {}
+        for _ in range(MAX_PROBES):
+            row = conn.execute(
+                f"SELECT {ALBUM_ARTIST_SQL} AS aa, {ALBUM_SQL} AS al FROM tracks t "
+                f"WHERE t.is_missing = 0 AND t.id >= ? ORDER BY t.id LIMIT 1",
+                (random.randint(low, high),),
+            ).fetchone()
+            key = (row["aa"], row["al"]) if row is not None else None
+            if key is None or key in chosen:
+                continue
+            found = albums_by_key(conn, [key])
+            if found and random.random() * found[0]["n"] < 1:
+                chosen[key] = found[0]
+                if len(chosen) == limit:
+                    return list(chosen.values())
+    inner = (
+        f"SELECT {ALBUM_ARTIST_SQL} AS aa, {ALBUM_SQL} AS al, t.year AS year, t.duration_seconds AS dur, "
+        f"t.date_added AS added, t.id AS id FROM tracks t WHERE t.is_missing = 0"
+    )
+    return conn.execute(
+        f"SELECT aa, al, MIN(year) AS year, COUNT(*) AS n, SUM(dur) AS dur, MAX(added) AS added, MIN(id) AS first_id "
+        f"FROM ({inner}) GROUP BY aa, al ORDER BY RANDOM() LIMIT ?",
+        (limit,),
+    ).fetchall()

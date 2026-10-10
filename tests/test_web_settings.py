@@ -24,7 +24,7 @@ class TestSettings:
         body = response.json()
         assert body["musicbrainz"]["contact"] == "me@example.com"
         assert body["listenbrainz"]["has_token"] is True and "tok-123" not in response.text
-        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True, "auto_update": True}
+        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True, "release_radar": False, "auto_update": True}
 
         saved = load_config(empty_web.ctx.config_path)  # really written to config.toml
         assert saved.listenbrainz.user_token == "tok-123" and saved.listenbrainz.username == "cayl"
