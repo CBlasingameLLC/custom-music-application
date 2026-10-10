@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.4.1)
+## What it does (v0.5.0)
 
 | Area | Features |
 |---|---|
@@ -34,6 +34,8 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
 | **Library** | Star ratings, favorites, song details, cover art (embedded or `cover.jpg`/`folder.jpg`), lyrics (embedded or `.lrc`, synced highlighting), folders added from Settings |
+| **Stats** | Your listening in numbers: hours listened, plays, artists, songs, longest streak, and your most played artist, song, busiest day and hour. Charts of plays by month, by hour and by weekday, a grid of every day for up to a year, and top artists, songs, albums and genres, for the last 30 days, the last 12 months, any year, or all time. Every chart has a table version, and every mark answers the pointer and the arrow keys |
+| **Mixes** | A "Made for you" shelf on Home, new every day: On repeat, Rediscover, On this day, New in your library, Never played, Your favorites, decades and genres, as many as have enough songs. Open one to play it, shuffle it or save it as a playlist. **Start radio** (a song's menu, or the player bar) queues songs that go with it |
 | **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
 | **Discover** | New-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
