@@ -391,20 +391,23 @@ def _open_target(row, where: Where) -> Iterator[Target]:
     if where.root is not None:
         yield LocalFolder(where.root, row["label"])
         return
-    helper = mtp.MtpHelper()
     try:
-        helper.start()
-        target = mtp.MtpTarget.connect(
-            helper, serial=row["mtp_serial"], storage=row["mtp_storage"], storage_name=row["mtp_storage_name"],
-            base=row["mtp_base"] or mtp.DEFAULT_BASE, label=row["label"],
-        )
-    except (mtp.MtpUnavailable, TargetError) as exc:
-        helper.close()
-        raise RuntimeError(exc.strerror if isinstance(exc, TargetError) and exc.strerror else str(exc)) from None
-    try:
-        yield target
+        with mtp.in_use():
+            helper = mtp.MtpHelper()
+            try:
+                helper.start()
+                target = mtp.MtpTarget.connect(
+                    helper, serial=row["mtp_serial"], storage=row["mtp_storage"], storage_name=row["mtp_storage_name"],
+                    base=row["mtp_base"] or mtp.DEFAULT_BASE, label=row["label"],
+                )
+            except (mtp.MtpUnavailable, TargetError) as exc:
+                helper.close()
+                raise RuntimeError(exc.strerror if isinstance(exc, TargetError) and exc.strerror else str(exc)) from None
+            try:
+                yield target
+            finally:
+                helper.close()
     finally:
-        helper.close()
         mtp.forget_listing()  # what the phone has free is different now
 
 

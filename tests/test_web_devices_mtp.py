@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -313,3 +314,35 @@ def test_a_phone_that_is_found_but_will_not_open_is_listed_with_the_reason(web, 
     locked = next(d for d in listing["devices"] if d["serial"] == "LOCKED")
     assert (locked["storages"], locked["error"]) == ([], "The device is locked")
     assert [d["serial"] for d in listing["devices"] if d["storages"]] == [SERIAL]
+
+
+def test_screens_do_not_start_a_second_helper_on_a_phone_that_is_being_copied_to(web, phones, monkeypatch) -> None:
+    device = add_phone(web)
+    job = preview(web, device)
+    started, gate = threading.Event(), threading.Event()
+    real_put, real_start = mtp.MtpTarget.put, mtp.MtpHelper.start
+    starts = []
+
+    def slow_put(self, source, relative):
+        started.set()
+        gate.wait(10)
+        return real_put(self, source, relative)
+
+    def counting_start(self):
+        starts.append(1)
+        return real_start(self)
+
+    monkeypatch.setattr(mtp.MtpTarget, "put", slow_put)
+    running = run_sync(web, device, job).json()["job"]
+    assert started.wait(10)
+    monkeypatch.setattr(mtp.MtpHelper, "start", counting_start)
+    try:
+        listing = web.client.get("/api/devices/mtp", params={"fresh": True}).json()
+        described = web.client.get(f"/api/devices/{device['id']}").json()
+        everything = web.client.get("/api/devices").json()
+    finally:
+        gate.set()
+    web.ctx.jobs.wait(running["id"], timeout=30)
+
+    assert starts == [], "the sync's helper is the only one talking to the phone"
+    assert [d["serial"] for d in listing["devices"]] == [SERIAL] and described["connected"] is True and len(everything["items"]) == 1

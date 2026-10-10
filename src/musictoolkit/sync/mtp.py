@@ -13,6 +13,7 @@ mkdir {storage, path}, delete {storage, path} (a folder goes with everything in 
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import json
 import logging
@@ -25,6 +26,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +205,22 @@ LISTING_TIMEOUT = 25.0  # a phone that is asleep or waiting to be unlocked can k
 
 _cache: dict[str, Any] = {"at": 0.0, "value": None}
 _listing_lock = threading.Lock()
+_in_use = 0  # previews and syncs that hold a helper open right now
+_in_use_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def in_use() -> Iterator[None]:
+    """While a preview or a sync has the phone open, the screens that ask what is plugged in get the last answer
+    instead of starting a second helper that opens the same phone in the middle of a transfer."""
+    global _in_use
+    with _in_use_lock:
+        _in_use += 1
+    try:
+        yield
+    finally:
+        with _in_use_lock:
+            _in_use -= 1
 
 
 def list_devices(fresh: bool = False) -> dict[str, Any]:
@@ -210,7 +228,7 @@ def list_devices(fresh: bool = False) -> dict[str, Any]:
     "error": str | None, "devices": [...]}. `available` is False when this computer has no helper (the reason says why);
     `error` is set when the helper is there but looking failed. Never raises. Reused for a few seconds."""
     with _listing_lock:
-        if not fresh and _cache["value"] is not None and time.monotonic() - _cache["at"] < LISTING_TTL:
+        if _cache["value"] is not None and (_in_use or (not fresh and time.monotonic() - _cache["at"] < LISTING_TTL)):
             return _cache["value"]
         ok, reason = availability()
         if not ok:
