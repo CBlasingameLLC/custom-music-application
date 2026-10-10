@@ -32,7 +32,9 @@ REFRESH_EVERY = timedelta(hours=20)  # "about once a day" without drifting later
 
 
 class RadarUnavailable(RuntimeError):
-    """There was nowhere to look: neither a ListenBrainz account nor a MusicBrainz contact is set up. The message says what to add."""
+    """The radar could not look: nowhere to look, or the services did not answer. The message is written for the person."""
+
+    for_the_person = True
 
 
 @dataclass

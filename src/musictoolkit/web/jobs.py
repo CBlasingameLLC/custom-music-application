@@ -177,7 +177,8 @@ class JobManager:
                 job.status = "cancelled"
             except Exception as exc:
                 logger.error("Job %s (%s) failed", job.id, job.title, exc_info=True)
-                job.error = f"{type(exc).__name__}: {exc}"
+                # An error written for the person (for_the_person = True) is shown as it is; any other names its kind.
+                job.error = str(exc) if getattr(exc, "for_the_person", False) else f"{type(exc).__name__}: {exc}"
                 job.log.append(traceback.format_exc())
                 job.status = "error"
             finally:

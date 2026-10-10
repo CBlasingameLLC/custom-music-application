@@ -7,9 +7,10 @@ Launches `<exe> dashboard`, then checks that the bundled web UI is served and
 that the token gate, library scan, cover art (Pillow), Range streaming (what
 the in-app player uses), the library tools (organize with undo, duplicates with
 the review folder and the Recycle Bin), device sync to a folder, the Spotify
-import (which needs pandas inside the bundle), the scrobbler status and
-diagnostics, settings and backup all work from the frozen binary, and that
-nothing leaks into the working directory.
+import (which needs pandas inside the bundle), listening statistics, mixes and
+song radio, the release radar, lyrics from a stand-in for lrclib.net, the
+scrobbler status and diagnostics, settings and backup all work from the frozen
+binary, and that nothing leaks into the working directory.
 
 Standard library only, so it runs on any CI runner without installing anything.
 """
@@ -24,11 +25,13 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 TOKEN = "smoke-token"
@@ -234,6 +237,63 @@ def phones(client: Client, scratch: Path, count: int) -> None:
     check(status == 200 and described["synced"] == copied, "the phone remembers what was copied")
 
 
+LRCLIB_ANSWER = {"id": 7, "instrumental": False, "plainLyrics": "Sparks\nand wire", "syncedLyrics": "[00:01.00]Sparks\n[00:04.00]and wire\n"}
+
+
+def stand_in_for_lrclib() -> tuple[ThreadingHTTPServer, str]:
+    """A local server that answers every lyrics request the way lrclib.net does for a song it has."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 (the name http.server looks for)
+            payload = json.dumps(LRCLIB_ANSWER).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def personal_layer(client: Client, tracks: list[dict]) -> None:
+    """Statistics, mixes, radio, the release radar and online lyrics, on top of what the earlier checks left in the library."""
+    status, years = client.json("/api/stats/years?tz=0")
+    check(status == 200 and {"year": 2024, "plays": 1} in years["items"], f"statistics know the imported year ({years})")
+    status, overview = client.json("/api/stats/overview?range=year:2024&tz=0")
+    check(status == 200 and overview["totals"]["plays"] == 1 and overview["top_artists"][0]["name"] == "Artist A",
+          f"a year's statistics ({overview.get('totals')})")
+    check(client.request("/api/stats/overview?range=nonsense")[0] == 422, "a nonsense period is refused")
+    status, mixes = client.json("/api/mixes?tz=0")
+    check(status == 200 and isinstance(mixes["items"], list), f"the mixes that have enough songs today ({len(mixes.get('items', []))})")
+    seed = tracks[0]
+    status, radio = client.json(f"/api/radio/track/{seed['id']}")
+    check(status == 200 and radio["tracks"] and radio["tracks"][0]["id"] == seed["id"], f"a radio starts with its song ({status})")
+
+    status, releases = client.json("/api/releases")
+    check(status == 200 and releases["items"] == [] and releases["enabled"] is False, f"the release radar starts empty and off ({releases})")
+    status, started = client.json("/api/releases/refresh", "POST", {})
+    job = wait_job(client, started["job"]["id"]) if status == 200 else {}
+    check(job.get("status") == "error" and "nowhere to look" in (job.get("error") or ""),
+          f"with nowhere to look the radar says what to add ({job.get('status')}: {job.get('error')})")
+
+    named = next((t for t in tracks if t.get("title") and t.get("artist")), None)
+    if named is None:
+        check(False, "a fixture song with an artist and a title to look lyrics up for")
+        return
+    status, before = client.json(f"/api/tracks/{named['id']}/lyrics")
+    check(status == 200 and before["source"] is None and before["online"] == "off", f"lookups are off until asked for ({before})")
+    status, found = client.json(f"/api/tracks/{named['id']}/lyrics/lookup", "POST", {})
+    check(status == 200 and found["source"] == "lrclib" and found["synced"] and found["synced"][0]["text"] == "Sparks",
+          f"lyrics from the stand-in for lrclib.net ({found.get('online')})")
+    status, again = client.json(f"/api/tracks/{named['id']}/lyrics")
+    check(status == 200 and again["source"] == "lrclib", "and they are kept in the app's database")
+
+
 def run(exe: Path, fixtures: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix="mtk-smoke-"))
     profile, elsewhere, music = scratch / "profile", scratch / "elsewhere", scratch / "music"
@@ -248,7 +308,8 @@ def run(exe: Path, fixtures: Path) -> None:
 
     port = free_port()
     log_path = scratch / "backend.log"
-    env = {**os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN}
+    lrclib, lrclib_url = stand_in_for_lrclib()
+    env = {**os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN, "MTK_LRCLIB_URL": lrclib_url}
     # A stand-in for mtk-mtp.exe that keeps its "phones" in folders: the real one needs a phone plugged in.
     fake_helper = fixtures.resolve().parent / "fake_mtp_helper.py"
     if fake_helper.exists():
@@ -319,6 +380,7 @@ def run(exe: Path, fixtures: Path) -> None:
             phones(client, scratch, len(mp3s))
         check(client.request(f"/api/tracks/{track['id']}/info")[0] == 200, "song details")
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
+        personal_layer(client, tracks["items"])
         check(client.request("/api/home")[0] == 200, "Home data")
         status, settings = client.json("/api/settings")
         check(status == 200 and "library" in settings, "settings")
@@ -334,6 +396,7 @@ def run(exe: Path, fixtures: Path) -> None:
         raise
     finally:
         stop(process)
+        lrclib.shutdown()
         time.sleep(0.5)
         if failures:
             print("\n--- backend output ---")
