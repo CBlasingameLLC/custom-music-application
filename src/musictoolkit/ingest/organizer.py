@@ -114,9 +114,9 @@ def validate_scheme(scheme: str) -> None:
         raise ValueError("The template must end with the file extension: {ext}")
 
 
-def _target(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
-    """Where this track belongs under an already-resolved library folder. Pure string work: no disk access,
-    so planning a very large library stays fast."""
+def render_relative(row: sqlite3.Row, scheme: str, sanitize: Callable[[str], str] = sanitize_path_component) -> str:
+    """The relative path (forward slashes) a song gets under a folder template, with every name made usable
+    on Windows. `sanitize` cleans one tag value for use in a name; devices pass their own. Pure string work."""
     path = Path(row["file_path"])
     # A file named "03 - Song.mp3" with no tags still tells us its track number and title; use that rather
     # than renaming it "00 - 03 - Song.mp3" (and again on every later run).
@@ -124,10 +124,10 @@ def _target(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
     track = row["track_number"] or (int(lead.group(1)) if lead else 0)
     title = row["title"] or (lead.group(2) if lead else path.stem)
     fields = {
-        "album_artist": sanitize_path_component(row["album_artist"] or row["artist"] or "Unknown Artist"),
-        "artist": sanitize_path_component(row["artist"] or "Unknown Artist"),
-        "album": sanitize_path_component(row["album"] or "Unknown Album"),
-        "title": sanitize_path_component(title),
+        "album_artist": sanitize(row["album_artist"] or row["artist"] or "Unknown Artist"),
+        "artist": sanitize(row["artist"] or "Unknown Artist"),
+        "album": sanitize(row["album"] or "Unknown Album"),
+        "title": sanitize(title),
         "track": _Number(track),
         "disc": row["disc_number"] or 1,
         "year": _Number(row["year"] or 0),
@@ -136,7 +136,13 @@ def _target(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
     relative = scheme.format(**fields)
     if not _is_plain_relative(relative):
         raise ValueError(f"template result {relative!r} is not a path inside the library")
-    return Path(os.path.normpath(library_root / _safe_relative(relative)))
+    return _safe_relative(relative)
+
+
+def _target(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
+    """Where this track belongs under an already-resolved library folder. Pure string work: no disk access,
+    so planning a very large library stays fast."""
+    return Path(os.path.normpath(library_root / render_relative(row, scheme)))
 
 
 def compute_target_path(row: sqlite3.Row, library_root: Path, scheme: str) -> Path:
