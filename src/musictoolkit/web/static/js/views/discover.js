@@ -1,4 +1,4 @@
-// Discover: new-music suggestions, devices, and listening history.
+// Discover: new-music suggestions and listening history.
 import { api, fmt, html, useAsync, useCallback, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Empty, PageHeader, Spinner } from '../components.js';
@@ -54,25 +54,6 @@ export function DiscoverView() {
           </div>
         </article>`)}</div>`}
     <p class="hint-card subtle"><${Icon} name="info" size=${14} /> Music Toolkit never downloads music. “Want it” keeps a wishlist; the links open Bandcamp, YouTube or MusicBrainz in your browser so you can listen first and buy what you love.</p>`;
-}
-
-// ------------------------------------------------------------ devices
-
-export function DevicesView() {
-  const { data: saved } = useAsync(() => api('/devices'), []);
-  const { data: volumes, loading } = useAsync(() => api('/devices/volumes'), []);
-  return html`
-    <${PageHeader} title="Devices" subtitle="Music players and memory cards you copy music to." />
-    <h2 class="section-title">Connected drives</h2>
-    ${loading && !volumes ? html`<${Spinner} />` : html`<div class="drive-list">${(volumes?.items || []).map((v) => html`<div class="drive ${v.removable ? 'removable' : ''}">
-      <${Icon} name="drive" size=${22} />
-      <div><strong>${v.mount_path}</strong><div class="subtle">${v.fs} · ${fmt.bytes(v.free)} free of ${fmt.bytes(v.total)}</div></div>
-      ${v.removable && html`<span class="badge">removable</span>`}</div>`)}</div>`}
-    <h2 class="section-title">Known devices</h2>
-    ${!saved ? html`<${Spinner} />` : saved.items.length === 0
-      ? html`<${Empty} icon="drive" title="No devices yet">Drives you copy music to are remembered here.<//>`
-      : html`<div class="drive-list">${saved.items.map((d) => html`<div class="drive" key=${d.id}><${Icon} name="drive" size=${22} />
-          <div><strong>${d.label || d.mount_path}</strong><div class="subtle">${d.mount_path} · ${fmt.plural(d.synced, 'song')} copied</div></div></div>`)}</div>`}`;
 }
 
 // ------------------------------------------------------------ history

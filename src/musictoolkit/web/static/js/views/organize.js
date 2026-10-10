@@ -18,7 +18,7 @@ const when = (iso) => {
   return Number.isNaN(date.getTime()) ? '' : `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
 };
 
-function Examples({ example }) {
+export function Examples({ example }) {
   if (!example) return html`<div class="example-box"> </div>`;
   if (!example.ok) return html`<div class="example-box bad" role="alert"><${Icon} name="alert" size=${15} /><span>${example.error}</span></div>`;
   return html`<div class="example-box">

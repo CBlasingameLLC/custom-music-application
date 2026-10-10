@@ -150,6 +150,10 @@ onJobFinished((job) => {
   else if (job.status === 'done' && job.kind === 'scan') {
     const r = job.result || {};
     toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing`, 'success');
+  } else if (job.status === 'done' && job.kind === 'sync') {
+    const r = job.result || {};
+    const note = r.errors_total ? ` ${r.errors_total} could not be copied.` : '';
+    toast(`Copied ${r.copied || 0} ${r.copied === 1 ? 'song' : 'songs'} to ${r.label || 'the device'}.${note}`, r.errors_total || r.aborted ? 'info' : 'success', 8000);
   }
   if (job.status === 'done' || job.status === 'cancelled') {
     bumpLibrary();
