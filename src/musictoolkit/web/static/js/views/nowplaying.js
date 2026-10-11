@@ -3,7 +3,7 @@ import { api, fmt, Fragment, html, useAsync, useEffect, useMemo, useRef, useStat
 import { Icon } from '../icons.js';
 import { Button, Cover, Empty, IconButton } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
-import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, moveInQueue, player, removeFromQueue, seek, setEq, setNormalize, setSleepTimer } from '../player.js';
+import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
 import { enc, go, href, loadPlaylists, notifyError, toast } from '../state.js';
 
 // ------------------------------------------------------------ queue
@@ -187,7 +187,7 @@ function Visualizer() {
 // ------------------------------------------------------------ sound controls
 
 function SoundPanel() {
-  const { eq, normalize, sleepAt } = useStore(player);
+  const { eq, normalize, sleepAt, crossfade, gapless } = useStore(player);
   const [remaining, setRemaining] = useState('');
   useEffect(() => {
     if (!sleepAt) return setRemaining('');
@@ -219,6 +219,15 @@ function SoundPanel() {
     <label class="switch"><input type="checkbox" checked=${normalize} onChange=${(e) => setNormalize(e.target.checked)} />
       <span>Even out loudness between songs (ReplayGain)</span></label>
     <p class="subtle">Uses the loudness tags stored in your files. Songs without them play unchanged.</p>
+    <h3>Between songs</h3>
+    <label class="switch"><input type="checkbox" checked=${gapless || crossfade > 0} disabled=${crossfade > 0} onChange=${(e) => setGapless(e.target.checked)} />
+      <span>Gapless playback</span></label>
+    <p class="subtle">Starts the next song just as the last one ends, with no silence between them: live albums, mixes and classical music run on unbroken.</p>
+    <label class="slider-row"><span>Crossfade</span>
+      <input type="range" min="0" max=${MAX_CROSSFADE} step="1" value=${crossfade} aria-label="Crossfade length in seconds" aria-valuetext=${crossfade ? `${crossfade} seconds` : 'Off'}
+        onInput=${(e) => setCrossfade(Number(e.target.value))} />
+      <output>${crossfade ? `${crossfade} s` : 'Off'}</output></label>
+    <p class="subtle">Fades the end of a song into the start of the next. Short songs get a shorter blend, and skipping with Next or a click is always instant.</p>
     <h3>Sleep timer</h3>
     <div class="sound-row">
       <select value=${sleepAt ? 'on' : 'off'} aria-label="Sleep timer" onChange=${(e) => setSleepTimer(e.target.value === 'off' ? 0 : Number(e.target.value))}>

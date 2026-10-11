@@ -29,7 +29,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
 | Area | Features |
 |---|---|
-| **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
+| **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, gapless playback and crossfade (up to 12 s), 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
 | **Browse** | Home shelves, Songs (virtualized; timed against a synthetic library of 100,000 songs and 300,000 plays with `scripts/perf_synthetic.py`: Home, Songs, Albums, Artists, mixes and radio answer in under half a second), Albums, Artists, Favorites, Recently played, instant search |
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
