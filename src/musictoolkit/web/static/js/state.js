@@ -1,5 +1,6 @@
 // App-wide UI state: routing, toasts, background jobs, dialogs, context menu.
 import { api, createStore } from './lib.js';
+import { accentVars, normalizeAccent } from './appearance.js';
 
 // ------------------------------------------------------------ routing (hash based)
 
@@ -52,21 +53,32 @@ const prefs = (() => {
 
 export const ui = createStore({
   theme: prefs.theme || 'dark',
+  accent: normalizeAccent(prefs.accent), // a preset's id or a #rrggbb colour (js/appearance.js)
+  density: prefs.density === 'compact' ? 'compact' : 'comfortable',
   queueOpen: false,
   jobsOpen: false,
   songColumns: prefs.songColumns || null,
 });
 
-ui.subscribe((s) => {
-  document.documentElement.dataset.theme = s.theme;
+// How the app looks: the theme, the accent colour (and the colours derived from it) and the density go on the page, and are
+// remembered together with the derived colours, which js/boot.js puts back before the next start is drawn.
+function applyLook(s) {
+  const root = document.documentElement;
+  root.dataset.theme = s.theme;
+  root.dataset.density = s.density;
+  const vars = accentVars(s.accent, s.theme);
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
   try {
-    localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns }));
+    localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns, accent: s.accent, density: s.density, vars }));
   } catch {
     /* storage unavailable */
   }
-});
-document.documentElement.dataset.theme = ui.get().theme;
+}
+ui.subscribe(applyLook);
+applyLook(ui.get());
 export const setTheme = (theme) => ui.set({ theme });
+export const setAccent = (accent) => ui.set({ accent: normalizeAccent(accent) });
+export const setDensity = (density) => ui.set({ density: density === 'compact' ? 'compact' : 'comfortable' });
 
 // ------------------------------------------------------------ shared library data
 

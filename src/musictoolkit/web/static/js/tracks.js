@@ -4,11 +4,14 @@ import { api, fmt, html, useCallback, useEffect, useRef, useState, useStore } fr
 import { Icon } from './icons.js';
 import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
-import { desktop, enc, go, notifyError, openMenu, toast } from './state.js';
+import { desktop, enc, go, notifyError, openMenu, toast, ui } from './state.js';
 import { openAddToPlaylist, openTrackInfo } from './dialogs.js';
 import { openTagEditor } from './tagtools.js';
 
 export const ROW_HEIGHT = 52;
+export const COMPACT_ROW_HEIGHT = 40;
+/** How tall a song row is, for the density the person chose (the table lays rows out itself, so it needs the number). */
+export const rowHeightFor = (density) => (density === 'compact' ? COMPACT_ROW_HEIGHT : ROW_HEIGHT);
 const HEADER_HEIGHT = 40;
 const PAGE = 100;
 const BUFFER = 8;
@@ -136,6 +139,7 @@ export function TrackTable({
   const dragFrom = useRef(null);
   const currentId = useStore(player, (s) => s.items[s.order[s.pos]]?.id);
   const playing = useStore(player, (s) => s.playing);
+  const rowHeight = rowHeightFor(useStore(ui, (s) => s.density));
   const cols = visibleColumns(columns, width);
 
   const itemAt = (index) => cache.current.pages.get(Math.floor(index / PAGE))?.[index % PAGE];
@@ -179,11 +183,11 @@ export function TrackTable({
     const scroller = root.current?.closest('.view');
     if (!scroller || !body.current) return;
     const above = Math.max(0, scroller.getBoundingClientRect().top - body.current.getBoundingClientRect().top);
-    const first = Math.max(0, Math.floor(above / ROW_HEIGHT) - BUFFER);
-    const last = Math.ceil((above + scroller.clientHeight) / ROW_HEIGHT) + BUFFER;
+    const first = Math.max(0, Math.floor(above / rowHeight) - BUFFER);
+    const last = Math.ceil((above + scroller.clientHeight) / rowHeight) + BUFFER;
     setRange((prev) => (prev.first === first && prev.last === last ? prev : { first, last }));
     setWidth(root.current.clientWidth);
-  }, []);
+  }, [rowHeight]);
 
   useEffect(() => {
     const scroller = root.current?.closest('.view');
@@ -276,7 +280,7 @@ export function TrackTable({
 
   function renderRow(index) {
     const track = itemAt(index);
-    const style = { top: index * ROW_HEIGHT + 'px', gridTemplateColumns: gridTemplate };
+    const style = { top: index * rowHeight + 'px', height: rowHeight + 'px', gridTemplateColumns: gridTemplate };
     if (!track) {
       return html`<div class="trow skeleton" key=${'s' + index} style=${style}>${cols.map((c) => html`<div class="tcell ${c}"><span class="bar"></span></div>`)}</div>`;
     }
@@ -358,6 +362,6 @@ export function TrackTable({
         </div>`}
     ${total === 0
       ? empty
-      : html`<div class="tbody" ref=${body} style=${{ height: (total ?? 8) * ROW_HEIGHT + 'px' }}>${total === null ? Array.from({ length: 8 }, (_, i) => renderRow(i)) : rows}</div>`}
+      : html`<div class="tbody" ref=${body} style=${{ height: (total ?? 8) * rowHeight + 'px' }}>${total === null ? Array.from({ length: 8 }, (_, i) => renderRow(i)) : rows}</div>`}
   </div>`;
 }

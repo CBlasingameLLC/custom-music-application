@@ -3,7 +3,8 @@ import { api, fmt, html, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
-import { bumpLibrary, desktop, library, loadAbout, loadSettings, notifyError, openModal, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { bumpLibrary, desktop, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -341,14 +342,34 @@ function LogViewer() {
   return html`<p class="subtle path">${data.path}</p><pre class="log">${data.lines.join('\n') || 'The log is empty.'}</pre>`;
 }
 
+function AppearanceCard() {
+  const { theme, accent, density } = useStore(ui);
+  const isPreset = ACCENTS.some((a) => a.id === accent);
+  const current = accentHex(accent);
+  return html`<${Card} icon="sliders" title="Appearance" hint="How the app looks on this computer. Whatever colour you choose, text on it and in it stays easy to read.">
+    <label class="field narrow"><span>Theme</span>
+      <select value=${theme} onChange=${(e) => setTheme(e.target.value)}><option value="dark">Dark</option><option value="light">Light</option></select></label>
+    <div class="field">
+      <span id="accent-label">Accent colour</span>
+      <div class="swatch-row" role="group" aria-labelledby="accent-label">
+        ${ACCENTS.map((a) => html`<button type="button" key=${a.id} class="swatch ${accent === a.id ? 'on' : ''}" style=${{ '--swatch': a.hex, '--on-swatch': readableOn(a.hex) }}
+          aria-label=${a.name} aria-pressed=${accent === a.id} title=${a.name} onClick=${() => setAccent(a.id)}>${accent === a.id && html`<${Icon} name="check" size=${15} />`}</button>`)}
+        <label class="swatch custom ${isPreset ? '' : 'on'}" style=${{ '--swatch': current, '--on-swatch': readableOn(current) }} title="Any colour">
+          <input type="color" value=${current} aria-label="Custom accent colour" onInput=${(e) => setAccent(e.target.value)} />
+          ${isPreset ? html`<${Icon} name="edit" size=${14} />` : html`<${Icon} name="check" size=${15} />`}
+        </label>
+      </div>
+    </div>
+    <label class="field narrow"><span>Density</span>
+      <select value=${density} onChange=${(e) => setDensity(e.target.value)}><option value="comfortable">Comfortable</option><option value="compact">Compact: more on screen</option></select></label>
+  <//>`;
+}
+
 function DataCard({ about }) {
-  const { theme } = useStore(ui);
   async function backup() {
     try { const result = await api('/system/backup', { method: 'POST' }); toast(`Backup saved: ${result.path}`, 'success', 9000); } catch (error) { notifyError(error); }
   }
-  return html`<${Card} icon="sliders" title="Appearance and data">
-    <label class="field narrow"><span>Theme</span>
-      <select value=${theme} onChange=${(e) => setTheme(e.target.value)}><option value="dark">Dark</option><option value="light">Light</option></select></label>
+  return html`<${Card} icon="drive" title="Data">
     ${about && html`<dl class="info-grid">
       <dt>Version</dt><dd>${about.version}</dd>
       <dt>Data folder</dt><dd class="path">${about.data_dir}${desktop?.openPath ? html` <button class="icon-btn" aria-label="Open data folder" onClick=${() => desktop.openPath(about.data_dir)}><${Icon} name="external" size=${14} /></button>` : ''}</dd>
@@ -375,6 +396,7 @@ export function SettingsView() {
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
+      <${AppearanceCard} />
       <${DiagnosticsCard} />
       <${DataCard} about=${about} />
     </div>`;

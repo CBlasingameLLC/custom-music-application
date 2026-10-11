@@ -41,7 +41,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
-| **Look** | Dark and light themes, responsive down to a narrow window |
+| **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
 | **Library tools** | Everything that changes your files shows a preview first, runs as a job with progress and a Cancel button, and can be undone. See below |
 | **Desktop** | A tray icon by the clock with Play/Pause, Next, Previous and Quit; closing the window keeps the music playing from the tray (or quits: your choice in Settings, Window and tray); the window opens where you left it; **Open with** in Explorer, and files or folders dropped on the window, are added to the library and played |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |

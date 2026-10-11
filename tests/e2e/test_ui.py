@@ -333,5 +333,5 @@ class TestDesktopUpdates:
 
     def test_a_plain_browser_has_no_updates_card(self, page):
         page.evaluate("location.hash = '#/settings'")
-        expect(page.get_by_role("heading", name="Appearance and data")).to_be_visible()
+        expect(page.get_by_role("heading", name="Appearance", exact=True)).to_be_visible()
         expect(page.get_by_role("heading", name="Updates")).to_have_count(0)
