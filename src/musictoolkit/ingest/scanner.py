@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -116,6 +117,45 @@ def compute_content_hash(path: Path) -> str:
     return h.hexdigest()
 
 
+def _store(conn: sqlite3.Connection, path: Path, stat, tags: dict, now: str, existing) -> str:
+    """Insert or refresh the row for one file whose tags have been read. Returns "added" or "updated"."""
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO tracks (
+                file_path, file_size, file_mtime, duration_seconds,
+                title, artist, album_artist, album, track_number,
+                disc_number, year, genre, format, bitrate,
+                tag_source, date_added, date_last_scanned, is_missing
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, 0)
+            """,
+            (
+                str(path), stat.st_size, stat.st_mtime, tags["duration_seconds"],
+                tags["title"], tags["artist"], tags["album_artist"], tags["album"],
+                tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
+                tags["format"], tags["bitrate"], now, now,
+            ),
+        )
+        return "added"
+    conn.execute(
+        """
+        UPDATE tracks SET
+            file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?,
+            title = ?, artist = ?, album_artist = ?, album = ?,
+            track_number = ?, disc_number = ?, year = ?, genre = ?,
+            format = ?, bitrate = ?, date_last_scanned = ?, is_missing = 0
+        WHERE id = ?
+        """,
+        (
+            stat.st_size, stat.st_mtime, tags["duration_seconds"],
+            tags["title"], tags["artist"], tags["album_artist"], tags["album"],
+            tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
+            tags["format"], tags["bitrate"], now, existing["id"],
+        ),
+    )
+    return "updated"
+
+
 def scan_library(
     conn: sqlite3.Connection,
     root: Path,
@@ -160,42 +200,9 @@ def scan_library(
             continue
 
         tags = _read_basic_tags(path)
-
-        if existing is None:
-            conn.execute(
-                """
-                INSERT INTO tracks (
-                    file_path, file_size, file_mtime, duration_seconds,
-                    title, artist, album_artist, album, track_number,
-                    disc_number, year, genre, format, bitrate,
-                    tag_source, date_added, date_last_scanned, is_missing
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, 0)
-                """,
-                (
-                    str(path), stat.st_size, stat.st_mtime, tags["duration_seconds"],
-                    tags["title"], tags["artist"], tags["album_artist"], tags["album"],
-                    tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
-                    tags["format"], tags["bitrate"], now, now,
-                ),
-            )
+        if _store(conn, path, stat, tags, now, existing) == "added":
             result.added += 1
         else:
-            conn.execute(
-                """
-                UPDATE tracks SET
-                    file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?,
-                    title = ?, artist = ?, album_artist = ?, album = ?,
-                    track_number = ?, disc_number = ?, year = ?, genre = ?,
-                    format = ?, bitrate = ?, date_last_scanned = ?, is_missing = 0
-                WHERE id = ?
-                """,
-                (
-                    stat.st_size, stat.st_mtime, tags["duration_seconds"],
-                    tags["title"], tags["artist"], tags["album_artist"], tags["album"],
-                    tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
-                    tags["format"], tags["bitrate"], now, existing["id"],
-                ),
-            )
             result.updated += 1
 
     if on_progress is not None:
@@ -210,3 +217,56 @@ def scan_library(
 
     conn.commit()
     return result
+
+
+MAX_OPENED = 5000  # songs taken from the folders given to add_files, so a drive's root cannot be opened by mistake
+CASE_INSENSITIVE_PATHS = os.name == "nt"  # file names there ignore case: C:\Music\A.mp3 and c:\music\a.mp3 are one file
+
+
+def add_files(conn: sqlite3.Connection, paths: list[str]) -> list[tuple[str, int | None, str]]:
+    """Put these files in the library (a song opened from outside the folders it scans, or dropped on the window) and
+    say what happened to each: (path as given, track id or None, outcome). A folder stands for the songs inside it.
+
+    Outcomes: "added", "updated" (the file changed since it was last read), "known" (already there as it is), and for
+    a path that cannot be used "not_audio", "missing" or "unreadable". Files outside every library folder are left
+    alone by later scans, which only retire songs inside the folders they scan."""
+    results: list[tuple[str, int | None, str]] = []
+    now = datetime.now(timezone.utc).isoformat()
+    opened = 0
+    for given in paths:
+        try:
+            candidate = Path(given)
+            if not candidate.is_absolute():
+                results.append((given, None, "unreadable"))
+                continue
+            candidate = candidate.resolve()
+            if candidate.is_dir():
+                files = find_audio_files(candidate)
+                if len(files) > MAX_OPENED - opened:
+                    files = files[: MAX_OPENED - opened]
+                results.extend(add_files(conn, [str(f) for f in files]))
+                opened += len(files)
+                continue
+            if not candidate.is_file():
+                results.append((given, None, "missing"))
+                continue
+            if candidate.suffix.lower() not in AUDIO_EXTENSIONS:
+                results.append((given, None, "not_audio"))
+                continue
+            stat = candidate.stat()
+        except (OSError, ValueError):
+            results.append((given, None, "unreadable"))
+            continue
+        opened += 1
+        existing = conn.execute(
+            "SELECT id, file_size, file_mtime, is_missing FROM tracks WHERE file_path = ?" + (" COLLATE NOCASE" if CASE_INSENSITIVE_PATHS else ""),
+            (str(candidate),),
+        ).fetchone()
+        if existing is not None and not existing["is_missing"] and existing["file_size"] == stat.st_size and existing["file_mtime"] == stat.st_mtime:
+            results.append((given, existing["id"], "known"))
+            continue
+        outcome = _store(conn, candidate, stat, _read_basic_tags(candidate), now, existing)
+        track_id = existing["id"] if existing is not None else conn.execute("SELECT id FROM tracks WHERE file_path = ?", (str(candidate),)).fetchone()["id"]
+        results.append((given, track_id, outcome))
+    conn.commit()
+    return results

@@ -24,7 +24,7 @@ class TestSettings:
         body = response.json()
         assert body["musicbrainz"]["contact"] == "me@example.com"
         assert body["listenbrainz"]["has_token"] is True and "tok-123" not in response.text
-        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True, "release_radar": False, "auto_update": True}
+        assert body["app"] == {"rescan_on_launch": True, "lyrics_lrclib": True, "release_radar": False, "auto_update": True, "close_action": "tray_if_playing"}
 
         saved = load_config(empty_web.ctx.config_path)  # really written to config.toml
         assert saved.listenbrainz.user_token == "tok-123" and saved.listenbrainz.username == "cayl"
@@ -38,6 +38,17 @@ class TestSettings:
         assert c.put("/api/settings", json={"app": {"auto_update": False}}).json()["app"]["auto_update"] is False
         assert load_config(empty_web.ctx.config_path).app.auto_update is False
         assert c.put("/api/settings", json={"app": {"auto_update": "no"}}).status_code == 422
+
+    def test_what_the_close_button_does_is_one_of_three_choices_and_is_kept(self, empty_web) -> None:
+        c = empty_web.client
+        assert c.get("/api/settings").json()["app"]["close_action"] == "tray_if_playing"
+        for choice in ("quit", "tray", "tray_if_playing"):
+            assert c.put("/api/settings", json={"app": {"close_action": choice}}).json()["app"]["close_action"] == choice
+            assert load_config(empty_web.ctx.config_path).app.close_action == choice
+        refused = c.put("/api/settings", json={"app": {"close_action": "explode"}})
+        assert refused.status_code == 422 and "must be one of" in refused.json()["detail"]
+        assert c.put("/api/settings", json={"app": {"close_action": 3}}).status_code == 422
+        assert c.get("/api/settings").json()["app"]["close_action"] == "tray_if_playing", "a refused value changes nothing"
 
     def test_sending_an_empty_secret_clears_it(self, empty_web) -> None:
         c = empty_web.client
