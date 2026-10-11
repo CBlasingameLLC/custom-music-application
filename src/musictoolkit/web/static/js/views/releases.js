@@ -31,7 +31,7 @@ function ReleaseCard({ item, dismissed, onStatus }) {
   return html`<article class="reco release">
     <div class="release-art"><${Art} item=${item} /></div>
     <div class="reco-main">
-      <h3>${item.artist} <span class="dash">-</span> ${item.title}</h3>
+      <h2>${item.artist} <span class="dash">-</span> ${item.title}</h2>
       <p class="subtle">
         <span class="badge kind">${item.kind}</span>${item.upcoming ? html` <span class="badge soon">Coming soon</span>` : ''}
         ${whenText(item.date)}${played ? ` · ${played}` : ''}

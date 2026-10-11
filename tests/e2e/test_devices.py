@@ -299,6 +299,6 @@ class TestPhones:
         expect(card).to_contain_text("choose File transfer")
 
         page.get_by_role("link", name="Pixel", exact=True).click()
-        expect(page.get_by_role("alert")).to_contain_text("Plug it in, unlock it, and choose File transfer")
+        expect(page.get_by_role("alert").filter(has_text="Plug it in, unlock it, and choose File transfer")).to_be_visible()  # the page also keeps an empty alert region for problems to land in
         expect(page.get_by_role("button", name=PREVIEW)).to_be_disabled()
         assert added["kind"] == "mtp"

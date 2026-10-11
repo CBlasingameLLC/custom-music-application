@@ -51,7 +51,7 @@ export function MixView({ id }) {
   const rev = useStore(library, (s) => s.rev);
   const { data: mix, error } = useAsync(() => api(`/mixes/${id}`, { params: { tz: viewerOffset() } }), [id, rev]);
   const fetchPage = useCallback(staticFetch(mix?.tracks || []), [mix]);
-  if (error) return html`<${Empty} icon="sparkles" title="That mix is empty today">
+  if (error) return html`<${Empty} icon="sparkles" title="That mix is empty today" level=${1}>
     <p>${error.message}</p><a class="btn" href=${href('/mixes')}>See the other mixes</a><//>`;
   if (!mix) return html`<${Spinner} />`;
 

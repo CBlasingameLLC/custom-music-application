@@ -176,33 +176,63 @@ onJobFinished((job) => {
 
 // ------------------------------------------------------------ context menu
 
-export const menu = createStore({ open: false, x: 0, y: 0, items: [] });
+export const menu = createStore({ open: false, x: 0, y: 0, items: [], opener: null });
+
+/** The element with the focus, unless that is nothing in particular (the page body) or part of a dialog that has just closed. */
+function focusedElement() {
+  const element = document.activeElement;
+  if (!element || element === document.body) return null;
+  const dialog = element.closest?.('[data-modal-id]');
+  if (dialog && !modals.get().stack.some((m) => String(m.id) === dialog.dataset.modalId)) return null;
+  return element;
+}
+
+/** Give the focus back to `element`, unless the person has moved on: it stays wherever they put it. (Nowhere, or in a menu or dialog that is closing, is not "moved on".) */
+function restoreFocus(element) {
+  const now = document.activeElement;
+  const lost = !now || now === document.body || now.closest?.('[data-modal-id], .menu');
+  if (element?.isConnected && lost) element.focus({ preventScroll: true });
+}
 
 /** `event` may be a real mouse event or just { clientX, clientY } to anchor the menu somewhere. */
 export function openMenu(event, items) {
   event.preventDefault?.();
   event.stopPropagation?.();
-  menu.set({ open: true, x: event.clientX, y: event.clientY, items });
+  menu.set({ open: true, x: event.clientX, y: event.clientY, items, opener: focusedElement() });
 }
-export const closeMenu = () => menu.set({ open: false, x: 0, y: 0, items: [] });
+/** `restore` puts the focus back where it was before the menu opened: for Escape and for a chosen item, not for a click somewhere else. */
+export function closeMenu({ restore = false } = {}) {
+  const { opener } = menu.get();
+  menu.set({ open: false, x: 0, y: 0, items: [], opener: null });
+  if (restore) restoreFocus(opener);
+}
 
 // ------------------------------------------------------------ dialogs
 
 export const modals = createStore({ stack: [] });
 let modalCounter = 0;
 
+let lastClosed = { opener: null, at: 0 };
+
 export function closeModal(id) {
   const entry = modals.get().stack.find((m) => m.id === id);
   if (!entry) return;
   modals.set((s) => ({ stack: s.stack.filter((m) => m.id !== id) }));
   entry.onClose?.();
+  // Back to what had the focus before the dialog opened, once the page has caught up with the dialog being gone.
+  lastClosed = { opener: entry.opener, at: Date.now() };
+  setTimeout(() => restoreFocus(entry.opener), 0);
 }
 
-/** Show a dialog. `render(close)` returns the body; `onClose` fires however it was dismissed. */
+/**
+ * Show a dialog. `render(close)` returns the body; `onClose` fires however it was dismissed. Closing it puts the focus back
+ * where it was, also when the answer led straight to another dialog (a confirmation after a confirmation).
+ */
 export function openModal({ title, render, width = 480, onClose }) {
   const id = ++modalCounter;
   const close = () => closeModal(id);
-  modals.set((s) => ({ stack: [...s.stack, { id, title, render, width, close, onClose }] }));
+  const opener = focusedElement() || (Date.now() - lastClosed.at < 1000 ? lastClosed.opener : null);
+  modals.set((s) => ({ stack: [...s.stack, { id, title, render, width, close, onClose, opener }] }));
   return close;
 }
 

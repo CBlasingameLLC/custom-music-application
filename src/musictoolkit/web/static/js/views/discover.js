@@ -1,7 +1,7 @@
 // Discover: new-music suggestions and listening history.
 import { api, fmt, html, useAsync, useCallback, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
-import { Button, Empty, PageHeader, Spinner } from '../components.js';
+import { Button, Empty, PageHeader, Spinner, TabPanel, Tabs } from '../components.js';
 import { go, href, library, notifyError, route, toast, trackJob } from '../state.js';
 import { ReleasesTab } from './releases.js';
 
@@ -37,15 +37,15 @@ export function DiscoverView() {
     <${PageHeader} title="Discover" subtitle="New music picked from your listening, minus everything you already own.">
       ${tab !== 'releases' && html`<${Button} kind="primary" icon="compass" onClick=${fetchMore}>Get recommendations<//>`}
     <//>
-    <div class="tabs" role="tablist">${TABS.map(([id, label]) => html`<button role="tab" class="tab ${tab === id ? 'active' : ''}" aria-selected=${tab === id} onClick=${() => setTab(id)}>
-      ${label}${(id === 'releases' ? newReleases : counts[id]) ? html`<span class="count">${id === 'releases' ? newReleases : counts[id]}</span>` : ''}</button>`)}</div>
+    <${Tabs} id="disc" label="Discover" tabs=${TABS.map(([id, label]) => ({ id, label, count: (id === 'releases' ? newReleases : counts[id]) || undefined }))} value=${tab} onChange=${setTab} />
+    <${TabPanel} id="disc" value=${tab}>
     ${tab === 'releases' ? html`<${ReleasesTab} onCounts=${setNewReleases} />` : loading && !data ? html`<${Spinner} />` : data.items.length === 0
       ? html`<${Empty} icon="compass" title=${tab === 'new' ? 'No suggestions yet' : 'Nothing here yet'}>
           <p>${tab === 'new' ? html`Press <strong>Get recommendations</strong>. It needs your ListenBrainz username (an imported listening history makes it far better). Add it in <a href=${href('/settings')}>Settings</a>.` : 'Suggestions you sort will show up here.'}</p>
         <//>`
       : html`<div class="reco-list">${data.items.map((item) => html`<article class="reco" key=${item.id}>
           <div class="reco-main">
-            <h3>${item.artist}${item.track ? html` <span class="dash">-</span> ${item.track}` : ''}</h3>
+            <h2>${item.artist}${item.track ? html` <span class="dash">-</span> ${item.track}` : ''}</h2>
             <p class="subtle">${item.reason} · ${item.source.replace('_', ' ')}${item.suggested ? ` · suggested ${fmt.date(item.suggested)}` : ''}</p>
             <div class="reco-links">${item.links.map((l) => html`<a class="pill" href=${l.url} target="_blank" rel="noopener noreferrer"><${Icon} name="external" size=${12} /> ${l.label}</a>`)}</div>
           </div>
@@ -57,6 +57,7 @@ export function DiscoverView() {
             : html`<${Button} small icon="refresh" onClick=${() => triage(item, 'new')}>Move back to New<//>`}
           </div>
         </article>`)}</div>`}
+    <//>
     <p class="hint-card subtle"><${Icon} name="info" size=${14} /> ${tab === 'releases'
       ? 'Music Toolkit never downloads music. The links open MusicBrainz, Bandcamp or YouTube in your browser so you can listen first and buy what you love.'
       : 'Music Toolkit never downloads music. “Want it” keeps a wishlist; the links open Bandcamp, YouTube or MusicBrainz in your browser so you can listen first and buy what you love.'}</p>`;

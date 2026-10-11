@@ -1,6 +1,7 @@
 // The accent colour: a handful of presets and any colour of the person's choosing. Whatever is chosen, the colours the
-// app derives from it are made to be readable: the accent used as text or an icon on the app's surfaces, and the solid
-// fill under the text of a primary button, each reach at least 4.5:1 (WCAG AA for normal text). Pure functions, no DOM.
+// app derives from it are made to be readable: the accent used as text or an icon on the app's surfaces (also on the tint
+// that marks a selected row, and under the pointer), and the solid fill under the text of a primary button (also when the
+// pointer is over it), each reach at least 4.5:1 (WCAG AA for normal text). Pure functions, no DOM.
 
 export const DEFAULT_ACCENT = 'violet';
 
@@ -18,6 +19,10 @@ export const ACCENTS = [
 // The lightest dark surface and the darkest light surface text sits on (css/app.css: --bg-elev-2 and --bg-sidebar). An
 // accent that reads on these reads on every surface in between.
 const HARDEST_SURFACE = { dark: '#1b1f29', light: '#eceef7' };
+// What gets laid over a surface under the accent text: the tint of a selected row (--accent-soft, the accent itself at
+// this opacity) and the pointer/press overlay (--bg-active). Both make the surface harder to read on.
+const SOFT_ALPHA = { dark: 0.17, light: 0.13 };
+const PRESS_OVERLAY = { dark: [255, 255, 255, 0.1], light: [20, 24, 45, 0.1] };
 const WHITE = '#ffffff';
 const INK = '#0b0d12'; // text on a light accent
 export const MIN_CONTRAST = 4.5;
@@ -71,12 +76,18 @@ export function hslToRgb([h, s, l]) {
   return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
 }
 
-/** Move a colour's lightness (hue and saturation kept) in `direction` (+1 lighter, -1 darker) until it reaches `target` against `against`. */
-function adjustUntil(rgb, against, target, direction) {
+/** `colour` (an rgb array, 0-255) laid over `under` (an rgb array) at the opacity `alpha`. */
+const blend = (colour, alpha, under) => under.map((u, i) => colour[i] * alpha + u * (1 - alpha));
+
+/** How readable a colour is on the least friendly of several backgrounds (a hex string or [r, g, b] each). */
+const worstContrast = (colour, backgrounds) => Math.min(...backgrounds.map((b) => contrast(colour, b)));
+
+/** Move a colour's lightness (hue and saturation kept) in `direction` (+1 lighter, -1 darker) until it reaches `target` on every one of `backgrounds`. */
+function adjustUntil(rgb, backgrounds, target, direction) {
   const [h, s, l0] = rgbToHsl(rgb);
   let l = l0;
   let current = rgb;
-  while (contrast(current, against) < target && (direction > 0 ? l < 0.97 : l > 0.03)) {
+  while (worstContrast(current, backgrounds) < target && (direction > 0 ? l < 0.97 : l > 0.03)) {
     l += direction * 0.01;
     current = hslToRgb([h, s, l]).map(Math.round);
   }
@@ -100,16 +111,25 @@ export function normalizeAccent(accent) {
   return custom ? toHex(custom) : DEFAULT_ACCENT;
 }
 
+/** The backgrounds accent-coloured text must be readable on: the surface, the surface under a selected row's tint, and under the pointer. */
+function textGrounds(base, mode) {
+  const surface = parseHex(HARDEST_SURFACE[mode]);
+  const [r, g, b, a] = PRESS_OVERLAY[mode];
+  return [surface, blend(base, SOFT_ALPHA[mode], surface), blend([r, g, b], a, surface)];
+}
+
 /**
  * The CSS variables an accent sets for a theme ("dark" or "light"):
- *   --accent        for text and icons on the app's surfaces (>= 4.5:1 on the hardest of them)
- *   --accent-fill   the solid colour of a primary button, with --on-accent text on it (>= 4.5:1)
- *   --accent-strong the deeper end of a gradient; --accent-2 its other end; --accent-soft a tint for selected rows
+ *   --accent            for text and icons on the app's surfaces (>= 4.5:1 on the hardest of them, with a selected row's tint, under the pointer)
+ *   --accent-fill       the solid colour of a primary button, with --on-accent text on it (>= 4.5:1)
+ *   --accent-fill-hover the same under the pointer: moved away from the text colour, so it is never harder to read
+ *   --accent-strong     the deeper end of a gradient; --accent-2 its other end; --accent-soft a tint for selected rows
  */
 export function accentVars(accent, theme) {
+  const mode = theme === 'light' ? 'light' : 'dark';
   const base = parseHex(accentHex(accent));
-  const surface = HARDEST_SURFACE[theme === 'light' ? 'light' : 'dark'];
-  const text = contrast(base, surface) >= TARGET ? base : adjustUntil(base, surface, TARGET, theme === 'light' ? -1 : 1);
+  const grounds = textGrounds(base, mode);
+  const text = worstContrast(base, grounds) >= TARGET ? base : adjustUntil(base, grounds, TARGET, mode === 'light' ? -1 : 1);
 
   // The button fill. White text when the colour carries it, or can be darkened a little to (and still look like itself);
   // otherwise dark text on the colour, lightened if it must be.
@@ -118,14 +138,15 @@ export function accentVars(accent, theme) {
   if (contrast(base, WHITE) >= TARGET) {
     [fill, onAccent] = [base, WHITE];
   } else {
-    const darkened = adjustUntil(base, WHITE, TARGET, -1);
+    const darkened = adjustUntil(base, [WHITE], TARGET, -1);
     const [baseLight, darkLight] = [rgbToHsl(base)[2], rgbToHsl(darkened)[2]];
     if (darkLight >= WHITE_TEXT_MIN_LIGHTNESS && baseLight - darkLight <= MAX_DARKENING) [fill, onAccent] = [darkened, WHITE];
-    else [fill, onAccent] = [contrast(base, INK) >= TARGET ? base : adjustUntil(base, INK, TARGET, 1), INK];
+    else [fill, onAccent] = [contrast(base, INK) >= TARGET ? base : adjustUntil(base, [INK], TARGET, 1), INK];
   }
   const whiteWorks = onAccent === WHITE;
   const [h, s, l] = rgbToHsl(fill);
-  const hover = hslToRgb([h, s, Math.min(0.92, Math.max(0.08, l + (whiteWorks ? 0.05 : -0.05)))]);
+  const moved = hslToRgb([h, s, Math.min(0.92, Math.max(0.08, l + (whiteWorks ? -0.05 : 0.05)))]);
+  const hover = contrast(moved, onAccent) >= TARGET ? moved : fill;
   const strong = hslToRgb([h, s, Math.max(0.1, l - 0.06)]);
   const [th, ts, tl] = rgbToHsl(text);
   const second = hslToRgb([th - 45, ts, tl]);
@@ -136,7 +157,7 @@ export function accentVars(accent, theme) {
     '--accent-fill-hover': toHex(hover),
     '--accent-strong': toHex(strong),
     '--accent-2': toHex(second),
-    '--accent-soft': `rgba(${r}, ${g}, ${b}, ${theme === 'light' ? 0.13 : 0.17})`,
+    '--accent-soft': `rgba(${r}, ${g}, ${b}, ${SOFT_ALPHA[mode]})`,
     '--on-accent': onAccent,
   };
 }
@@ -146,9 +167,11 @@ export const readableOn = (hex) => (contrast(hex, WHITE) >= contrast(hex, INK) ?
 
 /** For the tests and the Settings preview: how readable each derived colour is. */
 export function accentContrasts(accent, theme) {
-  const vars = accentVars(accent, theme);
+  const mode = theme === 'light' ? 'light' : 'dark';
+  const vars = accentVars(accent, mode);
   return {
-    text: contrast(vars['--accent'], HARDEST_SURFACE[theme === 'light' ? 'light' : 'dark']),
+    text: worstContrast(parseHex(vars['--accent']), textGrounds(parseHex(accentHex(accent)), mode)),
     button: contrast(vars['--accent-fill'], vars['--on-accent']),
+    hover: contrast(vars['--accent-fill-hover'], vars['--on-accent']),
   };
 }

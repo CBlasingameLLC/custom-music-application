@@ -95,6 +95,12 @@ export function useDebounced(value, ms = 250) {
   return debounced;
 }
 
+/** Does the person's system ask for less motion? (Windows: Settings, Accessibility, Visual effects, Animation effects off.) */
+export const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+/** The value for `behavior` when scrolling with code: smooth, unless the person asked for less motion. */
+export const scrollBehavior = () => (prefersReducedMotion() ? 'auto' : 'smooth');
+
 /** The viewer's offset from UTC in minutes, east positive: what the server needs to know which day a play was on. */
 export const viewerOffset = () => -new Date().getTimezoneOffset();
 

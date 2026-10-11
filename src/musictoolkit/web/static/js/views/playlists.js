@@ -63,7 +63,7 @@ export function PlaylistView({ id }) {
   const fetchPage = useCallback((offset, limit) => api('/tracks', { params: { ...params, offset, limit } }), [resetKey]);
   const onSort = (key) => setSort((s) => (key === 'track' ? { key: 'position', dir: 'asc' } : s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
 
-  if (error) return html`<${Empty} icon="list" title="Playlist not found">${error.message}<//>`;
+  if (error) return html`<${Empty} icon="list" title="Playlist not found" level=${1}>${error.message}<//>`;
   if (!playlist) return html`<${Spinner} />`;
   const manual = playlist.kind === 'manual';
   const ordered = manual && sort.key === 'position';

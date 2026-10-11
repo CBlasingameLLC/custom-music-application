@@ -36,7 +36,7 @@ def test_every_accent_is_readable_in_both_themes_and_so_is_any_colour_someone_pi
           for (const accent of [...a.ACCENTS.map((x) => x.id), {json.dumps(ODD_COLOURS)}].flat()) {{
             for (const theme of ['dark', 'light']) {{
               const c = a.accentContrasts(accent, theme);
-              rows.push({{ accent, theme, text: c.text, button: c.button }});
+              rows.push({{ accent, theme, text: c.text, button: c.button, hover: c.hover }});
             }}
           }}
           return {{ rows, min: a.MIN_CONTRAST, presets: a.ACCENTS.length }};
@@ -44,8 +44,39 @@ def test_every_accent_is_readable_in_both_themes_and_so_is_any_colour_someone_pi
     )
 
     assert result["presets"] == 8 and len(result["rows"]) == (8 + len(ODD_COLOURS)) * 2
-    too_dim = [r for r in result["rows"] if min(r["text"], r["button"]) < result["min"]]
+    too_dim = [r for r in result["rows"] if min(r["text"], r["button"], r["hover"]) < result["min"]]
     assert not too_dim, too_dim
+
+
+def test_accent_text_reads_on_every_surface_also_with_a_selected_rows_tint_or_the_pointer_over_it(page) -> None:
+    # Measured against the surfaces the stylesheet really has, and the tints it really lays over them (not the ones the
+    # derivation assumes): the tint of a selected row is the accent itself at --accent-soft's opacity, the pointer's is --bg-active.
+    result = page.evaluate(
+        f"""{APPEARANCE}.then(async (a) => {{
+          const state = await import('/static/js/state.js');
+          const root = document.documentElement;
+          const rgb = (text) => text.match(/\\d+(\\.\\d+)?/g).map(Number);
+          const mix = (over, under) => under.map((u, i) => over[i] * over[3] + u * (1 - over[3]));
+          const rows = [];
+          for (const theme of ['dark', 'light']) {{
+            state.setTheme(theme);
+            for (const accent of [...a.ACCENTS.map((x) => x.id), ...{json.dumps(ODD_COLOURS)}]) {{
+              state.setAccent(accent);
+              const style = getComputedStyle(root);
+              const surfaces = ['--bg', '--bg-sidebar', '--bg-elev', '--bg-elev-2'].map((name) => a.parseHex(style.getPropertyValue(name).trim()));
+              const soft = rgb(style.getPropertyValue('--accent-soft'));
+              const press = rgb(style.getPropertyValue('--bg-active'));
+              const text = a.parseHex(style.getPropertyValue('--accent').trim());
+              const grounds = surfaces.flatMap((s) => [s, mix(soft, s), mix(press, s)]);
+              rows.push({{ theme, accent, worst: Math.min(...grounds.map((g) => a.contrast(text, g))) }});
+            }}
+          }}
+          return rows;
+        }})"""
+    )
+
+    assert len(result) == 2 * (8 + len(ODD_COLOURS))
+    assert [r for r in result if r["worst"] < 4.5] == []
 
 
 def test_nonsense_colours_fall_back_to_the_default(page) -> None:
@@ -103,22 +134,29 @@ def test_any_colour_can_be_chosen_and_the_derived_colours_stay_readable(page) ->
 
 @pytest.mark.parametrize("theme", ["dark", "light"])
 @pytest.mark.parametrize("accent", ["violet", "blue", "amber", "graphite"])
-def test_the_text_on_a_primary_button_is_readable_as_drawn(page, accent, theme) -> None:
+def test_the_text_on_a_primary_button_is_readable_as_drawn_also_under_the_pointer(page, accent, theme) -> None:
+    page.emulate_media(reduced_motion="reduce")  # colours arrive at once instead of easing to their new value
     page.evaluate("([a, t]) => import('/static/js/state.js').then((s) => { s.setAccent(a); s.setTheme(t); })", [accent, theme])
     page.evaluate("location.hash = '#/'")
     button = page.locator(".btn.primary").first
     expect(button).to_be_visible()
-    page.wait_for_timeout(500)  # the button's colour eases to its new one; read it once it has arrived
 
-    ratio = button.evaluate(
-        f"""(el) => {APPEARANCE}.then((a) => {{
-          const style = getComputedStyle(el);
-          const rgb = (text) => text.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number);
-          return a.contrast(rgb(style.backgroundColor), rgb(style.color));
-        }})"""
-    )
+    def ratio() -> float:
+        return button.evaluate(
+            f"""(el) => {APPEARANCE}.then((a) => {{
+              const style = getComputedStyle(el);
+              const rgb = (text) => text.match(/\\d+(\\.\\d+)?/g).slice(0, 3).map(Number);
+              return a.contrast(rgb(style.backgroundColor), rgb(style.color));
+            }})"""
+        )
 
-    assert ratio >= 4.5, f"{accent} in the {theme} theme: {ratio:.2f}"
+    page.mouse.move(0, 0)
+    resting = ratio()
+    button.hover()
+    hovered = ratio()
+
+    assert resting >= 4.5, f"{accent} in the {theme} theme: {resting:.2f}"
+    assert hovered >= 4.5, f"{accent} in the {theme} theme under the pointer: {hovered:.2f}"
 
 
 def test_compact_density_shortens_the_song_rows_and_the_table_still_lines_up(page, live) -> None:
