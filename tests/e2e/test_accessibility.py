@@ -97,11 +97,12 @@ class Tour:
     def states(self) -> list[tuple[str, Callable[[], None]]]:
         page = self.page
 
-        def card(title: str) -> Callable[[], None]:
+        def card(kind: str) -> Callable[[], None]:
             def go() -> None:
-                page.evaluate("location.hash = '#/albums'" if title == "album" else "location.hash = '#/artists'")
+                page.evaluate("(kind) => { location.hash = kind === 'album' ? '#/albums' : '#/artists'; }", kind)
                 page.locator(".card").first.wait_for()
                 page.locator(".card").first.click()
+                wait_until(page, f"location.hash.startsWith('#/{kind}/')")  # the click has led to the page, which now loads
                 settled(page)
 
             return go
@@ -109,6 +110,7 @@ class Tour:
         def playlist() -> None:
             page.evaluate("location.hash = '#/playlists'")
             page.locator(".card", has_text="Road trip").click()
+            wait_until(page, "location.hash.startsWith('#/playlist/')")
             settled(page)
 
         def now(tab: str) -> Callable[[], None]:
@@ -382,6 +384,21 @@ def test_a_dialog_that_leads_to_another_gives_the_keyboard_back_to_where_it_star
     expect(opener).to_be_focused()
 
 
+def test_a_dialog_without_a_field_puts_the_keyboard_on_its_first_button_or_on_itself(page, live) -> None:
+    page.evaluate("import('/static/js/dialogs.js').then((d) => { d.confirmDialog({ title: 'Remove it?', message: 'Remove this thing?', confirm: 'Remove', danger: true }); })")
+    confirmation = page.get_by_role("dialog", name="Remove it?")
+    expect(confirmation.get_by_role("button", name="Cancel")).to_be_focused()  # the careful choice, not the one that does it
+    page.keyboard.press("Escape")
+    expect(confirmation).to_have_count(0)
+
+    add_library(page, live)
+    page.locator(".trow").first.locator(".t1").click(button="right")
+    page.get_by_role("menuitem", name="Song details").click()
+    details = page.get_by_role("dialog", name="Song details")
+    expect(details).to_be_visible()
+    expect(details).to_be_focused()  # nothing in it to use yet, so the dialog itself: a screen reader reads it from the top
+
+
 def test_a_dialog_opened_from_a_songs_menu_returns_to_the_song_table(page, live) -> None:
     add_library(page, live)
     grid = page.get_by_role("grid", name="Songs")
@@ -427,6 +444,20 @@ def test_a_menu_is_driven_by_the_arrow_keys_and_escape_gives_the_focus_back(page
     expect(page.get_by_text(f'Added "{second}" to the queue')).to_be_visible()
     expect(page.get_by_role("menu")).to_have_count(0)
     expect(grid).to_be_focused()
+
+
+def test_tab_leaves_a_menu_and_carries_on_from_where_the_menu_was_opened(page, live) -> None:
+    add_library(page, live)
+    grid = page.get_by_role("grid", name="Songs")
+    grid.focus()
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Shift+F10")
+    expect(page.get_by_role("menu")).to_be_visible()
+
+    page.keyboard.press("Tab")
+
+    expect(page.get_by_role("menu")).to_have_count(0)
+    expect(page.get_by_role("button", name="Number")).to_be_focused()  # the next stop after the table
 
 
 def test_the_song_table_is_a_grid_with_the_counts_and_the_sort_a_screen_reader_needs(page, live) -> None:
@@ -499,13 +530,15 @@ def test_the_song_table_can_be_walked_selected_and_played_from_the_keyboard(page
 def test_the_arrow_keys_in_the_song_table_do_not_also_change_the_volume(page, live) -> None:
     add_library(page, live)
     page.get_by_role("grid", name="Songs").focus()
-    before = page.evaluate("import('/static/js/player.js').then((p) => p.player.get().volume)")
+    volume = lambda: page.evaluate("import('/static/js/player.js').then((p) => p.player.get().volume)")  # noqa: E731
+    before = volume()
+    assert before > 0.5, "so that turning it down would show"
 
     page.keyboard.press("ArrowDown")
-    page.keyboard.press("Shift+ArrowDown")
-    page.keyboard.press("Shift+ArrowUp")
+    page.keyboard.press("Shift+ArrowDown")  # selects a second song, and does not turn the volume down
 
-    assert page.evaluate("import('/static/js/player.js').then((p) => p.player.get().volume)") == before
+    assert volume() == before
+    expect(page.locator(".trow[aria-selected=true]")).to_have_count(2)
 
 
 def test_songs_are_rated_from_the_keyboard_with_the_digits(page, live) -> None:
@@ -676,26 +709,59 @@ def test_the_shortcut_keys_leave_a_dialog_alone(page, live) -> None:
 # ------------------------------------------------------------------------------------------ what the system asks for
 
 
+# Does the element that has the keyboard show it? A ring of its own, a ring on what it sits in (the search box), or, for the song
+# table, a ring on the row the cursor is on.
+FOCUS_PROBE = """() => {
+  const el = document.activeElement;
+  const ringed = (n) => { const s = getComputedStyle(n); return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0; };
+  let ok = false;
+  for (let n = el, up = 0; n && up < 3 && !ok; n = n.parentElement, up++) ok = ringed(n) && (n === el || n.matches(':focus-within'));
+  if (el.matches('.tgrid')) ok = Boolean(el.querySelector('.trow.cursor')) && ringed(el.querySelector('.trow.cursor'));
+  return { ok, tag: el.tagName, name: el.getAttribute('aria-label') || el.textContent.trim().slice(0, 30) || el.tagName };
+}"""
+
+
+def stops_without_a_ring(page, presses: int) -> tuple[int, list[str]]:
+    """Press Tab `presses` times; how many different things had the keyboard, and which of them showed no sign of it."""
+    stops = []
+    for _ in range(presses):
+        page.keyboard.press("Tab")
+        stops.append(page.evaluate(FOCUS_PROBE))
+    stops = [s for s in stops if s["tag"] != "BODY"]  # going all the way round, the keyboard leaves the page for a moment
+    return len({s["name"] for s in stops}), [s["name"] for s in stops if not s["ok"]]
+
+
 def test_every_stop_of_the_keyboard_on_the_home_page_shows_that_it_has_the_focus(page, live) -> None:
     add_library(page, live)
     page.evaluate("location.hash = '#/'")
     expect(page.locator(".shelf").first).to_be_visible()
-    probe = """() => {
-      const el = document.activeElement;
-      const ringed = (n) => { const s = getComputedStyle(n); return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0; };
-      let ok = false;
-      for (let n = el, up = 0; n && up < 3 && !ok; n = n.parentElement, up++) ok = ringed(n) && (n === el || n.matches(':focus-within'));
-      if (el.matches('.tgrid')) ok = Boolean(el.querySelector('.trow.cursor')) && ringed(el.querySelector('.trow.cursor'));
-      return { ok, tag: el.tagName, name: el.getAttribute('aria-label') || el.textContent.trim().slice(0, 30) || el.tagName };
-    }"""
-    stops = []
-    for _ in range(90):  # all the way round: the page, the player, then the sidebar and the top bar
-        page.keyboard.press("Tab")
-        stops.append(page.evaluate(probe))
-    stops = [s for s in stops if s["tag"] != "BODY"]  # going round once, the keyboard leaves the page for a moment
 
-    assert len({s["name"] for s in stops}) > 30, "the home page has many stops"
-    assert [s["name"] for s in stops if not s["ok"]] == []
+    different, bare = stops_without_a_ring(page, 90)  # the page, the player, then the sidebar and the top bar
+
+    assert different > 30, "the home page has many stops"
+    assert bare == []
+
+
+def test_and_so_does_every_stop_in_settings_and_on_the_sound_controls_and_in_a_dialog(page, live) -> None:
+    add_library(page, live)
+    page.evaluate("location.hash = '#/settings'")
+    expect(page.get_by_role("heading", name="Appearance", exact=True)).to_be_visible()
+    different, bare = stops_without_a_ring(page, 110)  # text fields, selects, switches, colour swatches, buttons
+    assert different > 40 and bare == []
+
+    page.evaluate("location.hash = '#/songs'")
+    page.locator(".trow", has_text="Glacier").locator(".t1").dblclick()
+    page.evaluate("location.hash = '#/now'")
+    page.get_by_role("tab", name="Sound").click()
+    expect(page.get_by_label("Equalizer preset")).to_be_visible()
+    different, bare = stops_without_a_ring(page, 60)  # sliders and a select
+    assert different > 15 and bare == []
+
+    page.evaluate("location.hash = '#/playlists'")
+    page.get_by_role("button", name="New playlist").first.click()
+    expect(page.get_by_role("dialog", name="New playlist")).to_be_visible()
+    different, bare = stops_without_a_ring(page, 6)  # a text field and two buttons, round and round
+    assert different >= 2 and bare == []
 
 
 def test_the_visualizer_and_smooth_scrolling_stand_aside_when_less_motion_is_asked_for(page, live) -> None:

@@ -72,6 +72,12 @@ SKIPPED_BECAUSE = {
 }
 
 
+def _reason(outcome: str) -> str:
+    if outcome == "too_many":
+        return f"Only the first {scanner.MAX_OPENED:,} songs in it were added"
+    return SKIPPED_BECAUSE.get(outcome, outcome)
+
+
 @router.post("/library/open-files")
 def open_files(body: OpenFiles, ctx: AppContext = Depends(get_ctx)) -> dict:
     """Songs the person opened from outside the app (Open with in Explorer, files dropped on the window): put them in
@@ -81,5 +87,5 @@ def open_files(body: OpenFiles, ctx: AppContext = Depends(get_ctx)) -> dict:
         outcomes = scanner.add_files(conn, body.paths)
         ids = list(dict.fromkeys(track_id for _, track_id, _ in outcomes if track_id is not None))
         tracks = tracks_by_ids(conn, ids)
-    skipped = [{"path": path, "reason": SKIPPED_BECAUSE.get(outcome, outcome)} for path, track_id, outcome in outcomes if track_id is None]
+    skipped = [{"path": path, "reason": _reason(outcome)} for path, track_id, outcome in outcomes if track_id is None]
     return {"tracks": tracks, "skipped": skipped, "added": sum(1 for _, _, outcome in outcomes if outcome == "added")}

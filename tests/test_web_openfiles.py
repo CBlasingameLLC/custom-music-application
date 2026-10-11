@@ -57,6 +57,20 @@ def test_a_folder_opens_as_the_songs_inside_it(web, tmp_path: Path) -> None:
     assert sorted(t["title"] for t in answer["tracks"]) == ["Song 1", "Song 2", "Song 3"] and answer["added"] == 3
 
 
+def test_a_folder_with_more_songs_than_the_cap_says_so(web, tmp_path: Path, monkeypatch) -> None:
+    from musictoolkit.ingest import scanner
+
+    folder = tmp_path / "huge"
+    for n in range(4):
+        make_track(folder, f"{n}.mp3", title=f"Song {n}")
+    monkeypatch.setattr(scanner, "MAX_OPENED", 2)
+
+    answer = web.client.post("/api/library/open-files", json={"paths": [str(folder)]}).json()
+
+    assert len(answer["tracks"]) == 2
+    assert answer["skipped"] == [{"path": str(folder), "reason": "Only the first 2 songs in it were added"}]
+
+
 def test_the_request_is_checked(web) -> None:
     assert web.client.post("/api/library/open-files", json={"paths": []}).status_code == 422
     assert web.client.post("/api/library/open-files", json={"paths": ["x"] * 501}).status_code == 422

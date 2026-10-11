@@ -1,5 +1,5 @@
 // Entry point: layout, routing, keyboard shortcuts, startup.
-import { Fragment, html, render, useEffect, useRef, useState, useStore } from './lib.js';
+import { Fragment, html, render, useEffect, useLayoutEffect, useRef, useState, useStore } from './lib.js';
 import { Empty, MenuHost, ModalHost, ToastHost } from './components.js';
 import { cycleRepeat, current, next, pause, player, previous, restoreQueue, seekBy, setVolume, toggle, toggleMute, toggleShuffle, updateTrack } from './player.js';
 import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, ui } from './state.js';
@@ -116,7 +116,7 @@ function useShortcuts() {
 function useRouteAnnouncer(view, path) {
   const [said, setSaid] = useState('');
   const first = useRef(true);
-  useEffect(() => {
+  useLayoutEffect(() => { // before the new page is painted: a key pressed once it is on screen finds the focus already there
     if (first.current) {
       first.current = false;
       return undefined;

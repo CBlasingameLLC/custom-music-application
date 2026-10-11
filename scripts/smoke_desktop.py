@@ -440,10 +440,11 @@ def drive(args, command: list[str]) -> None:
         if failures:
             print("\n--- app output ---")
             print(log_path.read_text(errors="replace")[-3000:])
-            backend_log = profile / ".musictoolkit" / "logs" / "backend.log"
-            if backend_log.exists():
-                print("--- backend.log ---")
-                print(backend_log.read_text(errors="replace")[-3000:])
+            for name in ("desktop.log", "backend.log"):
+                log_file = profile / ".musictoolkit" / "logs" / name
+                if log_file.exists():
+                    print(f"--- {name} ---")
+                    print(log_file.read_text(errors="replace")[-3000:])
         shutil.rmtree(scratch, ignore_errors=True)
 
 

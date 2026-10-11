@@ -220,7 +220,38 @@ def scan_library(
 
 
 MAX_OPENED = 5000  # songs taken from the folders given to add_files, so a drive's root cannot be opened by mistake
+MAX_WALKED = 200_000  # entries looked at while doing so: a huge tree with few songs in it must not keep the request busy either
 CASE_INSENSITIVE_PATHS = os.name == "nt"  # file names there ignore case: C:\Music\A.mp3 and c:\music\a.mp3 are one file
+
+
+def audio_files_up_to(root: Path, limit: int, max_entries: int = MAX_WALKED) -> tuple[list[Path], bool]:
+    """Up to `limit` audio files under `root`, the nearest folders first, looking at no more than `max_entries` entries.
+    The second value says the walk was cut short, so there may be more songs than were found. Unlike find_audio_files this
+    does not read the whole tree before deciding how much of it to use."""
+    found: list[Path] = []
+    looked = 0
+    pending = [root]
+    while pending:
+        folder = pending.pop(0)
+        try:
+            with os.scandir(folder) as entries:
+                for entry in sorted(entries, key=lambda e: e.name.lower()):
+                    looked += 1
+                    if looked > max_entries:
+                        return sorted(found), True
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name.lower() != QUARANTINE_DIR:
+                                pending.append(Path(entry.path))
+                        elif entry.is_file() and Path(entry.name).suffix.lower() in AUDIO_EXTENSIONS:
+                            if len(found) >= limit:
+                                return sorted(found), True
+                            found.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return sorted(found), False
 
 
 def add_files(conn: sqlite3.Connection, paths: list[str]) -> list[tuple[str, int | None, str]]:
@@ -228,8 +259,9 @@ def add_files(conn: sqlite3.Connection, paths: list[str]) -> list[tuple[str, int
     say what happened to each: (path as given, track id or None, outcome). A folder stands for the songs inside it.
 
     Outcomes: "added", "updated" (the file changed since it was last read), "known" (already there as it is), and for
-    a path that cannot be used "not_audio", "missing" or "unreadable". Files outside every library folder are left
-    alone by later scans, which only retire songs inside the folders they scan."""
+    a path that cannot be used "not_audio", "missing" or "unreadable"; a folder with more songs than MAX_OPENED (or too
+    big to look through) also gets "too_many". Files outside every library folder are left alone by later scans, which
+    only retire songs inside the folders they scan."""
     results: list[tuple[str, int | None, str]] = []
     now = datetime.now(timezone.utc).isoformat()
     opened = 0
@@ -241,11 +273,11 @@ def add_files(conn: sqlite3.Connection, paths: list[str]) -> list[tuple[str, int
                 continue
             candidate = candidate.resolve()
             if candidate.is_dir():
-                files = find_audio_files(candidate)
-                if len(files) > MAX_OPENED - opened:
-                    files = files[: MAX_OPENED - opened]
+                files, cut_short = audio_files_up_to(candidate, MAX_OPENED - opened)
                 results.extend(add_files(conn, [str(f) for f in files]))
                 opened += len(files)
+                if cut_short:
+                    results.append((given, None, "too_many"))
                 continue
             if not candidate.is_file():
                 results.append((given, None, "missing"))

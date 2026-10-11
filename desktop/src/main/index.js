@@ -4,7 +4,7 @@ const path = require('node:path');
 const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, screen, shell } = require('electron');
 const { startBackend, stopBackend, DATA_DIR } = require('./backend.js');
 const { createUpdater } = require('./updater.js');
-const { DEFAULT_ACTION, normalizeAction, shouldKeepRunning, cleanNowPlaying } = require('./close-action.js');
+const { createCloseSetting, shouldKeepRunning, cleanNowPlaying } = require('./close-action.js');
 const { filesFromArgv } = require('./launch.js');
 const { tooltipText, trayMenuTemplate } = require('./tray-menu.js');
 const { MIN_SIZE, createSaver, fitToDisplays, loadState } = require('./window-state.js');
@@ -20,7 +20,7 @@ let backendOrigin = null;
 let quitting = false;
 let updater = null;
 let windowSaver = null;
-let closeAction = DEFAULT_ACTION; // what the close button does; the Settings page keeps this in step (and the backend remembers it)
+const closeSetting = createCloseSetting(); // what the close button does; the Settings page keeps this in step (and the backend remembers it)
 let nowPlaying = cleanNowPlaying(null); // what the page last said is playing: the tray's tooltip, and whether closing keeps it going
 let trayNoticeShown = false; // the "still playing in the tray" notice is shown once, ever
 let pendingFiles = []; // songs handed to the app that the page has not collected yet
@@ -102,10 +102,7 @@ function registerBridge() {
     updateTray();
     return null;
   });
-  handle('close-action', (value) => {
-    closeAction = normalizeAction(value);
-    return closeAction;
-  });
+  handle('close-action', (value) => closeSetting.choose(value));
   // Songs the person opened with the app (Explorer's Open with, a file dragged onto the program): the page collects the
   // ones that arrived before it was ready, and from then on is sent the rest as they come.
   handle('take-open-files', () => {
@@ -116,7 +113,7 @@ function registerBridge() {
     setImmediate(() => app.quit());
     return null;
   });
-  handle('desktop-info', () => ({ tray: Boolean(tray), closeAction, hidden: Boolean(win && !win.isVisible()) }));
+  handle('desktop-info', () => ({ tray: Boolean(tray), closeAction: closeSetting.get(), hidden: Boolean(win && !win.isVisible()) }));
 
   handle('update-status', () => updater.status());
   handle('update-check', () => updater.check());
@@ -310,9 +307,9 @@ function createWindow(pageUrl) {
   win.on('hide', updateTray);
   win.on('close', (event) => {
     windowSaver.flush();
-    desktopLog(`window closing: quitting=${quitting} tray=${Boolean(tray)} close=${closeAction} playing=${nowPlaying.playing}`);
+    desktopLog(`window closing: quitting=${quitting} tray=${Boolean(tray)} close=${closeSetting.get()} playing=${nowPlaying.playing}`);
     // Closing while music plays (or always, if chosen) leaves the app running in the tray; the tray menu or Settings quits.
-    if (quitting || !tray || !shouldKeepRunning(closeAction, nowPlaying.playing)) return;
+    if (quitting || !tray || !shouldKeepRunning(closeSetting.get(), nowPlaying.playing)) return;
     event.preventDefault();
     win.hide();
     announceTray();
@@ -367,7 +364,7 @@ if (!app.requestSingleInstanceLock()) {
 
     const settings = fetchSettings(started);
     settings.then((found) => {
-      if (found && found.app) closeAction = normalizeAction(found.app.close_action);
+      if (found && found.app) closeSetting.loaded(found.app.close_action);
     });
     startUpdater(settings);
     registerBridge();
