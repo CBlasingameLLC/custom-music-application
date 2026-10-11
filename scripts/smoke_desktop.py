@@ -8,7 +8,10 @@ Music Toolkit.exe, or `electron .` in development). The script appends
 checks what no unit test can: the backend came up, the page accepted the
 per-launch token, the desktop bridge is exactly what the UI expects, audio
 streams and starts playing inside the window, foreign pages get nothing from
-the bridge, and closing the window takes the backend down with it.
+the bridge, a song handed to the running app by a second launch ("Open with")
+is added and played, closing the window while music plays leaves the app in the
+tray until it is told to quit, the window opens where it was left, a song named on
+the command line is played, and quitting takes the backend down with it.
 
 Needs `pip install playwright` (only its CDP client is used; no browser is
 downloaded). Runs on a throwaway user profile.
@@ -27,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -34,7 +38,11 @@ WINDOWS = sys.platform == "win32"
 # CI consoles on Windows default to a legacy code page; the checks print arrows and quotes.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-BRIDGE = ["mediaKeys", "onMediaKey", "openExternal", "openPath", "selectFile", "selectFolder", "showItemInFolder", "update"]
+BRIDGE = [
+    "desktopInfo", "mediaKeys", "onMediaKey", "onOpenFiles", "openExternal", "openPath", "pathForFile", "quit", "selectFile",
+    "selectFolder", "setCloseAction", "setNowPlaying", "showItemInFolder", "takeOpenFiles", "update",
+]
+SEEDED_WINDOW = {"x": 60, "y": 40, "width": 900, "height": 600, "maximized": False, "trayNoticeShown": True}
 UPDATE_BRIDGE = ["check", "install", "onStatus", "setAuto", "status"]
 failures: list[str] = []
 
@@ -79,6 +87,73 @@ def wait_for(predicate, seconds: float, interval: float = 0.25):
     return None
 
 
+def press_close_button(process: subprocess.Popen) -> bool:
+    """Ask the app's window to close the way its close button does: a polite request the app may answer by hiding the
+    window instead (window.close() from the page, or the debugger's Browser.close, would quit without asking). True if
+    the request was sent; on Linux it needs python-xlib (and an X server), which only a developer's machine has."""
+    if WINDOWS:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True,
+        )
+        return "True" in result.stdout
+    try:
+        from Xlib import X, display, protocol
+    except ImportError:
+        return False
+    screen = display.Display()
+    delete, protocols, owner = (screen.intern_atom(name) for name in ("WM_DELETE_WINDOW", "WM_PROTOCOLS", "_NET_WM_PID"))
+    sent = False
+
+    def visit(window) -> None:
+        nonlocal sent
+        try:
+            pids = window.get_full_property(owner, X.AnyPropertyType)
+        except Exception:
+            pids = None
+        if pids is not None and process.pid in [int(pid) for pid in pids.value]:
+            event = protocol.event.ClientMessage(window=window, client_type=protocols, data=(32, [delete, X.CurrentTime, 0, 0, 0]))
+            window.send_event(event, event_mask=X.NoEventMask)
+            sent = True
+        for child in window.query_tree().children:
+            visit(child)
+
+    visit(screen.screen().root)
+    screen.sync()
+    screen.close()
+    return sent
+
+
+def app_page_url(debug_port: int, process: subprocess.Popen):
+    """The address of the app's window once it has one (it carries the launch token), "exited" if the app died first."""
+    if process.poll() is not None:
+        return "exited"
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json/list", timeout=2) as response:
+            pages = json.load(response)
+    except OSError:
+        return None
+    urls = [p["url"] for p in pages if p["url"].startswith("http://127.0.0.1:") and "token=" in p["url"]]
+    return urls[0] if urls else None
+
+
+def backend_up(backend_port: int) -> bool:
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{backend_port}/", timeout=2)
+    except urllib.error.HTTPError:
+        return True  # 401 without the token: the server answered
+    except OSError:
+        return False
+    return True
+
+
+def tracks_in_library(page) -> int:
+    return page.evaluate("fetch('/api/about').then(r => r.json()).then(a => a.tracks)")
+
+
+def player_source(page) -> str:
+    return page.evaluate("import('/static/js/player.js').then((m) => m.player.get().source)")
+
+
 def start_stranger() -> tuple[http.server.ThreadingHTTPServer, list[str]]:
     """A web server on another origin: it must never receive a request from the app window."""
     hits: list[str] = []
@@ -103,14 +178,21 @@ def drive(args, command: list[str]) -> None:
     from playwright.sync_api import sync_playwright
 
     scratch = Path(tempfile.mkdtemp(prefix="mtk-desktop-smoke-"))
-    profile, music = scratch / "profile", scratch / "music"
-    for folder in (profile, music):
+    profile, music, elsewhere, userdata = scratch / "profile", scratch / "music", scratch / "elsewhere", scratch / "userdata"
+    for folder in (profile, music, elsewhere, userdata):
         folder.mkdir()
     mp3s = sorted(Path(args.music).glob("*.mp3"))
     if not mp3s:
         sys.exit(f"no .mp3 files in {args.music}")
     for mp3 in mp3s:
         shutil.copy(mp3, music / mp3.name)
+    # Two songs that are not in the library: one handed to the running app, one the app is started with.
+    handed, started_with = elsewhere / "Handed over.mp3", elsewhere / "Started with.mp3"
+    for copy in (handed, started_with):
+        shutil.copy(mp3s[0], copy)
+    # Where the window was left last time (the app must open there; it also proves the file is read).
+    window_file = userdata / "window-state.json"
+    window_file.write_text(json.dumps(SEEDED_WINDOW))
 
     if WINDOWS:
         stray = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Music Toolkit.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True)
@@ -135,7 +217,7 @@ def drive(args, command: list[str]) -> None:
         # there: give this run its own, so an instance already running (the installer may have started one)
         # cannot make the app quit at once.
         process = subprocess.Popen(
-            [*command, f"--remote-debugging-port={debug_port}", f"--user-data-dir={scratch / 'userdata'}"],
+            [*command, f"--remote-debugging-port={debug_port}", f"--user-data-dir={userdata}"],
             cwd=args.cwd or scratch, env=env, stdout=log, stderr=subprocess.STDOUT, **kwargs,
         )
 
@@ -143,18 +225,7 @@ def drive(args, command: list[str]) -> None:
     try:
         step("launch")
 
-        def app_page_url():
-            if process.poll() is not None:
-                return "exited"
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json/list", timeout=2) as response:
-                    pages = json.load(response)
-            except OSError:
-                return None
-            urls = [p["url"] for p in pages if p["url"].startswith("http://127.0.0.1:") and "token=" in p["url"]]
-            return urls[0] if urls else None
-
-        page_url = wait_for(app_page_url, args.launch_timeout)
+        page_url = wait_for(lambda: app_page_url(debug_port, process), args.launch_timeout)
         check(bool(page_url) and page_url != "exited", "the window opened on the backend with a launch token")
         if not page_url or page_url == "exited":
             print(f"app process: {'exited with code ' + str(process.returncode) if process.poll() is not None else 'still running, no window'}")
@@ -181,6 +252,9 @@ def drive(args, command: list[str]) -> None:
             page.wait_for_selector(".sidebar", timeout=30000)
             check(True, "the interface rendered (the token was accepted and the session cookie set)")
             check(page.evaluate("document.title") == "Music Toolkit", "window title")
+            size = page.evaluate("[window.outerWidth, window.outerHeight]")
+            check(abs(size[0] - SEEDED_WINDOW["width"]) <= 60 and abs(size[1] - SEEDED_WINDOW["height"]) <= 60,
+                  f"the window opened at the size it was left ({SEEDED_WINDOW['width']}x{SEEDED_WINDOW['height']}; it measures {size})")
 
             step("desktop bridge")
             keys = page.evaluate("Object.keys(window.mtk || {}).sort()")
@@ -234,6 +308,20 @@ def drive(args, command: list[str]) -> None:
                 check(bool(advanced), "the playback position advances")
             check(page.evaluate("document.title").startswith("▶ "), f"window title follows the song ({page.evaluate('document.title')!r})")
 
+            step("a song handed to the running app")
+            before = tracks_in_library(page)
+            second_log = scratch / "second-launch.log"
+            with open(second_log, "w") as second_out:
+                second = subprocess.Popen([*command, f"--user-data-dir={userdata}", str(handed)], cwd=args.cwd or scratch, env=env,
+                                          stdout=second_out, stderr=subprocess.STDOUT, **kwargs)
+            try:
+                check(wait_for(lambda: second.poll() is not None, 40) is not None, "a second launch hands the song over and exits (one app per machine)")
+            finally:
+                if second.poll() is None:
+                    kill_tree(second)
+            check(bool(wait_for(lambda: tracks_in_library(page) == before + 1, 30, 0.5)), "the song it was given joined the library")
+            check(bool(wait_for(lambda: player_source(page) == "Opened files", 30, 0.5)), "and is playing, as an opened file")
+
             step("the bridge refuses other pages")
             page.goto(stranger_url)
             check(page.evaluate("typeof window.mtk") == "object", "the preload is attached to the foreign page (so the next check means something)")
@@ -242,8 +330,11 @@ def drive(args, command: list[str]) -> None:
                 "(async () => [await window.mtk.selectFile({}), await window.mtk.selectFolder(), "
                 "await window.mtk.openPath('.'), await window.mtk.showItemInFolder('.'), "
                 "await window.mtk.update.status(), await window.mtk.update.check(), await window.mtk.update.install(), "
-                "await window.mtk.update.setAuto(false), await window.mtk.mediaKeys()])()")
-            check(answers == [None] * 9 and time.time() - started < 5, f"no dialog opens, nothing updates, and every call answers null ({answers})")
+                "await window.mtk.update.setAuto(false), await window.mtk.mediaKeys(), "
+                "await window.mtk.setNowPlaying({title: 'x', playing: true}), await window.mtk.setCloseAction('quit'), "
+                "await window.mtk.takeOpenFiles(), await window.mtk.desktopInfo(), await window.mtk.quit()])()")
+            check(answers == [None] * 14 and time.time() - started < 5, f"no dialog opens, nothing updates, nothing quits, and every call answers null ({answers})")
+            check(process.poll() is None and backend_up(backend_port), "the app is still running after a foreign page asked it to quit")
             page.goto(page_url)
             page.wait_for_selector(".sidebar", timeout=30000)
 
@@ -264,25 +355,81 @@ def drive(args, command: list[str]) -> None:
 
             check(not problems, f"no errors in the page console ({problems[:3]})")
 
-            step("closing the window stops everything")
-            session = context.new_cdp_session(page)
-            try:
-                session.send("Browser.close")
-            except Exception:
-                pass
+            step("closing the window")
+            info = page.evaluate("window.mtk.desktopInfo()")
+            check(isinstance(info, dict) and sorted(info) == ["closeAction", "hidden", "tray"], f"the shell reports its tray and what closing does ({info})")
+            check(info.get("closeAction") == "tray_if_playing", f"closing keeps the music going by default ({info.get('closeAction')!r})")
+            if args.expect_tray:
+                check(info.get("tray") is True, "the tray icon exists")
+            if not wait_for(lambda: page.evaluate("import('/static/js/player.js').then((m) => m.player.get().playing)"), 3):
+                page.evaluate("location.hash = '#/songs'")
+                page.wait_for_selector(".trow:not(.skeleton)", timeout=20000)
+                row = page.locator(".trow", has_text="Smoke Tone")
+                (row if row.count() else page.locator(".trow")).first.locator(".t1").dblclick()
+            check(bool(wait_for(lambda: page.evaluate("import('/static/js/player.js').then((m) => m.player.get().playing)"), 30)), "music is playing")
+            # Tell the shell what is playing; it needs a moment to hear it (the page sends it as the song starts).
+            time.sleep(1.0)
+            pressed = press_close_button(process)
+            if not pressed:
+                print("  skip  the window's close button cannot be pressed from here (needs PowerShell on Windows, or python-xlib under X)")
+            else:
+                check(True, "the window's close button was pressed")
+            if args.expect_tray:
+                check(pressed, "the window's close button can be pressed on this machine")
+            if not pressed:
+                try:
+                    page.evaluate("window.mtk.quit()")
+                except Exception:
+                    pass
+            elif info.get("tray"):
+                time.sleep(2.5)
+                check(process.poll() is None, "closing the window while music plays leaves the app running in the tray")
+                check(backend_up(backend_port), "the backend is still up")
+                hidden = wait_for(lambda: page.evaluate("window.mtk.desktopInfo()").get("hidden"), 10)
+                check(bool(hidden), "and the window is hidden")
+                try:
+                    page.evaluate("window.mtk.quit()")  # what the tray's Quit and Settings' Quit button do
+                except Exception:
+                    pass  # the app may go before the answer arrives
+            else:
+                check(bool(wait_for(lambda: process.poll() is not None, 30)), "with no tray icon, closing the window quits the app")
         exited = wait_for(lambda: process.poll() is not None, 30)
-        check(bool(exited), "the app exited when its window closed")
+        check(bool(exited), "the app exited when it was told to quit")
+        check(bool(wait_for(lambda: not backend_up(backend_port), 15)), "the backend process is gone, not orphaned")
 
-        def backend_gone():
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{backend_port}/", timeout=2)
-            except OSError:
-                return True
-            except Exception:
-                return False
-            return False
+        step("where the window was left")
+        saved = json.loads(window_file.read_text()) if window_file.exists() else {}
+        check(abs(saved.get("width", 0) - SEEDED_WINDOW["width"]) <= 60 and abs(saved.get("height", 0) - SEEDED_WINDOW["height"]) <= 60,
+              f"closing wrote the window's size to {window_file.name} ({saved})")
+        check(saved.get("maximized") is False, "and that it was not maximized")
 
-        check(bool(wait_for(backend_gone, 15)), "the backend process is gone, not orphaned")
+        step("relaunch: the app is started with a song")
+        debug_port = free_port()
+        with open(log_path, "a") as log:
+            process = subprocess.Popen(
+                [*command, f"--remote-debugging-port={debug_port}", f"--user-data-dir={userdata}", str(started_with)],
+                cwd=args.cwd or scratch, env=env, stdout=log, stderr=subprocess.STDOUT, **kwargs,
+            )
+        page_url = wait_for(lambda: app_page_url(debug_port, process), args.launch_timeout)
+        check(bool(page_url) and page_url != "exited", "the window opened again")
+        if page_url and page_url != "exited":
+            backend_port = int(page_url.split("://", 1)[1].split("/", 1)[0].split(":")[1])
+            with sync_playwright() as p:
+                browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
+                page = next(pg for pg in browser.contexts[0].pages if pg.url.startswith("http://127.0.0.1:"))
+                page.wait_for_selector(".sidebar", timeout=30000)
+                size = page.evaluate("[window.outerWidth, window.outerHeight]")
+                check(abs(size[0] - SEEDED_WINDOW["width"]) <= 60 and abs(size[1] - SEEDED_WINDOW["height"]) <= 60, f"it opened at the remembered size ({size})")
+                check(bool(wait_for(lambda: player_source(page) == "Opened files", 40, 0.5)), "the song it was started with is playing, as an opened file")
+                check(tracks_in_library(page) == len(mp3s) + 2, f"the library kept the song handed over earlier and took the new one ({tracks_in_library(page)})")
+                page.evaluate("window.mtk.setCloseAction('quit')")
+                if not press_close_button(process):
+                    try:
+                        page.evaluate("window.mtk.quit()")
+                    except Exception:
+                        pass
+            check(bool(wait_for(lambda: process.poll() is not None, 30)), "closing the window quits when that is what was chosen")
+            check(bool(wait_for(lambda: not backend_up(backend_port), 15)), "and the backend is gone")
     except Exception as error:
         failures.append(f"unexpected error: {error!r}")
         raise
@@ -306,6 +453,7 @@ def main() -> None:
     parser.add_argument("--cwd", help="working directory for the app command (e.g. desktop/ for `electron .`)")
     parser.add_argument("--launch-timeout", type=float, default=90, help="seconds to wait for the window")
     parser.add_argument("--strict-audio", action="store_true", help="also require the playback clock to advance (needs an audio device or a fake sink)")
+    parser.add_argument("--expect-tray", action="store_true", help="the machine has a notification area: the app must create its tray icon and keep running when closed while playing")
     parser.add_argument("--expect-updater", action="store_true", help="the app is an installed build: its updater must be active")
     parser.add_argument("--expect-mtp-helper", action="store_true", help="the app is an installed build: the helper for phones and players must be there and start")
     parser.add_argument("--skip-external", action="store_true", help="skip the checks that make the app open a link in the system browser")

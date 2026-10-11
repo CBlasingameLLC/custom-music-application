@@ -4,6 +4,7 @@ import { Empty, MenuHost, ModalHost, ToastHost } from './components.js';
 import { cycleRepeat, current, next, pause, player, previous, restoreQueue, seekBy, setVolume, toggle, toggleMute, toggleShuffle, updateTrack } from './player.js';
 import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, route, startJobPolling, ui } from './state.js';
 import { setFavorite } from './tracks.js';
+import { installOpenFiles } from './openfiles.js';
 import { PlayerBar, QueueDrawer, Sidebar, TopBar } from './views/shell.js';
 import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, SongsView } from './views/library.js';
 import { PlaylistsView, PlaylistView } from './views/playlists.js';
@@ -86,6 +87,25 @@ function useShortcuts() {
 
   // Hardware media keys, forwarded by the desktop shell.
   useEffect(() => desktop?.onMediaKey?.((key) => ({ playpause: toggle, next, previous, stop: pause })[key]?.()), []);
+
+  // Tell the desktop shell what is playing: the tray's tooltip and menu, and whether closing the window keeps the music going.
+  useEffect(() => {
+    if (!desktop?.setNowPlaying) return undefined;
+    let last = '';
+    const send = (s) => {
+      const track = current(s);
+      const info = { title: track?.title || '', artist: track?.artist || '', playing: Boolean(s.playing && track) };
+      const key = JSON.stringify(info);
+      if (key === last) return; // the position changes four times a second; this only cares about the song and playing
+      last = key;
+      desktop.setNowPlaying(info).catch(() => {});
+    };
+    send(player.get());
+    return player.subscribe(send);
+  }, []);
+
+  // Songs opened with the app (Explorer's Open with, a file dragged onto the program) and files dropped on the window.
+  useEffect(() => installOpenFiles(), []);
 }
 
 function App() {

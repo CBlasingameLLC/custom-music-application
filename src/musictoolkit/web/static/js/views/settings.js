@@ -225,13 +225,36 @@ function UpdatesCard({ settings }) {
   <//>`;
 }
 
+// ------------------------------------------------------------ window and tray (desktop app only)
+
+function WindowCard({ settings }) {
+  const [shell, setShell] = useState(null);
+  useEffect(() => { desktop.desktopInfo?.().then(setShell).catch(() => {}); }, []);
+  async function choose(value) {
+    if (await save({ app: { close_action: value } })) desktop.setCloseAction(value);
+  }
+  return html`<${Card} icon="sliders" title="Window and tray" hint="The tray icon sits by the clock. Its menu has Play/Pause, Next, Previous and Quit, and clicking it shows or hides the window.">
+    <label class="field narrow"><span>When I close the window</span>
+      <select value=${settings.app.close_action} onChange=${(e) => choose(e.target.value)}>
+        ${CLOSE_CHOICES.map(([value, label]) => html`<option value=${value} key=${value}>${label}</option>`)}
+      </select></label>
+    ${shell && !shell.tray && html`<p class="note"><${Icon} name="info" size=${14} /><span>This computer shows no tray icon, so closing the window always quits the app.</span></p>`}
+    <div class="row-actions"><${Button} icon="x" onClick=${() => desktop.quit()}>Quit Music Toolkit<//></div>
+  <//>`;
+}
+
 // ------------------------------------------------------------ diagnostics
 
 const KEY_NAMES = { playpause: 'Play/Pause', next: 'Next', previous: 'Previous', stop: 'Stop' };
+const CLOSE_CHOICES = [
+  ['tray_if_playing', 'Keep playing in the tray if music is playing, otherwise quit'],
+  ['tray', 'Always keep running in the tray'],
+  ['quit', 'Quit'],
+];
 const failed = (part) => part && part.error;
 
 /** The report as rows: { ok: true | false | null, label, detail }. null means "just so you know". */
-function diagnosticRows(report, keys, update) {
+function diagnosticRows(report, keys, update, shell) {
   const rows = [];
   const { database: db, library, drives, devices, phones, services, jobs } = report;
   if (failed(db)) rows.push({ ok: false, label: 'Library database', detail: db.error });
@@ -259,6 +282,10 @@ function diagnosticRows(report, keys, update) {
     rows.push({ ok: null, label: 'Last.fm and MusicBrainz', detail: `Last.fm key ${services.lastfm.has_key ? 'saved' : 'not set'} · MusicBrainz contact ${services.musicbrainz.has_contact ? 'set' : 'not set'}` });
   }
   if (update) rows.push({ ok: update.state === 'error' ? false : null, label: 'Updates', detail: update.state === 'error' ? update.error : `${update.state}${update.version ? ` (${update.version})` : ''} · this is ${update.current}` });
+  if (shell) {
+    const word = (CLOSE_CHOICES.find(([value]) => value === shell.closeAction) || [])[1];
+    rows.push({ ok: shell.tray ? true : null, label: 'Tray icon', detail: shell.tray ? `shown · closing the window: ${word ? word.toLowerCase() : shell.closeAction}` : 'This computer shows no tray icon, so closing the window always quits the app.' });
+  }
   if (keys) {
     const lost = Object.entries(keys).filter(([, held]) => !held).map(([key]) => KEY_NAMES[key] || key);
     rows.push({ ok: lost.length === 0, label: 'Keyboard media keys', detail: lost.length === 0 ? 'Play/Pause, Next, Previous and Stop are claimed by this app.' : `Another program is holding: ${lost.join(', ')}. Close other media players or restart the computer.` });
@@ -288,14 +315,14 @@ function DiagnosticsCard() {
   async function run() {
     setBusy(true);
     try {
-      const [report, keys] = await Promise.all([api('/system/diagnostics'), desktop?.mediaKeys ? desktop.mediaKeys() : null]);
-      setResult({ report, keys });
+      const [report, keys, shell] = await Promise.all([api('/system/diagnostics'), desktop?.mediaKeys ? desktop.mediaKeys() : null, desktop?.desktopInfo ? desktop.desktopInfo() : null]);
+      setResult({ report, keys, shell });
     } catch (error) {
       notifyError(error);
     }
     setBusy(false);
   }
-  const rows = result ? diagnosticRows(result.report, result.keys, desktop?.update ? update : null) : [];
+  const rows = result ? diagnosticRows(result.report, result.keys, desktop?.update ? update : null, result.shell) : [];
   return html`<${Card} icon="wrench" title="Diagnostics" hint="Checks the library, folders, drives, accounts and keyboard keys, and writes a report you can copy when something does not work. It never includes passwords, tokens or keys.">
     <div class="row-actions">
       <${Button} icon="search" disabled=${busy} onClick=${run}>${busy ? 'Checking…' : result ? 'Check again' : 'Run diagnostics'}<//>
@@ -347,6 +374,7 @@ export function SettingsView() {
       <${OnlineCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
+      ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
       <${DiagnosticsCard} />
       <${DataCard} about=${about} />
     </div>`;

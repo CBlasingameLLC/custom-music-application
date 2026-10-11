@@ -197,7 +197,7 @@ jobs:
             throw "the installer did not produce $exe (installer exit code $($setup.ExitCode))"
           }
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater --expect-mtp-helper -- $exe
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper -- $exe
 
       - name: Upload installer and update files
         uses: actions/upload-artifact@v4
@@ -328,7 +328,7 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'mtk-upgrade'
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-updater --expect-mtp-helper -- (Join-Path $dir 'Music Toolkit.exe')
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper -- (Join-Path $dir 'Music Toolkit.exe')
 
   release:
     needs: [version, test, e2e, build, upgrade, update]

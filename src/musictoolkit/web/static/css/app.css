@@ -884,3 +884,11 @@ rect.cell.hot { stroke: var(--text); stroke-width: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .stats, .viz-bars .bar { transition: none; }
 }
+
+/* files dragged over the desktop window */
+body.dropping::after {
+  content: "Drop songs or folders to play them";
+  position: fixed; inset: 12px; z-index: 1000; display: grid; place-items: center;
+  border: 2px dashed var(--accent); border-radius: 16px; pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 85%, transparent); color: var(--text); font-size: 1.25rem; font-weight: 600;
+}

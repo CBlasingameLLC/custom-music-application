@@ -1,9 +1,13 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, screen, shell } = require('electron');
 const { startBackend, stopBackend, DATA_DIR } = require('./backend.js');
 const { createUpdater } = require('./updater.js');
+const { DEFAULT_ACTION, normalizeAction, shouldKeepRunning, cleanNowPlaying } = require('./close-action.js');
+const { filesFromArgv } = require('./launch.js');
+const { tooltipText, trayMenuTemplate } = require('./tray-menu.js');
+const { MIN_SIZE, createSaver, fitToDisplays, loadState } = require('./window-state.js');
 
 // Chromium's own media-key handling would swallow the keys before the global
 // shortcuts registered below ever see them.
@@ -11,9 +15,16 @@ app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling,Media
 if (process.platform === 'win32') app.setAppUserModelId('com.cblasingame.musictoolkit');
 
 let win = null;
+let tray = null;
 let backendOrigin = null;
 let quitting = false;
 let updater = null;
+let windowSaver = null;
+let closeAction = DEFAULT_ACTION; // what the close button does; the Settings page keeps this in step (and the backend remembers it)
+let nowPlaying = cleanNowPlaying(null); // what the page last said is playing: the tray's tooltip, and whether closing keeps it going
+let trayNoticeShown = false; // the "still playing in the tray" notice is shown once, ever
+let pendingFiles = []; // songs handed to the app that the page has not collected yet
+let pageListening = false; // the page asked for them, so it also hears about later ones
 
 const MEDIA_KEYS = {
   MediaPlayPause: 'playpause',
@@ -85,23 +96,48 @@ function registerBridge() {
 
   handle('media-keys', () => ({ ...mediaKeyState }));
 
+  // What is playing, for the tray tooltip and menu.
+  handle('now-playing', (info) => {
+    nowPlaying = cleanNowPlaying(info);
+    updateTray();
+    return null;
+  });
+  handle('close-action', (value) => {
+    closeAction = normalizeAction(value);
+    return closeAction;
+  });
+  // Songs the person opened with the app (Explorer's Open with, a file dragged onto the program): the page collects the
+  // ones that arrived before it was ready, and from then on is sent the rest as they come.
+  handle('take-open-files', () => {
+    pageListening = true;
+    return pendingFiles.splice(0);
+  });
+  handle('quit', () => {
+    setImmediate(() => app.quit());
+    return null;
+  });
+  handle('desktop-info', () => ({ tray: Boolean(tray), closeAction, hidden: Boolean(win && !win.isVisible()) }));
+
   handle('update-status', () => updater.status());
   handle('update-check', () => updater.check());
   handle('update-install', () => updater.install());
   handle('update-auto', (on) => updater.setAuto(on));
 }
 
-function updaterLog(message) {
+function writeLog(file, message) {
   try {
     fs.mkdirSync(path.join(DATA_DIR, 'logs'), { recursive: true });
-    fs.appendFileSync(path.join(DATA_DIR, 'logs', 'updater.log'), `${new Date().toISOString()} ${String(message).trim()}\n`);
+    fs.appendFileSync(path.join(DATA_DIR, 'logs', file), `${new Date().toISOString()} ${String(message).trim()}\n`);
   } catch {
     // a log that cannot be written must never stop the app
   }
 }
+const updaterLog = (message) => writeLog('updater.log', message);
+const desktopLog = (message) => writeLog('desktop.log', message);
 
-// The "check for updates automatically" switch lives in the app's settings (Settings page); ask the backend.
-function readAutoUpdateSetting({ port, token }) {
+// Settings the main process needs before the page says anything: the automatic-update switch and the close button's
+// behaviour live in the backend's config (Settings page); ask the backend. Resolves to null if it cannot be read.
+function fetchSettings({ port, token }) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/settings', headers: { 'X-MTK-Token': token }, timeout: 3000 }, (res) => {
       let body = '';
@@ -109,18 +145,18 @@ function readAutoUpdateSetting({ port, token }) {
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
         try {
-          resolve(JSON.parse(body).app.auto_update !== false);
+          resolve(JSON.parse(body));
         } catch {
-          resolve(true);
+          resolve(null);
         }
       });
     });
-    req.on('error', () => resolve(true));
-    req.on('timeout', () => { req.destroy(); resolve(true); });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 }
 
-function startUpdater(started) {
+function startUpdater(settings) {
   let autoUpdater = null;
   if (app.isPackaged) {
     try {
@@ -147,7 +183,7 @@ function startUpdater(started) {
     },
     log: updaterLog,
   });
-  readAutoUpdateSetting(started).then((on) => updater.setAuto(on));
+  settings.then((found) => updater.setAuto(!found || !found.app || found.app.auto_update !== false));
 }
 
 // Which media keys this app actually owns, for Settings > Diagnostics. register() reports false (or
@@ -164,12 +200,92 @@ function registerMediaKeys() {
   }
 }
 
+// ---- the tray -----------------------------------------------------------------------------------------------------
+
+function showWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function toggleWindow() {
+  if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) win.hide();
+  else showWindow();
+}
+
+// Play/pause, next and previous reach the page the way the keyboard's media keys do.
+const sendKey = (key) => {
+  if (win && !win.isDestroyed()) win.webContents.send('media-key', key);
+};
+
+const trayActions = {
+  toggleWindow,
+  playPause: () => sendKey('playpause'),
+  next: () => sendKey('next'),
+  previous: () => sendKey('previous'),
+  quit: () => app.quit(),
+};
+
+function updateTray() {
+  if (!tray) return;
+  try {
+    const visible = Boolean(win && !win.isDestroyed() && win.isVisible());
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate({ windowVisible: visible, playing: nowPlaying.playing, hasTrack: nowPlaying.hasTrack }, trayActions)));
+    tray.setToolTip(tooltipText(nowPlaying));
+  } catch (err) {
+    desktopLog(`the tray could not be updated: ${err && err.message}`);
+  }
+}
+
+// A computer with no notification area (or a build with no icon) simply has no tray: the close button then always quits,
+// so the window can never be hidden with no way to bring it back.
+function createTray() {
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'tray.png')); // tray@2x.png is picked up for sharp screens
+    if (icon.isEmpty()) throw new Error('the tray icon is missing');
+    tray = new Tray(icon);
+    tray.on('click', toggleWindow);
+    tray.on('double-click', showWindow);
+    updateTray();
+  } catch (err) {
+    desktopLog(`no tray: ${err && err.message}`);
+    tray = null;
+  }
+}
+
+// Told once, the first time closing the window leaves the app running.
+function announceTray() {
+  if (trayNoticeShown || !tray) return;
+  trayNoticeShown = true;
+  if (windowSaver) windowSaver.flush();
+  try {
+    if (typeof tray.displayBalloon === 'function') {
+      tray.displayBalloon({ title: 'Music Toolkit is still running', content: 'It keeps playing from the tray. Right-click the icon to quit.', iconType: 'info' });
+    }
+  } catch {
+    // a notice that cannot be shown is not worth a crash
+  }
+}
+
+// ---- songs opened with the app ------------------------------------------------------------------------------------
+
+function handOverFiles(files) {
+  if (!files.length) return;
+  pendingFiles.push(...files);
+  if (pageListening && win && !win.isDestroyed()) win.webContents.send('open-files', pendingFiles.splice(0));
+}
+
+// ---- the window ---------------------------------------------------------------------------------------------------
+
 function createWindow(pageUrl) {
+  const stateFile = path.join(app.getPath('userData'), 'window-state.json');
+  const saved = loadState(stateFile);
+  trayNoticeShown = Boolean(saved.trayNoticeShown);
   win = new BrowserWindow({
-    width: 1360,
-    height: 880,
-    minWidth: 720,
-    minHeight: 520,
+    ...fitToDisplays(saved, screen.getAllDisplays().map((display) => display.workArea)),
+    minWidth: MIN_SIZE.width,
+    minHeight: MIN_SIZE.height,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#0d0f14',
@@ -179,7 +295,31 @@ function createWindow(pageUrl) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // The gapless and crossfade clock runs in the page; a window hidden in the tray must not slow it down.
+      backgroundThrottling: false,
     },
+  });
+  if (saved.maximized) win.maximize();
+  windowSaver = createSaver({
+    file: stateFile,
+    read: () => (win && !win.isDestroyed() ? { ...win.getNormalBounds(), maximized: win.isMaximized(), trayNoticeShown } : null),
+  });
+  win.on('resize', () => windowSaver.schedule());
+  win.on('move', () => windowSaver.schedule());
+  win.on('show', updateTray);
+  win.on('hide', updateTray);
+  win.on('close', (event) => {
+    windowSaver.flush();
+    desktopLog(`window closing: quitting=${quitting} tray=${Boolean(tray)} close=${closeAction} playing=${nowPlaying.playing}`);
+    // Closing while music plays (or always, if chosen) leaves the app running in the tray; the tray menu or Settings quits.
+    if (quitting || !tray || !shouldKeepRunning(closeAction, nowPlaying.playing)) return;
+    event.preventDefault();
+    win.hide();
+    announceTray();
+  });
+  // A page that loads again (not one that only moves to another route inside itself) has to ask for its songs again.
+  win.webContents.on('did-navigate', () => {
+    pageListening = false;
   });
   win.webContents.on('will-navigate', (event, url) => {
     if (originOf(url) === backendOrigin) return;
@@ -198,15 +338,14 @@ function createWindow(pageUrl) {
 }
 
 // One instance per machine — a second launch would spawn a second backend
-// process fighting the first over the same database.
+// process fighting the first over the same database. A second launch that names songs
+// ("Open with") hands them to the first, which comes to the front.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
+  app.on('second-instance', (_event, argv, workingDirectory) => {
+    handOverFiles(filesFromArgv(argv, { defaultApp: process.defaultApp, cwd: workingDirectory }));
+    showWindow();
   });
 
   app.whenReady().then(async () => {
@@ -226,9 +365,15 @@ if (!app.requestSingleInstanceLock()) {
     }
     backendOrigin = `http://127.0.0.1:${started.port}`;
 
-    startUpdater(started);
+    const settings = fetchSettings(started);
+    settings.then((found) => {
+      if (found && found.app) closeAction = normalizeAction(found.app.close_action);
+    });
+    startUpdater(settings);
     registerBridge();
     registerMediaKeys();
+    handOverFiles(filesFromArgv(process.argv, { defaultApp: process.defaultApp }));
+    createTray();
     createWindow(`${backendOrigin}/?token=${encodeURIComponent(started.token)}`);
   });
 
@@ -239,6 +384,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     globalShortcut.unregisterAll();
+    if (tray) {
+      tray.destroy(); // otherwise Windows leaves a dead icon in the notification area until the mouse passes over it
+      tray = null;
+    }
     stopBackend();
   });
 }
