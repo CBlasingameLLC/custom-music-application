@@ -1,5 +1,5 @@
 // Now Playing: big cover, synced lyrics, the queue, and the sound controls.
-import { api, fmt, Fragment, html, prefersReducedMotion, scrollBehavior, useAsync, useEffect, useMemo, useRef, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, prefersReducedMotion, scrollBehavior, useAsync, useEffect, useLayoutEffect, useMemo, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Cover, Empty, IconButton, TabPanel, Tabs } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
@@ -14,15 +14,21 @@ export function QueueList() {
   const [dropAt, setDropAt] = useState(null);
   const currentRow = useRef();
   const rowsBox = useRef();
+  const keyboardAt = useRef(null); // where in the queue a song was just moved to with the keyboard: its button gets the keyboard back
   useEffect(() => currentRow.current?.scrollIntoView({ block: 'nearest' }), [pos, items.length]);
+  useLayoutEffect(() => { // the rows are redrawn when the order changes, and the one that had the keyboard is a new element: find the song again
+    if (keyboardAt.current === null) return;
+    rowsBox.current?.querySelectorAll('.qrow')[keyboardAt.current]?.querySelector('.qplay')?.focus();
+    keyboardAt.current = null;
+  }, [order]);
 
   // Alt+Up and Alt+Down on a song's controls move it up or down the queue: the keyboard's way of dragging.
   function moveWithKeys(event, orderIndex) {
     const to = orderIndex + (event.key === 'ArrowDown' ? 1 : -1);
     if (!event.altKey || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || to < 0 || to >= order.length) return;
     event.preventDefault();
+    keyboardAt.current = to;
     moveInQueue(orderIndex, to);
-    setTimeout(() => rowsBox.current?.querySelectorAll('.qrow')[to]?.querySelector('.qplay')?.focus(), 0); // the rows are redrawn: find the song again
   }
 
   if (!order.length) {
