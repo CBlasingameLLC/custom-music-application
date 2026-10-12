@@ -159,7 +159,7 @@ function App() {
       <${Sidebar} />
       <div class="main-col">
         <${TopBar} />
-        <main class="view" id="main" ref=${view} tabIndex="-1"><${View} /><${MenuHost} /></main>
+        <main class="view" id="main" ref=${view} tabIndex="-1" data-route=${path}><${View} /><${MenuHost} /></main>
       </div>
       <${QueueDrawer} />
       <${PlayerBar} />

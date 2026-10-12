@@ -11,6 +11,7 @@ What no test here can say is what a screen reader reads aloud, or how the app fe
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Callable
 
@@ -34,14 +35,38 @@ CLEAR = """() => import('/static/js/state.js').then((s) => {
 })"""
 
 
-def violations(page) -> list[str]:
-    """What axe finds wrong on the page as it is now, one line each: the rule, the element and why."""
+def _look(page) -> list[str]:
     found = AXE.run(page, options={"runOnly": {"type": "tag", "values": TAGS}, "resultTypes": ["violations"]}).response["violations"]
     lines = []
     for rule in found:
         for node in rule["nodes"]:
             checks = node.get("any") or node.get("all") or node.get("none") or [{}]
             lines.append(f"{rule['id']} ({rule['impact']}): {' '.join(node['target'])}  {node['html'][:120]}  ->  {checks[0].get('message', '')[:200]}")
+    return lines
+
+
+HEADINGS = """() => [location.hash, document.getElementById('main')?.dataset.route, Array.from(document.querySelectorAll('h1'), (h) => ({
+  text: h.textContent.trim().slice(0, 40), shown: h.getClientRects().length > 0, visibility: getComputedStyle(h).visibility,
+  hiddenBy: h.closest('[inert], [aria-hidden=true], [hidden]')?.outerHTML.slice(0, 80) || null }))]"""
+HEADING_SHOWN = "(() => { const h = document.querySelector('main h1'); return !!h && h.getClientRects().length > 0 && !h.closest('[inert], [aria-hidden=true], [hidden]'); })()"
+
+
+def violations(page) -> list[str]:
+    """What axe finds wrong on the page as it is now, one line each: the rule, the element and why.
+
+    A page that is being drawn again has no first-level heading for a moment, and nobody meets that. So a missing heading is looked at a
+    second time once the page has one on show, and counts only if it is still missing; the first look is then reported as a warning
+    with what the page held. Nothing else gets a second look."""
+    lines = _look(page)
+    if lines and all(line.startswith("page-has-heading-one") for line in lines):
+        context = page.evaluate(f"({HEADINGS})()")
+        try:
+            wait_until(page, HEADING_SHOWN, 5)
+        except AssertionError:
+            return lines
+        again = _look(page)
+        warnings.warn(f"axe found no first-level heading at first ({context}); on a second look it {'still' if again else 'did not'}", stacklevel=2)
+        return again
     return lines
 
 
@@ -62,7 +87,9 @@ QUIET = """() => {
     }).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
     return false;
   }
-  return performance.now() - window.__quiet.at > 300 && !document.querySelector('.spinner-wrap, .trow.skeleton, [aria-busy=true]');
+  // ... and the page on screen is the one the address names (the address changes first; the page follows a moment later).
+  return performance.now() - window.__quiet.at > 300 && !document.querySelector('.spinner-wrap, .trow.skeleton, [aria-busy=true]')
+    && document.getElementById('main')?.dataset.route === ((location.hash.slice(1) || '/').split('?')[0]);
 }"""
 
 
@@ -71,8 +98,11 @@ def settled(page) -> None:
     try:
         wait_until(page, f"({QUIET})()", 20)
     except AssertionError:
-        busy = page.evaluate("[window.__quiet.last, Array.from(document.querySelectorAll('.spinner-wrap, .trow.skeleton, [aria-busy=true]'), (e) => e.outerHTML.slice(0, 100))]")
-        raise AssertionError(f"the page never settled; last change: {busy[0]}; still loading: {busy[1]}") from None
+        busy = page.evaluate(
+            "[window.__quiet.last, Array.from(document.querySelectorAll('.spinner-wrap, .trow.skeleton, [aria-busy=true]'), (e) => e.outerHTML.slice(0, 100)), "
+            "location.hash, document.getElementById('main')?.dataset.route]"
+        )
+        raise AssertionError(f"the page never settled; last change: {busy[0]}; still loading: {busy[1]}; address {busy[2]!r}, page drawn for {busy[3]!r}") from None
 
 
 def has_a_heading(page, name: str) -> None:

@@ -87,9 +87,10 @@ def wait_for(predicate, seconds: float, interval: float = 0.25):
     return None
 
 
-# Windows: list the windows the app's process has on screen and, when asked, send WM_CLOSE (what the close button does) to each visible
-# app window. Not Process.CloseMainWindow(): that picks one window by a rule of its own, and when it picked the wrong one (or refused)
-# nothing could tell why. The list is the evidence when the app does not close.
+# Windows: list the windows the app's process has on screen and, when asked, send WM_CLOSE (what the close button does) to the app's
+# own window. Not Process.CloseMainWindow(): that picks the topmost visible window of the process, and the process often has a
+# second one on top of the real window - a tooltip's popup, for one, which is visible, 160 by 25 pixels, and ignores WM_CLOSE
+# (it made the closing checks fail on a runner for no reason the app had). So the request goes to the largest visible window.
 WINDOWS_WINDOWS = r"""
 param([int]$ProcessId, [int]$Send)
 Add-Type -TypeDefinition @"
@@ -112,6 +113,8 @@ public static class MtkWin {
   [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   public static string[] Windows(uint pid, bool send) {
     var found = new List<string>();
+    IntPtr best = IntPtr.Zero;
+    long bestArea = 0;
     EnumWindows((h, l) => {
       uint owner; GetWindowThreadProcessId(h, out owner);
       if (owner != pid) return true;
@@ -119,11 +122,16 @@ public static class MtkWin {
       var title = new StringBuilder(256); GetWindowText(h, title, 256);
       bool visible = IsWindowVisible(h);
       RECT r; GetWindowRect(h, out r);
+      long area = (long)(r.R - r.L) * (r.B - r.T);
       found.Add(string.Format("0x{0:X}|{1}|{2}|visible={3}|enabled={4}|minimized={5}|owner=0x{6:X}|rect={7},{8},{9},{10}",
         h.ToInt64(), cls, title, visible, IsWindowEnabled(h), IsIconic(h), GetWindow(h, 4).ToInt64(), r.L, r.T, r.R, r.B));
-      if (send && visible && cls.ToString().StartsWith("Chrome_WidgetWin")) PostMessage(h, 0x10, IntPtr.Zero, IntPtr.Zero);
+      if (visible && cls.ToString().StartsWith("Chrome_WidgetWin") && area > bestArea) { best = h; bestArea = area; }
       return true;
     }, IntPtr.Zero);
+    if (send && best != IntPtr.Zero) {
+      PostMessage(best, 0x10, IntPtr.Zero, IntPtr.Zero);
+      found.Add(string.Format("closing: 0x{0:X}", best.ToInt64()));
+    }
     return found.ToArray();
   }
 }
@@ -171,7 +179,7 @@ def press_close_button(process: subprocess.Popen) -> bool:
                 ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True, errors="replace",
             )
             return "True" in result.stdout
-        return any(line.startswith("window:") and "|visible=True|" in line and "Chrome_WidgetWin" in line for line in sent)
+        return any(line.startswith("window: closing:") for line in sent)
     try:
         from Xlib import X, display, protocol
     except ImportError:
@@ -504,15 +512,9 @@ def drive(args, command: list[str]) -> None:
                 page.evaluate("window.mtk.setCloseAction('quit')")
                 chosen = page.evaluate("window.mtk.desktopInfo()")
                 check(chosen.get("closeAction") == "quit", f"the shell holds the choice to quit ({chosen})")
-                describe_windows(process, "before the close button is pressed")
-                print(f"  info  the page's view of its window (visibilityState, hasFocus): {page.evaluate('[document.visibilityState, document.hasFocus()]')}", flush=True)
                 pressed = press_close_button(process)
                 if args.expect_tray:
                     check(pressed, "the window's close button can be pressed on this machine")
-                if WINDOWS:
-                    print("  info  the close request went to:", flush=True)
-                    for line in WINDOW_LOG:
-                        print(f"          {line}", flush=True)
                 if not pressed:
                     try:
                         page.evaluate("window.mtk.quit()")  # no way to press it here (a developer's machine without python-xlib)
@@ -522,17 +524,14 @@ def drive(args, command: list[str]) -> None:
                 if not closed:
                     # Say what the app looks like from outside and from inside, and whether it can quit at all (the check below fails
                     # either way: closing the window was supposed to do it).
-                    describe_windows(process, "20 s after the close button was pressed")
+                    print("  info  the app is still running 20 s after the close button was pressed; its windows when it was:", flush=True)
+                    for line in WINDOW_LOG:
+                        print(f"          {line}", flush=True)
+                    describe_windows(process, "now")
                     try:
                         print(f"  info  the page still answers: {page.evaluate('window.mtk.desktopInfo()')}", flush=True)
                     except Exception as error:
                         print(f"  info  the page no longer answers: {str(error)[:200]}", flush=True)
-                    if WINDOWS:  # the plain .NET way of asking, which picks the window by its own rule
-                        plain = subprocess.run(
-                            ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True, errors="replace",
-                        )
-                        again = bool(wait_for(lambda: process.poll() is not None, 8))
-                        print(f"  info  Process.CloseMainWindow() answered {plain.stdout.strip()!r}; after it the app {'quit' if again else 'was still running'}", flush=True)
                     try:
                         page.evaluate("window.mtk.quit()")
                     except Exception:
