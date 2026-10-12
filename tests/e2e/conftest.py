@@ -80,6 +80,9 @@ def signed_in_page(browser, live, init_script: str | None = None):
     if init_script:
         context.add_init_script(init_script)
     page = context.new_page()
+    # MTK_E2E_CPU_SLOWDOWN=4 runs the browser as if on a machine four times slower: how to hunt a test that only fails on a busy CI runner.
+    if os.environ.get("MTK_E2E_CPU_SLOWDOWN"):
+        context.new_cdp_session(page).send("Emulation.setCPUThrottlingRate", {"rate": float(os.environ["MTK_E2E_CPU_SLOWDOWN"])})
     problems: list[str] = []
     # A song without cover art answers its image request with 404; the UI draws a placeholder.
     # A test that deliberately provokes a refusal adds the status to page.allowed_statuses first.

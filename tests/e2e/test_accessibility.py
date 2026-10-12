@@ -50,6 +50,8 @@ def violations(page) -> list[str]:
 QUIET = """() => {
   if (!window.__quiet) {
     window.__quiet = { at: performance.now() };
+    // A change of page counts as a change, from the moment it is made: until the new page has drawn something the old one is not "quiet".
+    window.addEventListener('hashchange', () => { window.__quiet.at = performance.now(); });
     new MutationObserver((changes) => {
       const real = changes.filter((c) => !(c.target.closest ? c.target : c.target.parentElement)?.closest('.playerbar'));
       if (real.length) {
@@ -71,6 +73,15 @@ def settled(page) -> None:
     except AssertionError:
         busy = page.evaluate("[window.__quiet.last, Array.from(document.querySelectorAll('.spinner-wrap, .trow.skeleton, [aria-busy=true]'), (e) => e.outerHTML.slice(0, 100))]")
         raise AssertionError(f"the page never settled; last change: {busy[0]}; still loading: {busy[1]}") from None
+
+
+def has_a_heading(page, name: str) -> None:
+    """Every page names itself with a first-level heading. Wait for it, so that axe is never run on a page that is still being drawn
+    (on a slow machine the page may not have started when the clock says it is quiet)."""
+    try:
+        wait_until(page, "!!document.querySelector('main h1')", 15)
+    except AssertionError:
+        raise AssertionError(f"[{name}] no first-level heading appeared") from None
 
 
 def description(page) -> str:
@@ -252,6 +263,7 @@ def sweep(page, device_folder: Path) -> list[str]:
             settled(page)
         except AssertionError as error:
             raise AssertionError(f"[{name}] {error}") from None
+        has_a_heading(page, name)
         problems += [f"[{name}] {line}" for line in violations(page)]
     page.evaluate(CLEAR)
     return problems
@@ -287,6 +299,7 @@ def test_a_new_install_before_any_music_is_added_passes_too(page, theme) -> None
     for name, route in [("home", "#/"), ("songs", "#/songs"), ("albums", "#/albums"), ("now playing", "#/now"), ("stats", "#/stats"), ("settings", "#/settings")]:
         page.evaluate("(hash) => { location.hash = hash; }", route)
         settled(page)
+        has_a_heading(page, name)
         problems += [f"[{name}] {line}" for line in violations(page)]
 
     assert not problems, "\n".join(problems)

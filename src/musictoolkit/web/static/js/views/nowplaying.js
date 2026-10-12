@@ -169,6 +169,10 @@ function Visualizer() {
       analyser.getByteFrequencyData(data);
       const gap = 3;
       const barWidth = (w - gap * (bars - 1)) / bars;
+      if (barWidth < 1 || h < 1) { // not laid out yet, or squeezed to nothing: there is no room for bars (a negative radius would throw)
+        frame = requestAnimationFrame(draw);
+        return;
+      }
       const style = getComputedStyle(document.documentElement);
       const gradient = ctx2d.createLinearGradient(0, h, 0, 0);
       gradient.addColorStop(0, style.getPropertyValue('--accent-strong').trim() || '#666dff');

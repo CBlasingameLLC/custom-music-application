@@ -216,10 +216,10 @@ in `src/musictoolkit/web/routers/`.
 
 ```bash
 pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
-pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts...
+pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts, and the accessibility checks (axe-core, keyboard)
 python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
 python scripts/perf_synthetic.py                                    # time every screen on 100,000 invented songs and 300,000 plays
-cd desktop && npm test       # the update logic of the desktop shell
+cd desktop && npm test       # the desktop shell's logic: updates, tray menu, close button, window position, Open with arguments
 ```
 
 The helper for phones and players without a drive letter is a small C# program
