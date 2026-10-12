@@ -156,6 +156,21 @@ def test_now_playing_shows_synced_lyrics_and_an_equalizer(page, live):
     expect(page.locator(".qrow").first).to_be_visible()
 
 
+def test_the_visualizer_draws_nothing_rather_than_fail_when_there_is_no_room_for_it(page, live):
+    add_library(page, live)
+    play(page, "Glacier")
+    page.keyboard.press("n")
+    canvas = page.locator("canvas.visualizer")
+    expect(canvas).to_have_count(1)
+
+    canvas.evaluate("(el) => { el.style.width = '60px'; }")  # narrower than its 56 bars and their gaps
+    page.wait_for_timeout(400)  # several frames; any error they raise fails the test when the page is closed
+    canvas.evaluate("(el) => { el.style.width = ''; }")
+
+    page.wait_for_timeout(200)
+    assert page.evaluate("document.querySelector('canvas.visualizer').clientWidth") > 165, "and it draws again when it has room"
+
+
 def test_a_listen_is_logged_once_it_counts(page, live):
     add_library(page, live)
     play(page, "Glacier")
@@ -333,5 +348,5 @@ class TestDesktopUpdates:
 
     def test_a_plain_browser_has_no_updates_card(self, page):
         page.evaluate("location.hash = '#/settings'")
-        expect(page.get_by_role("heading", name="Appearance and data")).to_be_visible()
+        expect(page.get_by_role("heading", name="Appearance", exact=True)).to_be_visible()
         expect(page.get_by_role("heading", name="Updates")).to_have_count(0)

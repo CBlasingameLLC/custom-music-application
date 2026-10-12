@@ -28,8 +28,9 @@ export async function playAlbum(key, options = {}) {
   return playMatching({ album: key, sort: 'artist' }, 0, { source: 'Album', ...options });
 }
 
-function EmptyLibrary() {
-  return html`<${Empty} icon="folder" title="Add your music">
+/** `level` is the level of its heading: 1 when it is the whole page, 2 under a page's title. */
+function EmptyLibrary({ level = 2 }) {
+  return html`<${Empty} icon="folder" title="Add your music" level=${level}>
     <p>Choose the folder where your music lives. Music Toolkit reads the tags of the files in it (and its subfolders) and never changes or moves them unless you ask it to.</p>
     <${Button} kind="primary" icon="folder" onClick=${addMusicFolder}>Add music folder<//>
   <//>`;
@@ -51,8 +52,8 @@ export function HomeView() {
   const { data, loading, error } = useAsync(() => api('/home'), [rev]);
   const { data: mixes } = useAsync(() => api('/mixes', { params: { tz: viewerOffset() } }).catch(() => ({ items: [] })), [rev]);
   if (loading && !data) return html`<${Spinner} />`;
-  if (error) return html`<${Empty} icon="alert" title="Couldn't load your library">${error.message}<//>`;
-  if (!data.totals.tracks) return html`<${EmptyLibrary} />`;
+  if (error) return html`<${Empty} icon="alert" title="Couldn't load your library" level=${1}>${error.message}<//>`;
+  if (!data.totals.tracks) return html`<${EmptyLibrary} level=${1} />`;
 
   const playTrackFrom = (list, source) => (track) => playQueue(list, list.findIndex((t) => t.id === track.id), { source });
   return html`
@@ -176,7 +177,7 @@ export function AlbumsView() {
 export function AlbumView({ albumKey }) {
   const rev = useLibraryRev();
   const { data: album, error } = useAsync(() => api(`/albums/${albumKey}`), [albumKey, rev]);
-  if (error) return html`<${Empty} icon="disc" title="Album not found">${error.message}<//>`;
+  if (error) return html`<${Empty} icon="disc" title="Album not found" level=${1}>${error.message}<//>`;
   if (!album) return html`<${Spinner} />`;
   const fetchPage = useCallback(staticFetch(album.tracks), [album]);
   const play = (index, shuffle) => playQueue(album.tracks, index, { shuffle, source: `Album: ${album.album}` });
@@ -220,7 +221,7 @@ export function ArtistsView() {
 export function ArtistView({ name }) {
   const rev = useLibraryRev();
   const { data: artist, error } = useAsync(() => api('/artist', { params: { name } }), [name, rev]);
-  if (error) return html`<${Empty} icon="user" title="Artist not found">${error.message}<//>`;
+  if (error) return html`<${Empty} icon="user" title="Artist not found" level=${1}>${error.message}<//>`;
   if (!artist) return html`<${Spinner} />`;
   const top = artist.top_tracks;
   return html`
@@ -249,10 +250,10 @@ export function ArtistView({ name }) {
 export function SearchView({ term }) {
   const debounced = useDebounced(term, 150);
   const { data, loading } = useAsync(() => (debounced.trim() ? api('/search', { params: { q: debounced, limit: 12 } }) : null), [debounced]);
-  if (!debounced.trim()) return html`<${Empty} icon="search" title="Search your library">Songs, albums, artists and playlists.<//>`;
+  if (!debounced.trim()) return html`<${Empty} icon="search" title="Search your library" level=${1}>Songs, albums, artists and playlists.<//>`;
   if (!data) return loading ? html`<${Spinner} />` : null;
   const nothing = !data.tracks.length && !data.albums.length && !data.artists.length && !data.playlists.length;
-  if (nothing) return html`<${Empty} icon="search" title="Nothing found for “${debounced}”">Check the spelling or try fewer words.<//>`;
+  if (nothing) return html`<${Empty} icon="search" title="Nothing found for “${debounced}”" level=${1}>Check the spelling or try fewer words.<//>`;
   return html`
     <${PageHeader} title="Results for “${debounced}”" />
     ${data.tracks.length > 0 && html`<h2 class="section-title">Songs</h2>

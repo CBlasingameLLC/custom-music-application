@@ -71,6 +71,7 @@ class AppConfig:
     lyrics_lrclib: bool = False  # look up lyrics on lrclib.net when a file has none
     release_radar: bool = False  # look for new releases by artists you play (ListenBrainz, MusicBrainz) about once a day
     auto_update: bool = True  # the desktop app checks GitHub Releases for new versions and installs them
+    close_action: str = "tray_if_playing"  # what the desktop window's close button does: quit | tray_if_playing | tray
 
 
 @dataclass

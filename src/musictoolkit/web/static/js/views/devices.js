@@ -2,7 +2,7 @@
 // sync would change, then run it. Taking songs off a device always asks, with the exact count.
 import { api, fmt, html, useAsync, useDebounced, useEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
-import { Button, Empty, IconButton, JobBanner, PageHeader, Spinner } from '../components.js';
+import { Button, Empty, IconButton, JobBanner, PageHeader, Spinner, TabPanel, Tabs } from '../components.js';
 import { confirmDialog, pickFolder, promptText } from '../dialogs.js';
 import { Examples } from './organize.js';
 import { desktop, go, href, jobs, library, loadPlaylists, notifyError, onJobFinished, openMenu, openModal, toast, trackJob } from '../state.js';
@@ -130,7 +130,7 @@ function PhonesSection({ close, onAdded }) {
   const found = (data?.devices || []).flatMap((d) => d.storages.map((s) => ({ device: d, storage: s })));
   const unready = (data?.devices || []).filter((d) => d.storages.length === 0); // plugged in, but showing nothing to copy to
   return html`<section class="phones" aria-label="Phones and players without a drive letter">
-    <h3>Phones and players without a drive letter<span class="badge warn">experimental</span></h3>
+    <h2>Phones and players without a drive letter<span class="badge warn">experimental</span></h2>
     ${loading && !data ? html`<${Spinner} />` : data && !data.available
       ? html`<p class="subtle">${data.reason}</p>`
       : html`
@@ -268,7 +268,7 @@ function DeviceCard({ device, onChanged }) {
   return html`<article class="device-card ${device.connected ? '' : 'offline'}">
     <span class="device-icon"><${Icon} name=${phone ? 'phone' : 'drive'} size=${24} /></span>
     <div class="device-main">
-      <h3><a href=${href(`/devices/${device.id}`)}>${device.label}</a>${phone && html`<span class="badge">experimental</span>`}${!device.connected && html`<span class="badge warn">Not connected</span>`}</h3>
+      <h2><a href=${href(`/devices/${device.id}`)}>${device.label}</a>${phone && html`<span class="badge">experimental</span>`}${!device.connected && html`<span class="badge warn">Not connected</span>`}</h2>
       <p class="subtle path">${device.path}${device.volume_label && device.volume_label !== device.label ? ` (${device.volume_label})` : ''}${device.fs ? ` · ${device.fs}` : ''}${device.removable && !phone ? ' · removable' : ''}</p>
       ${device.connected && html`<${Capacity} device=${device} /><p class="subtle">${roomText(device)}</p>`}
       ${device.different_drive && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>A different drive is using ${device.path} now. Plug the right device in, or choose its folder again.</span></p>`}
@@ -581,13 +581,14 @@ export function DeviceView({ id }) {
               : `Remove ${fmt.plural(r.to_prune, 'song')} from the device`}<//>
             <span class="subtle">${removing ? 'The removal is confirmed first.' : 'Nothing on the device is removed.'} You can stop at any time and carry on later.</span>
           </div>`}
-      <div class="tabs" role="tablist">
-        ${lists.map(([kind, n]) => html`<button role="tab" key=${kind} aria-selected=${list === kind} class="tab ${list === kind ? 'active' : ''}" onClick=${() => showList(kind)}>${LIST_NAMES[kind]} <span class="count">${fmt.number(n)}</span></button>`)}
-      </div>
+      <${Tabs} id="sync" label="Songs by what happens to them" value=${list} onChange=${showList}
+        tabs=${lists.map(([kind, n]) => ({ id: kind, label: LIST_NAMES[kind], count: fmt.number(n) }))} />
+      <${TabPanel} id="sync" value=${list}>
       ${shown && html`<div class="sync-table" role="table" aria-label=${LIST_NAMES[list]}>
         ${shown.items.map((item, i) => html`<${Row} key=${i} kind=${list} item=${item} />`)}
       </div>
-      ${shown.total > shown.items.length && html`<p class="more-row"><${Button} onClick=${more}>Show more (${fmt.number(shown.total - shown.items.length)} left)<//></p>`}`}`}
+      ${shown.total > shown.items.length && html`<p class="more-row"><${Button} onClick=${more}>Show more (${fmt.number(shown.total - shown.items.length)} left)<//></p>`}`}
+      <//>`}
 
     <p class="hint-card subtle"><${Icon} name="info" size=${14} /> ${phone
       ? 'Songs are copied, never moved. A phone cannot rename a file, so a copy that is cut short is deleted again, and anything that still looks too small next time is copied again. Some players do not show .m3u8 playlists in their own playlist screen. Your choices are remembered for this device.'

@@ -1,9 +1,10 @@
 // Entry point: layout, routing, keyboard shortcuts, startup.
-import { html, render, useEffect, useRef, useStore } from './lib.js';
+import { Fragment, html, render, useEffect, useLayoutEffect, useRef, useState, useStore } from './lib.js';
 import { Empty, MenuHost, ModalHost, ToastHost } from './components.js';
 import { cycleRepeat, current, next, pause, player, previous, restoreQueue, seekBy, setVolume, toggle, toggleMute, toggleShuffle, updateTrack } from './player.js';
-import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, route, startJobPolling, ui } from './state.js';
+import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, ui } from './state.js';
 import { setFavorite } from './tracks.js';
+import { installOpenFiles } from './openfiles.js';
 import { PlayerBar, QueueDrawer, Sidebar, TopBar } from './views/shell.js';
 import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, SongsView } from './views/library.js';
 import { PlaylistsView, PlaylistView } from './views/playlists.js';
@@ -48,7 +49,7 @@ function View() {
       if (second === 'missing') return html`<${MissingView} />`;
       return html`<${ToolsView} />`;
     case 'settings': return html`<${SettingsView} />`;
-    default: return html`<${Empty} icon="search" title="That page doesn't exist"><a href="#/">Go home</a><//>`;
+    default: return html`<${Empty} icon="search" title="That page doesn't exist" level=${1}><a href="#/">Go home</a><//>`;
   }
 }
 
@@ -57,6 +58,7 @@ function useShortcuts() {
     const onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (modals.get().stack.length) return; // a dialog has the keyboard to itself
       const onButton = e.target.closest('button, a, [role="tab"], [role="menuitem"]');
       const s = player.get();
       switch (e.key) {
@@ -86,6 +88,55 @@ function useShortcuts() {
 
   // Hardware media keys, forwarded by the desktop shell.
   useEffect(() => desktop?.onMediaKey?.((key) => ({ playpause: toggle, next, previous, stop: pause })[key]?.()), []);
+
+  // Tell the desktop shell what is playing: the tray's tooltip and menu, and whether closing the window keeps the music going.
+  useEffect(() => {
+    if (!desktop?.setNowPlaying) return undefined;
+    let last = '';
+    const send = (s) => {
+      const track = current(s);
+      const info = { title: track?.title || '', artist: track?.artist || '', playing: Boolean(s.playing && track) };
+      const key = JSON.stringify(info);
+      if (key === last) return; // the position changes four times a second; this only cares about the song and playing
+      last = key;
+      desktop.setNowPlaying(info).catch(() => {});
+    };
+    send(player.get());
+    return player.subscribe(send);
+  }, []);
+
+  // Songs opened with the app (Explorer's Open with, a file dragged onto the program) and files dropped on the window.
+  useEffect(() => installOpenFiles(), []);
+}
+
+/**
+ * When the page changes: move the keyboard to the page (unless someone is typing, as in the search box), and say which page
+ * it is, for a screen reader. Returns the sentence to say. Not on the first page: that is the app opening.
+ */
+function useRouteAnnouncer(view, path) {
+  const [said, setSaid] = useState('');
+  const first = useRef(true);
+  useLayoutEffect(() => { // before the new page is painted: a key pressed once it is on screen finds the focus already there
+    if (first.current) {
+      first.current = false;
+      return undefined;
+    }
+    const page = view.current;
+    const typing = document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+    if (!page || typing) return undefined;
+    page.focus({ preventScroll: true });
+    const title = () => page.querySelector('h1')?.textContent?.trim();
+    // A page that loads its content shows its title a moment later: wait for it, but not for ever.
+    const observer = new MutationObserver(() => title() && (setSaid(title()), observer.disconnect()));
+    if (title()) setSaid(title());
+    else observer.observe(page, { childList: true, subtree: true });
+    const giveUp = setTimeout(() => observer.disconnect(), 4000);
+    return () => {
+      clearTimeout(giveUp);
+      observer.disconnect();
+    };
+  }, [path]);
+  return said;
 }
 
 function App() {
@@ -93,25 +144,35 @@ function App() {
   const view = useRef();
   const track = useStore(player, (s) => current(s));
   const playing = useStore(player, (s) => s.playing);
+  const dialogOpen = useStore(modals, (s) => s.stack.length > 0);
   useShortcuts();
   useEffect(() => view.current?.scrollTo(0, 0), [path]);
+  const pageName = useRouteAnnouncer(view, path);
   useEffect(() => {
     document.title = track ? `${playing ? '▶ ' : ''}${track.title} · ${track.artist}` : 'Music Toolkit';
   }, [track?.id, playing]);
 
-  return html`<div class="app">
-    <${Sidebar} />
-    <div class="main-col">
-      <${TopBar} />
-      <main class="view" ref=${view} tabIndex="-1"><${View} /></main>
+  // While a dialog is open the rest of the app is inert: no focus, no clicks, and not read out behind the dialog.
+  return html`<${Fragment}>
+    <div class="app" inert=${dialogOpen}>
+      <button type="button" class="skip-link" onClick=${() => view.current?.focus()}>Skip to content</button>
+      <${Sidebar} />
+      <div class="main-col">
+        <${TopBar} />
+        <main class="view" id="main" ref=${view} tabIndex="-1" data-route=${path}><${View} /><${MenuHost} /></main>
+      </div>
+      <${QueueDrawer} />
+      <${PlayerBar} />
     </div>
-    <${QueueDrawer} />
-    <${PlayerBar} />
-    <${ToastHost} /><${MenuHost} /><${ModalHost} />
-  </div>`;
+    <${ToastHost} /><${ModalHost} />
+    <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">${pageName}</div>
+  <//>`;
 }
 
-render(html`<${App} />`, document.getElementById('app'));
+// The page starts with a "Loading" line (shown until this script runs); the app replaces it.
+const root = document.getElementById('app');
+root.replaceChildren();
+render(html`<${App} />`, root);
 startJobPolling();
 loadAbout().catch(() => {});
 loadSettings().catch(() => {});

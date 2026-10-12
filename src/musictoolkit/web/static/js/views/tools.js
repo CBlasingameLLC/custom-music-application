@@ -49,7 +49,7 @@ export function ToolsView() {
     <div class="tool-grid">
       ${TOOLS.map((tool) => html`<a class="tool-card" href=${href(tool.path)} key=${tool.path}>
         <span class="tool-icon"><${Icon} name=${tool.icon} size=${22} /></span>
-        <h3>${tool.title}</h3>
+        <h2>${tool.title}</h2>
         <p>${tool.blurb}</p>
         <span class="tool-status">${tool.status(data) || ' '}</span>
       </a>`)}

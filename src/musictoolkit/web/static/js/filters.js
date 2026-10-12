@@ -1,5 +1,5 @@
 // Filtering: the chip bar used by the library views, the rule editor, and smart playlists.
-import { api, fmt, Fragment, html, useDebounced, useEffect, useRef, useState, useStore } from './lib.js';
+import { api, fmt, Fragment, html, useDebounced, useEffect, useLayoutEffect, useRef, useState, useStore } from './lib.js';
 import { Icon } from './icons.js';
 import { Button } from './components.js';
 import { go, library, loadFacets, loadPlaylists, notifyError, openModal, toast } from './state.js';
@@ -157,14 +157,24 @@ export function openSmartPlaylistEditor({ playlist, rules } = {}) {
 function Popover({ label, count, icon, children }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
-  useEffect(() => {
+  const button = useRef();
+  useLayoutEffect(() => {
     if (!open) return undefined;
     const close = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      button.current?.focus(); // back to the button that opened it
+    };
     window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [open]);
   return html`<span class="popover-wrap" ref=${ref}>
-    <button class="chip ${count ? 'on' : ''}" aria-expanded=${open} onClick=${() => setOpen(!open)}>
+    <button class="chip ${count ? 'on' : ''}" ref=${button} aria-expanded=${open} onClick=${() => setOpen(!open)}>
       ${icon && html`<${Icon} name=${icon} size=${14} />`}${label}${count ? html`<b>${count}</b>` : ''}<${Icon} name="chevron-down" size=${13} />
     </button>
     ${open && html`<div class="popover">${children(() => setOpen(false))}</div>`}

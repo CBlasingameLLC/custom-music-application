@@ -25,11 +25,11 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.5.0)
+## What it does (v0.6.0)
 
 | Area | Features |
 |---|---|
-| **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
+| **Playback** | In-app player: queue (drag to reorder, play next, save as playlist), shuffle, repeat all/one, seek, volume, ReplayGain loudness leveling, gapless playback and crossfade (up to 12 s), 10-band equalizer with presets, sleep timer, resume where you left off, keyboard media keys (desktop app) |
 | **Browse** | Home shelves, Songs (virtualized; timed against a synthetic library of 100,000 songs and 300,000 plays with `scripts/perf_synthetic.py`: Home, Songs, Albums, Artists, mixes and radio answer in under half a second), Albums, Artists, Favorites, Recently played, instant search |
 | **Filters** | Genre, rating, year, favorites, never played, recently added, plus a rule builder (any/all of: text, number, date and yes/no fields). Save any filter as a **smart playlist** |
 | **Playlists** | Manual and smart playlists, drag-to-reorder, import / export `.m3u8` |
@@ -41,8 +41,10 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
-| **Look** | Dark and light themes, responsive down to a narrow window |
+| **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
+| **Accessibility** | Everything can be done from the keyboard (a skip link, dialogs that keep the focus, menus and tables you walk with the arrow keys), screens are labelled for screen readers and say which page you moved to, text meets WCAG AA contrast in both themes, and the app follows Windows' *reduce motion*, *more contrast* and high-contrast themes. Checked automatically with axe on every screen; see below |
 | **Library tools** | Everything that changes your files shows a preview first, runs as a job with progress and a Cancel button, and can be undone. See below |
+| **Desktop** | A tray icon by the clock with Play/Pause, Next, Previous and Quit; closing the window keeps the music playing from the tray (or quits: your choice in Settings, Window and tray); the window opens where you left it; **Open with** in Explorer, and files or folders dropped on the window, are added to the library and played |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |
 
 ### Library tools (Library tools in the sidebar)
@@ -128,6 +130,39 @@ token: they are kept and retried if you are offline, and a rejected token is rep
 | `Shift` + `↑` `↓` | Volume | `N` | Now playing |
 | `/` | Search | `L` | Favorite the current song |
 
+In a table of songs, Tab reaches the table once (its column headers are the next stops, `Enter` sorts):
+
+| Key | Action |
+|---|---|
+| `↑` `↓`, `Page Up` `Page Down`, `Home` `End` | Move through the songs; the one you land on is selected |
+| `Shift` + those | Select a range |
+| `Ctrl` + those | Move without selecting; `Ctrl` + `Space` selects or deselects the song you are on |
+| `Ctrl` + `A` / `Esc` | Select all / clear the selection |
+| `Enter` | Play the song |
+| `Menu` or `Shift` + `F10` | The song's menu (`↑` `↓` `Home` `End` move, `Enter` chooses, `Esc` closes) |
+| `0` – `5` | Rate the selected songs (`0` clears the rating) |
+| `Alt` + `↑` `↓` | Move the song up or down a playlist; with a song's play button focused in the queue, up or down the queue |
+| `Delete` | Remove the selected songs from a playlist |
+
+In dialogs `Tab` stays inside the dialog and `Esc` closes it, putting the focus back where it was. Tabs (such as Lyrics, Up next, Sound)
+are one stop: `←` `→` `Home` `End` move between them.
+
+### Accessibility
+
+What is checked, on every build, in a real browser (`tests/e2e/test_accessibility.py`):
+
+- **axe-core** (WCAG 2.0 and 2.1 A and AA, the 2.2 AA rules and axe's best practices) finds nothing on any of about 40 screens
+  and dialogs, in both themes: names and roles, headings and landmarks, colour contrast, size of what can be clicked.
+- **Keyboard**: the first stop is a skip link; a dialog takes the focus, keeps it and gives it back; menus and the song table are
+  driven by the arrow keys; tabs follow the usual pattern; a change of page moves the focus to the page and says its name;
+  every stop on the home page shows where the focus is; nothing in the song table is reachable only by mouse (rating, menu,
+  sorting, reordering).
+- **System settings**: *reduce motion* (no visualizer, no smooth scrolling, no looping animations), *more contrast*, and Windows
+  high-contrast themes (selection is shown by an outline, not only by a colour).
+
+What these cannot say is what a screen reader reads aloud, or how the app feels with one. If something is awkward, that is a bug:
+please report it.
+
 ## Command line
 
 The same backend ships as `mtk` for scripting. Every command that changes files
@@ -181,10 +216,10 @@ in `src/musictoolkit/web/routers/`.
 
 ```bash
 pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
-pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts...
+pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts, and the accessibility checks (axe-core, keyboard)
 python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
 python scripts/perf_synthetic.py                                    # time every screen on 100,000 invented songs and 300,000 plays
-cd desktop && npm test       # the update logic of the desktop shell
+cd desktop && npm test       # the desktop shell's logic: updates, tray menu, close button, window position, Open with arguments
 ```
 
 The helper for phones and players without a drive letter is a small C# program

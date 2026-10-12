@@ -26,6 +26,8 @@ dev = [
 ]
 e2e = [
     "playwright",
+    # Pinned: a newer axe-core brings new rules, which would turn a green build red without any change to the app.
+    "axe-playwright-python==0.1.8",
 ]
 packaging = [
     "pyinstaller",

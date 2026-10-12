@@ -71,13 +71,18 @@ def live(tmp_path: Path):
     thread.join(timeout=10)
 
 
-@pytest.fixture
-def page(browser, live):
-    """A page already signed in to `live`. Any console error, uncaught exception or failed request fails the test."""
+def signed_in_page(browser, live, init_script: str | None = None):
+    """A page already signed in to `live` (a generator for fixtures). Any console error, uncaught exception or failed
+    request fails the test. `init_script` runs before the app does: to stand in for the desktop shell's `window.mtk`."""
     # One locale and time zone everywhere, so the dates and hours the UI prints (and the days a play belongs to) do not
     # depend on the machine the tests run on.
     context = browser.new_context(viewport={"width": 1360, "height": 860}, locale="en-US", timezone_id="UTC")
+    if init_script:
+        context.add_init_script(init_script)
     page = context.new_page()
+    # MTK_E2E_CPU_SLOWDOWN=4 runs the browser as if on a machine four times slower: how to hunt a test that only fails on a busy CI runner.
+    if os.environ.get("MTK_E2E_CPU_SLOWDOWN"):
+        context.new_cdp_session(page).send("Emulation.setCPUThrottlingRate", {"rate": float(os.environ["MTK_E2E_CPU_SLOWDOWN"])})
     problems: list[str] = []
     # A song without cover art answers its image request with 404; the UI draws a placeholder.
     # A test that deliberately provokes a refusal adds the status to page.allowed_statuses first.
@@ -99,6 +104,12 @@ def page(browser, live):
     yield page
     context.close()
     assert not problems, "the page reported problems:\n" + "\n".join(problems)
+
+
+@pytest.fixture
+def page(browser, live):
+    """A page already signed in to `live`."""
+    yield from signed_in_page(browser, live)
 
 
 def wait_until(page, expression: str, timeout: float = 10.0):

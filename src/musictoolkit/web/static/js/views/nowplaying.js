@@ -1,9 +1,9 @@
 // Now Playing: big cover, synced lyrics, the queue, and the sound controls.
-import { api, fmt, Fragment, html, useAsync, useEffect, useMemo, useRef, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, prefersReducedMotion, scrollBehavior, useAsync, useEffect, useLayoutEffect, useMemo, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
-import { Button, Cover, Empty, IconButton } from '../components.js';
+import { Button, Cover, Empty, IconButton, TabPanel, Tabs } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
-import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, moveInQueue, player, removeFromQueue, seek, setEq, setNormalize, setSleepTimer } from '../player.js';
+import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
 import { enc, go, href, loadPlaylists, notifyError, toast } from '../state.js';
 
 // ------------------------------------------------------------ queue
@@ -13,7 +13,23 @@ export function QueueList() {
   const dragFrom = useRef(null);
   const [dropAt, setDropAt] = useState(null);
   const currentRow = useRef();
+  const rowsBox = useRef();
+  const keyboardAt = useRef(null); // where in the queue a song was just moved to with the keyboard: its button gets the keyboard back
   useEffect(() => currentRow.current?.scrollIntoView({ block: 'nearest' }), [pos, items.length]);
+  useLayoutEffect(() => { // the rows are redrawn when the order changes, and the one that had the keyboard is a new element: find the song again
+    if (keyboardAt.current === null) return;
+    rowsBox.current?.querySelectorAll('.qrow')[keyboardAt.current]?.querySelector('.qplay')?.focus();
+    keyboardAt.current = null;
+  }, [order]);
+
+  // Alt+Up and Alt+Down on a song's controls move it up or down the queue: the keyboard's way of dragging.
+  function moveWithKeys(event, orderIndex) {
+    const to = orderIndex + (event.key === 'ArrowDown' ? 1 : -1);
+    if (!event.altKey || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || to < 0 || to >= order.length) return;
+    event.preventDefault();
+    keyboardAt.current = to;
+    moveInQueue(orderIndex, to);
+  }
 
   if (!order.length) {
     return html`<${Empty} icon="queue" title="The queue is empty">Play something, or add songs with “Add to queue”.<//>`;
@@ -34,7 +50,7 @@ export function QueueList() {
     const track = items[order[orderIndex]];
     const isCurrent = orderIndex === pos;
     return html`<div class="qrow ${isCurrent ? 'current' : ''} ${orderIndex < pos ? 'played' : ''} ${dropAt === orderIndex ? 'drop-before' : ''}" key=${orderIndex + ':' + track.id}
-      ref=${isCurrent ? currentRow : null} draggable="true"
+      ref=${isCurrent ? currentRow : null} draggable="true" onKeyDown=${(e) => moveWithKeys(e, orderIndex)}
       onDragStart=${(e) => { dragFrom.current = orderIndex; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(orderIndex)); }}
       onDragOver=${(e) => { e.preventDefault(); setDropAt(orderIndex); }}
       onDragEnd=${() => { dragFrom.current = null; setDropAt(null); }}
@@ -59,7 +75,7 @@ export function QueueList() {
       <button class="chip-btn" onClick=${saveAsPlaylist}><${Icon} name="plus" size=${14} /> Save as playlist</button>
       <button class="chip-btn" onClick=${async () => (order.length < 5 || (await confirmDialog({ title: 'Clear the queue', message: `Remove all ${order.length} songs from the queue?`, confirm: 'Clear', danger: true }))) && clearQueue()}><${Icon} name="trash" size=${14} /> Clear</button>
     </div>
-    <div class="queue-rows">${order.map((_, i) => row(i))}</div>
+    <div class="queue-rows" ref=${rowsBox}>${order.map((_, i) => row(i))}</div>
   </div>`;
 }
 
@@ -95,7 +111,7 @@ function Lyrics({ track }) {
   useEffect(() => {
     if (active < 0 || !box.current || Date.now() - userScrolledAt.current < 4000) return;
     const line = box.current.children[active];
-    if (line) box.current.scrollTo({ top: line.offsetTop - box.current.clientHeight / 2 + line.clientHeight / 2, behavior: 'smooth' });
+    if (line) box.current.scrollTo({ top: line.offsetTop - box.current.clientHeight / 2 + line.clientHeight / 2, behavior: scrollBehavior() });
   }, [active]);
 
   async function lookUp() {
@@ -113,12 +129,12 @@ function Lyrics({ track }) {
   const credit = data?.source === 'lrclib' ? html`<${LyricsCredit} />` : null;
   if (synced) {
     return html`<${Fragment}>
-      <div class="lyrics synced" ref=${box} onWheel=${() => (userScrolledAt.current = Date.now())}>
+      <div class="lyrics synced" ref=${box} tabIndex="0" role="region" aria-label="Lyrics" onWheel=${() => (userScrolledAt.current = Date.now())} onKeyDown=${() => (userScrolledAt.current = Date.now())}>
         ${synced.map((line, i) => html`<p class="${i === active ? 'active' : i < active ? 'past' : ''}" onClick=${() => seek(line.t)}>${line.text || '♪'}</p>`)}
       </div>${credit}
     <//>`;
   }
-  if (data?.plain) return html`<${Fragment}><div class="lyrics plain"><pre>${data.plain}</pre></div>${credit}<//>`;
+  if (data?.plain) return html`<${Fragment}><div class="lyrics plain" tabIndex="0" role="region" aria-label="Lyrics"><pre>${data.plain}</pre></div>${credit}<//>`;
   if (data?.instrumental) {
     return html`<${Empty} icon="music" title="Instrumental"><p>LRCLIB lists this song as an instrumental, so there are no lyrics to show.</p><${LyricsCredit} /><//>`;
   }
@@ -141,9 +157,10 @@ function Lyrics({ track }) {
 function Visualizer() {
   const canvas = useRef();
   const playing = useStore(player, (s) => s.playing);
+  const still = prefersReducedMotion(); // a picture that moves all the time is not for someone who asked for less motion
   useEffect(() => {
     const el = canvas.current;
-    if (!el) return undefined;
+    if (!el || still) return undefined;
     const ctx2d = el.getContext('2d');
     const analyser = getAnalyser();
     const data = new Uint8Array(analyser.frequencyBinCount);
@@ -158,6 +175,10 @@ function Visualizer() {
       analyser.getByteFrequencyData(data);
       const gap = 3;
       const barWidth = (w - gap * (bars - 1)) / bars;
+      if (barWidth < 1 || h < 1) { // not laid out yet, or squeezed to nothing: there is no room for bars (a negative radius would throw)
+        frame = requestAnimationFrame(draw);
+        return;
+      }
       const style = getComputedStyle(document.documentElement);
       const gradient = ctx2d.createLinearGradient(0, h, 0, 0);
       gradient.addColorStop(0, style.getPropertyValue('--accent-strong').trim() || '#666dff');
@@ -180,14 +201,19 @@ function Visualizer() {
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [playing]);
-  return html`<canvas class="visualizer" ref=${canvas} aria-hidden="true"></canvas>`;
+  }, [playing, still]);
+  return still ? null : html`<canvas class="visualizer" ref=${canvas} aria-hidden="true"></canvas>`;
 }
 
 // ------------------------------------------------------------ sound controls
 
 function SoundPanel() {
-  const { eq, normalize, sleepAt } = useStore(player);
+  // One value each: the whole player changes four times a second while a song plays, and none of this does.
+  const eq = useStore(player, (s) => s.eq);
+  const normalize = useStore(player, (s) => s.normalize);
+  const sleepAt = useStore(player, (s) => s.sleepAt);
+  const crossfade = useStore(player, (s) => s.crossfade);
+  const gapless = useStore(player, (s) => s.gapless);
   const [remaining, setRemaining] = useState('');
   useEffect(() => {
     if (!sleepAt) return setRemaining('');
@@ -200,7 +226,7 @@ function SoundPanel() {
   const preset = Object.keys(EQ_PRESETS).find((name) => EQ_PRESETS[name].every((g, i) => g === eq.gains[i])) || 'Custom';
 
   return html`<div class="sound">
-    <h3>Equalizer</h3>
+    <h2>Equalizer</h2>
     <div class="sound-row">
       <label class="switch"><input type="checkbox" checked=${eq.enabled} onChange=${(e) => setEq({ enabled: e.target.checked })} /><span>On</span></label>
       <select value=${preset} aria-label="Equalizer preset" onChange=${(e) => EQ_PRESETS[e.target.value] && setEq({ preset: e.target.value, enabled: true })}>
@@ -215,11 +241,20 @@ function SoundPanel() {
         <span class="hz">${labels[i]}</span>
       </label>`)}
     </div>
-    <h3>Volume</h3>
+    <h2>Volume</h2>
     <label class="switch"><input type="checkbox" checked=${normalize} onChange=${(e) => setNormalize(e.target.checked)} />
       <span>Even out loudness between songs (ReplayGain)</span></label>
     <p class="subtle">Uses the loudness tags stored in your files. Songs without them play unchanged.</p>
-    <h3>Sleep timer</h3>
+    <h2>Between songs</h2>
+    <label class="switch"><input type="checkbox" checked=${gapless || crossfade > 0} disabled=${crossfade > 0} onChange=${(e) => setGapless(e.target.checked)} />
+      <span>Gapless playback</span></label>
+    <p class="subtle">Starts the next song just as the last one ends, with no silence between them: live albums, mixes and classical music run on unbroken.</p>
+    <label class="slider-row"><span>Crossfade</span>
+      <input type="range" min="0" max=${MAX_CROSSFADE} step="1" value=${crossfade} aria-label="Crossfade length in seconds" aria-valuetext=${crossfade ? `${crossfade} seconds` : 'Off'}
+        onInput=${(e) => setCrossfade(Number(e.target.value))} />
+      <output>${crossfade ? `${crossfade} s` : 'Off'}</output></label>
+    <p class="subtle">Fades the end of a song into the start of the next. Short songs get a shorter blend, and skipping with Next or a click is always instant.</p>
+    <h2>Sleep timer</h2>
     <div class="sound-row">
       <select value=${sleepAt ? 'on' : 'off'} aria-label="Sleep timer" onChange=${(e) => setSleepTimer(e.target.value === 'off' ? 0 : Number(e.target.value))}>
         <option value="off">${sleepAt ? `Stopping in ${remaining}` : 'Off'}</option>
@@ -232,11 +267,13 @@ function SoundPanel() {
 
 // ------------------------------------------------------------ the view
 
+const NP_TABS = [{ id: 'lyrics', label: 'Lyrics', icon: 'mic' }, { id: 'queue', label: 'Up next', icon: 'queue' }, { id: 'sound', label: 'Sound', icon: 'sliders' }];
+
 export function NowPlayingView() {
   const track = useStore(player, (s) => current(s));
   const [tab, setTab] = useState('lyrics');
   if (!track) {
-    return html`<${Empty} icon="music" title="Nothing is playing">Pick a song from your library to start. Lyrics, the queue and the equalizer live here.<//>`;
+    return html`<${Empty} icon="music" title="Nothing is playing" level=${1}>Pick a song from your library to start. Lyrics, the queue and the equalizer live here.<//>`;
   }
   return html`<div class="nowplaying">
     <div class="np-left">
@@ -248,15 +285,12 @@ export function NowPlayingView() {
       <${Visualizer} />
     </div>
     <div class="np-right">
-      <div class="tabs" role="tablist">
-        ${[['lyrics', 'Lyrics', 'mic'], ['queue', 'Up next', 'queue'], ['sound', 'Sound', 'sliders']].map(([id, label, icon]) => html`
-          <button role="tab" class="tab ${tab === id ? 'active' : ''}" aria-selected=${tab === id} onClick=${() => setTab(id)}><${Icon} name=${icon} size=${15} /> ${label}</button>`)}
-      </div>
-      <div class="tab-body">
+      <${Tabs} id="np" label="Now playing" tabs=${NP_TABS} value=${tab} onChange=${setTab} />
+      <${TabPanel} id="np" value=${tab} class="tab-body">
         ${tab === 'lyrics' && html`<${Lyrics} track=${track} />`}
         ${tab === 'queue' && html`<${QueueList} />`}
         ${tab === 'sound' && html`<${SoundPanel} />`}
-      </div>
+      <//>
     </div>
   </div>`;
 }

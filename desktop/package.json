@@ -1,6 +1,6 @@
 {
   "name": "musictoolkit-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Desktop shell for Music Toolkit: starts the Python backend and shows its web UI in a native window.",
   "main": "src/main/index.js",
@@ -37,6 +37,13 @@
       ],
       "icon": "build/icon.png"
     },
+    "fileAssociations": [
+      { "ext": ["mp3"], "name": "MP3 audio", "description": "MP3 audio file", "role": "Viewer" },
+      { "ext": ["flac"], "name": "FLAC audio", "description": "FLAC audio file", "role": "Viewer" },
+      { "ext": ["m4a", "aac"], "name": "AAC audio", "description": "AAC audio file", "role": "Viewer" },
+      { "ext": ["ogg", "oga", "opus"], "name": "Ogg audio", "description": "Ogg audio file", "role": "Viewer" },
+      { "ext": ["wav"], "name": "WAV audio", "description": "WAV audio file", "role": "Viewer" }
+    ],
     "publish": [
       { "provider": "github", "owner": "CBlasingameLLC", "repo": "custom-music-application", "releaseType": "release" }
     ],

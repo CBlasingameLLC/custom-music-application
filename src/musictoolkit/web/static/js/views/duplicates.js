@@ -1,7 +1,7 @@
 // Duplicate songs: find them, pick the copy to keep, move the rest to a review folder; and the review folder itself.
 import { api, fmt, html, useAsync, useEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
-import { Button, Empty, JobBanner, PageHeader, Spinner } from '../components.js';
+import { Button, Empty, JobBanner, PageHeader, Spinner, TabPanel, Tabs } from '../components.js';
 import { addMusicFolder, confirmDialog, typedConfirm } from '../dialogs.js';
 import { jobs, library, notifyError, onJobFinished, toast, trackJob } from '../state.js';
 
@@ -330,11 +330,11 @@ export function DuplicatesView() {
   if (!info) return html`<${PageHeader} title="Find duplicates" /><${Spinner} />`;
   return html`
     <${PageHeader} title="Find duplicates" subtitle="Find songs you have more than once, keep the best copy, and move the rest to a review folder. Nothing is deleted until you empty that folder, and even then it goes to the Recycle Bin." />
-    <div class="tabs" role="tablist">
-      <button role="tab" aria-selected=${tab === 'find'} class="tab ${tab === 'find' ? 'active' : ''}" onClick=${() => setTab('find')}>Find</button>
-      <button role="tab" aria-selected=${tab === 'review'} class="tab ${tab === 'review' ? 'active' : ''}" onClick=${() => setTab('review')}>Review folder${info.review.count ? html` <span class="count">${fmt.number(info.review.count)}</span>` : ''}</button>
-    </div>
+    <${Tabs} id="dup" label="Duplicates" value=${tab} onChange=${setTab}
+      tabs=${[{ id: 'find', label: 'Find' }, { id: 'review', label: 'Review folder', count: info.review.count ? fmt.number(info.review.count) : undefined }]} />
     <${JobBanner} kinds=${KINDS} />
-    <div hidden=${tab !== 'find'}><${FindTab} info=${info} busy=${busy} refresh=${refresh} /></div>
-    ${tab === 'review' && html`<${ReviewTab} info=${info} busy=${busy} refresh=${refresh} />`}`;
+    <${TabPanel} id="dup" value=${tab}>
+      <div hidden=${tab !== 'find'}><${FindTab} info=${info} busy=${busy} refresh=${refresh} /></div>
+      ${tab === 'review' && html`<${ReviewTab} info=${info} busy=${busy} refresh=${refresh} />`}
+    <//>`;
 }

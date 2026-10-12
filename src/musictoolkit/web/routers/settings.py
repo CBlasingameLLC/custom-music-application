@@ -23,8 +23,10 @@ EDITABLE: dict[str, set[str]] = {
     "listenbrainz": {"enabled", "username", "user_token", "scrobble", "now_playing"},
     "lastfm": {"enabled", "api_key", "api_secret"},
     "sync": {"device_scheme"},
-    "app": {"rescan_on_launch", "lyrics_lrclib", "release_radar", "auto_update"},
+    "app": {"rescan_on_launch", "lyrics_lrclib", "release_radar", "auto_update", "close_action"},
 }
+# Fields that take one of a few words.
+CHOICES: dict[tuple[str, str], set[str]] = {("app", "close_action"): {"quit", "tray_if_playing", "tray"}}
 TEMPLATE_FIELDS = {("library", "canonical_scheme"), ("sync", "device_scheme")}
 
 
@@ -46,7 +48,7 @@ def public_settings(cfg: Config) -> dict[str, Any]:
             "has_secret": bool(cfg.lastfm.api_secret),
         },
         "sync": {"device_scheme": cfg.sync.device_scheme},
-        "app": {"rescan_on_launch": cfg.app.rescan_on_launch, "lyrics_lrclib": cfg.app.lyrics_lrclib, "release_radar": cfg.app.release_radar, "auto_update": cfg.app.auto_update},
+        "app": {"rescan_on_launch": cfg.app.rescan_on_launch, "lyrics_lrclib": cfg.app.lyrics_lrclib, "release_radar": cfg.app.release_radar, "auto_update": cfg.app.auto_update, "close_action": cfg.app.close_action},
     }
 
 
@@ -77,6 +79,8 @@ def put_settings(body: dict[str, dict[str, Any]], ctx: AppContext = Depends(get_
             current = getattr(target, key)
             if not isinstance(value, type(current)):
                 raise HTTPException(status_code=422, detail=f"{section}.{key} must be a {type(current).__name__}")
+            if (section, key) in CHOICES and value not in CHOICES[(section, key)]:
+                raise HTTPException(status_code=422, detail=f"{section}.{key} must be one of: {', '.join(sorted(CHOICES[(section, key)]))}")
             if (section, key) in TEMPLATE_FIELDS:
                 try:
                     organizer.validate_scheme(value)

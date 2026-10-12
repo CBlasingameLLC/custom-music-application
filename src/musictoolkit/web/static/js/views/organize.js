@@ -1,7 +1,7 @@
 // Organize files: choose a folder and a layout, preview every change, move the files as one batch, undo it.
 import { api, fmt, html, useAsync, useDebounced, useEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
-import { Button, Empty, JobBanner, PageHeader, Spinner } from '../components.js';
+import { Button, Empty, JobBanner, PageHeader, Spinner, TabPanel, Tabs } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
 import { href, jobs, library, notifyError, onJobFinished, toast, trackJob } from '../state.js';
 
@@ -237,9 +237,9 @@ export function OrganizeView() {
               <${Button} kind="primary" icon="check" disabled=${busy} onClick=${apply}>Move ${fmt.plural(result.moves, 'song')}<//>
               <span class="subtle">Lyrics files and covers follow. Folders left empty are removed.</span>
             </div>`}
-        <div class="tabs" role="tablist">
-          ${LISTS.filter(([kind]) => kind === 'moves' || result[kind] > 0).map(([kind, label]) => html`<button role="tab" key=${kind} aria-selected=${list === kind} class="tab ${list === kind ? 'active' : ''}" onClick=${() => showList(kind)}>${label} <span class="count">${fmt.number(kind === 'moves' ? result.moves : result[kind])}</span></button>`)}
-        </div>
+        <${Tabs} id="org" label="Songs by what happens to them" value=${list} onChange=${showList}
+          tabs=${LISTS.filter(([kind]) => kind === 'moves' || result[kind] > 0).map(([kind, label]) => ({ id: kind, label, count: fmt.number(kind === 'moves' ? result.moves : result[kind]) }))} />
+        <${TabPanel} id="org" value=${list}>
         ${shown && html`<div class="move-table" role="table" aria-label=${LISTS.find(([k]) => k === list)[1]}>
           <div class="move-head" role="row"><span>Now</span><span></span><span>${list === 'moves' ? 'After' : 'Wanted'}</span></div>
           ${shown.items.map((item, i) => html`<div class="move-row" role="row" key=${i + item.from}>
@@ -249,7 +249,7 @@ export function OrganizeView() {
           </div>`)}
         </div>
         ${shown.total > shown.items.length && html`<p class="more-row"><${Button} onClick=${more}>Show more (${fmt.number(shown.total - shown.items.length)} left)<//></p>`}
-        ${list !== 'moves' && html`<p class="subtle">${list === 'collisions' ? 'These songs stay where they are because another file or song already uses the new name. Nothing is overwritten.' : 'Windows cannot open paths this long, so these songs stay where they are. A shorter layout may help.'}</p>`}`}`}
+        ${list !== 'moves' && html`<p class="subtle">${list === 'collisions' ? 'These songs stay where they are because another file or song already uses the new name. Nothing is overwritten.' : 'Windows cannot open paths this long, so these songs stay where they are. A shorter layout may help.'}</p>`}`}<//>`}
 
       <${Batches} batches=${info.batches} busy=${busy} onUndo=${undo} />
       <p class="hint-card subtle"><${Icon} name="info" size=${14} /> A song that is playing, or open in another program, cannot be moved. It is skipped and reported, and a second run picks it up.</p>`}`;

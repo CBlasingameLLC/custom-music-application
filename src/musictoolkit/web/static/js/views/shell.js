@@ -1,5 +1,5 @@
 // The frame around every view: sidebar, top bar, task tray, and the bottom player bar.
-import { api, fmt, html, useEffect, useRef, useState, useStore } from '../lib.js';
+import { api, fmt, html, useEffect, useLayoutEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Cover, IconButton } from '../components.js';
 import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
@@ -34,21 +34,21 @@ export function Sidebar() {
       <${NavItem} to="/playlists" icon="list" label="Playlists" match=${(p) => starts('/playlists')(p) || starts('/playlist')(p)} />
       <${NavItem} to="/favorites" icon="heart" label="Favorites" />
     </div>
-    <div class="nav-group">
-      <div class="nav-label">Listen</div>
+    <div class="nav-group" role="group" aria-labelledby="nav-listen">
+      <div class="nav-label" id="nav-listen">Listen</div>
       <${NavItem} to="/recent" icon="clock" label="Recently played" />
       <${NavItem} to="/discover" icon="compass" label="Discover" />
       <${NavItem} to="/stats" icon="chart" label="Stats" />
       <${NavItem} to="/history" icon="calendar" label="Listening history" match=${starts('/history')} />
     </div>
-    <div class="nav-group">
-      <div class="nav-label">Manage</div>
+    <div class="nav-group" role="group" aria-labelledby="nav-manage">
+      <div class="nav-label" id="nav-manage">Manage</div>
       <${NavItem} to="/tools" icon="wrench" label="Library tools" match=${starts('/tools')} />
       <${NavItem} to="/devices" icon="drive" label="Devices" match=${starts('/devices')} />
       <${NavItem} to="/settings" icon="sliders" label="Settings" />
     </div>
-    ${playlists.length > 0 && html`<div class="nav-group playlists-nav">
-      <div class="nav-label">Playlists</div>
+    ${playlists.length > 0 && html`<div class="nav-group playlists-nav" role="group" aria-labelledby="nav-playlists">
+      <div class="nav-label" id="nav-playlists">Playlists</div>
       <div class="nav-scroll">${playlists.slice(0, 40).map((p) => html`<a class="nav-item small" href=${href(`/playlist/${p.id}`)} key=${p.id} title=${p.name}>
         <${Icon} name=${p.kind === 'smart' ? 'sparkles' : 'list'} size=${15} /><span>${p.name}</span></a>`)}</div>
     </div>`}
@@ -63,17 +63,27 @@ function TasksPill() {
   const { items } = useStore(jobs);
   const { jobsOpen } = useStore(ui);
   const ref = useRef();
+  const pill = useRef();
   const active = items.filter((j) => j.status === 'queued' || j.status === 'running');
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!jobsOpen) return undefined;
     const close = (e) => !ref.current?.contains(e.target) && ui.set({ jobsOpen: false });
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      ui.set({ jobsOpen: false });
+      pill.current?.focus();
+    };
     window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [jobsOpen]);
   const lead = active[0];
   const pct = lead && lead.total ? Math.round((lead.done / lead.total) * 100) : null;
   return html`<div class="tasks" ref=${ref}>
-    <button class="tasks-pill ${active.length ? 'busy' : ''}" aria-label="Background tasks" aria-expanded=${jobsOpen} onClick=${() => ui.set({ jobsOpen: !jobsOpen })}>
+    <button class="tasks-pill ${active.length ? 'busy' : ''}" ref=${pill} aria-label="Background tasks" aria-expanded=${jobsOpen} onClick=${() => ui.set({ jobsOpen: !jobsOpen })}>
       ${active.length ? html`<span class="spinner small"></span><span>${lead.title}${pct !== null ? ` · ${pct}%` : ''}</span>` : html`<${Icon} name="check" size=${15} /><span>No tasks running</span>`}
     </button>
     ${jobsOpen && html`<div class="tasks-popover" role="dialog" aria-label="Background tasks">
@@ -158,7 +168,7 @@ function Seek({ track }) {
   return html`<div class="seek">
     <span class="time">${fmt.time(shown)}</span>
     <input class="slider" type="range" min="0" max=${duration || 0} step="0.1" value=${shown} disabled=${!track} aria-label="Seek"
-      style=${{ '--pct': pct + '%' }}
+      aria-valuetext=${`${fmt.time(shown)} of ${fmt.time(duration)}`} style=${{ '--pct': pct + '%' }}
       onInput=${(e) => setDragging(Number(e.target.value))}
       onChange=${(e) => { seek(Number(e.target.value)); setDragging(null); }} />
     <span class="time">${fmt.time(duration)}</span>
@@ -171,7 +181,7 @@ export function PlayerBar() {
   const { queueOpen } = useStore(ui);
   const volumeIcon = s.muted || s.volume === 0 ? 'volume-mute' : s.volume < 0.4 ? 'volume-low' : 'volume';
 
-  return html`<footer class="playerbar" aria-label="Player">
+  return html`<section class="playerbar" aria-label="Player">
     <div class="pb-track">
       ${track
         ? html`<a class="pb-art" href=${href('/now')} aria-label="Open Now Playing"><${Cover} trackId=${track.id} name=${track.album} size=56 /></a>
@@ -203,9 +213,10 @@ export function PlayerBar() {
       <${IconButton} icon="queue" title="Queue" active=${queueOpen} onClick=${() => ui.set({ queueOpen: !queueOpen })} />
       <${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />
       <input class="slider volume" type="range" min="0" max="1" step="0.01" value=${s.muted ? 0 : s.volume} aria-label="Volume"
+        aria-valuetext=${s.muted ? 'Muted' : `${Math.round(s.volume * 100)} percent`}
         style=${{ '--pct': (s.muted ? 0 : s.volume) * 100 + '%' }} onInput=${(e) => setVolume(Number(e.target.value))} />
     </div>
-  </footer>`;
+  </section>`;
 }
 
 export function QueueDrawer() {
