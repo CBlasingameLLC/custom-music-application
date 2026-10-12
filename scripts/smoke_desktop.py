@@ -87,15 +87,91 @@ def wait_for(predicate, seconds: float, interval: float = 0.25):
     return None
 
 
+# Windows: list the windows the app's process has on screen and, when asked, send WM_CLOSE (what the close button does) to each visible
+# app window. Not Process.CloseMainWindow(): that picks one window by a rule of its own, and when it picked the wrong one (or refused)
+# nothing could tell why. The list is the evidence when the app does not close.
+WINDOWS_WINDOWS = r"""
+param([int]$ProcessId, [int]$Send)
+Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class MtkWin {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static string[] Windows(uint pid, bool send) {
+    var found = new List<string>();
+    EnumWindows((h, l) => {
+      uint owner; GetWindowThreadProcessId(h, out owner);
+      if (owner != pid) return true;
+      var cls = new StringBuilder(256); GetClassName(h, cls, 256);
+      var title = new StringBuilder(256); GetWindowText(h, title, 256);
+      bool visible = IsWindowVisible(h);
+      RECT r; GetWindowRect(h, out r);
+      found.Add(string.Format("0x{0:X}|{1}|{2}|visible={3}|enabled={4}|minimized={5}|owner=0x{6:X}|rect={7},{8},{9},{10}",
+        h.ToInt64(), cls, title, visible, IsWindowEnabled(h), IsIconic(h), GetWindow(h, 4).ToInt64(), r.L, r.T, r.R, r.B));
+      if (send && visible && cls.ToString().StartsWith("Chrome_WidgetWin")) PostMessage(h, 0x10, IntPtr.Zero, IntPtr.Zero);
+      return true;
+    }, IntPtr.Zero);
+    return found.ToArray();
+  }
+}
+"@
+[MtkWin]::Windows([uint32]$ProcessId, [bool]$Send) | ForEach-Object { "window: $_" }
+$p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+if ($p) {
+  $main = '0x{0:X}' -f $p.MainWindowHandle.ToInt64()
+  "process: pid=$($p.Id) responding=$($p.Responding) mainWindowHandle=$main mainWindowTitle=$($p.MainWindowTitle)"
+} else { "process: gone" }
+"""
+WINDOW_LOG: list[str] = []  # what the last look at the app's windows found, for a failure report
+
+
+def app_windows(process: subprocess.Popen, send: bool) -> list[str]:
+    """Windows only: one line per window the app's process has (handle|class|title|visible|enabled|minimized|owner|rect) and a line
+    about the process; with `send`, each visible app window is also asked to close."""
+    script = Path(tempfile.gettempdir()) / "mtk-app-windows.ps1"
+    script.write_text(WINDOWS_WINDOWS, encoding="utf-8")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-ProcessId", str(process.pid), "-Send", "1" if send else "0"],
+        capture_output=True, text=True, errors="replace",  # a window title may hold characters the console cannot show
+    )
+    WINDOW_LOG[:] = [line.strip() for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+    return list(WINDOW_LOG)
+
+
+def describe_windows(process: subprocess.Popen, when: str) -> None:
+    """Print what the app has on screen (Windows only; on Linux the window manager is the one to ask)."""
+    if WINDOWS:
+        print(f"  info  the app's windows {when}:", flush=True)
+        for line in app_windows(process, send=False):
+            print(f"          {line}", flush=True)
+
+
 def press_close_button(process: subprocess.Popen) -> bool:
     """Ask the app's window to close the way its close button does: a polite request the app may answer by hiding the
     window instead (window.close() from the page, or the debugger's Browser.close, would quit without asking). True if
     the request was sent; on Linux it needs python-xlib (and an X server), which only a developer's machine has."""
     if WINDOWS:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True,
-        )
-        return "True" in result.stdout
+        sent = app_windows(process, send=True)
+        if not any(line.startswith(("window:", "process:")) for line in sent):
+            # The listing itself failed (what it said is in WINDOW_LOG): fall back to the plain request, so the check still means something.
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True, errors="replace",
+            )
+            return "True" in result.stdout
+        return any(line.startswith("window:") and "|visible=True|" in line and "Chrome_WidgetWin" in line for line in sent)
     try:
         from Xlib import X, display, protocol
     except ImportError:
@@ -372,6 +448,8 @@ def drive(args, command: list[str]) -> None:
             pressed = press_close_button(process)
             if not pressed:
                 print("  skip  the window's close button cannot be pressed from here (needs PowerShell on Windows, or python-xlib under X)")
+                for line in WINDOW_LOG:
+                    print(f"          {line}", flush=True)
             else:
                 check(True, "the window's close button was pressed")
             if args.expect_tray:
@@ -414,6 +492,7 @@ def drive(args, command: list[str]) -> None:
         check(bool(page_url) and page_url != "exited", "the window opened again")
         if page_url and page_url != "exited":
             backend_port = int(page_url.split("://", 1)[1].split("/", 1)[0].split(":")[1])
+            closed = False
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
                 page = next(pg for pg in browser.contexts[0].pages if pg.url.startswith("http://127.0.0.1:"))
@@ -423,12 +502,44 @@ def drive(args, command: list[str]) -> None:
                 check(bool(wait_for(lambda: player_source(page) == "Opened files", 40, 0.5)), "the song it was started with is playing, as an opened file")
                 check(tracks_in_library(page) == len(mp3s) + 2, f"the library kept the song handed over earlier and took the new one ({tracks_in_library(page)})")
                 page.evaluate("window.mtk.setCloseAction('quit')")
-                if not press_close_button(process):
+                chosen = page.evaluate("window.mtk.desktopInfo()")
+                check(chosen.get("closeAction") == "quit", f"the shell holds the choice to quit ({chosen})")
+                describe_windows(process, "before the close button is pressed")
+                print(f"  info  the page's view of its window (visibilityState, hasFocus): {page.evaluate('[document.visibilityState, document.hasFocus()]')}", flush=True)
+                pressed = press_close_button(process)
+                if args.expect_tray:
+                    check(pressed, "the window's close button can be pressed on this machine")
+                if WINDOWS:
+                    print("  info  the close request went to:", flush=True)
+                    for line in WINDOW_LOG:
+                        print(f"          {line}", flush=True)
+                if not pressed:
+                    try:
+                        page.evaluate("window.mtk.quit()")  # no way to press it here (a developer's machine without python-xlib)
+                    except Exception:
+                        pass
+                closed = bool(wait_for(lambda: process.poll() is not None, 20))
+                if not closed:
+                    # Say what the app looks like from outside and from inside, and whether it can quit at all (the check below fails
+                    # either way: closing the window was supposed to do it).
+                    describe_windows(process, "20 s after the close button was pressed")
+                    try:
+                        print(f"  info  the page still answers: {page.evaluate('window.mtk.desktopInfo()')}", flush=True)
+                    except Exception as error:
+                        print(f"  info  the page no longer answers: {str(error)[:200]}", flush=True)
+                    if WINDOWS:  # the plain .NET way of asking, which picks the window by its own rule
+                        plain = subprocess.run(
+                            ["powershell", "-NoProfile", "-Command", f"(Get-Process -Id {process.pid}).CloseMainWindow()"], capture_output=True, text=True, errors="replace",
+                        )
+                        again = bool(wait_for(lambda: process.poll() is not None, 8))
+                        print(f"  info  Process.CloseMainWindow() answered {plain.stdout.strip()!r}; after it the app {'quit' if again else 'was still running'}", flush=True)
                     try:
                         page.evaluate("window.mtk.quit()")
                     except Exception:
                         pass
-            check(bool(wait_for(lambda: process.poll() is not None, 30)), "closing the window quits when that is what was chosen")
+                    quit_works = bool(wait_for(lambda: process.poll() is not None, 10))
+                    print(f"  info  asked to quit through the bridge, it {'quit' if quit_works else 'did not quit either'}", flush=True)
+            check(closed, "closing the window quits when that is what was chosen")
             check(bool(wait_for(lambda: not backend_up(backend_port), 15)), "and the backend is gone")
     except Exception as error:
         failures.append(f"unexpected error: {error!r}")

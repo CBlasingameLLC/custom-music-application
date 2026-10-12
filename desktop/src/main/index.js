@@ -102,7 +102,11 @@ function registerBridge() {
     updateTray();
     return null;
   });
-  handle('close-action', (value) => closeSetting.choose(value));
+  handle('close-action', (value) => {
+    const chosen = closeSetting.choose(value);
+    desktopLog(`the close button's choice is now ${chosen}`);
+    return chosen;
+  });
   // Songs the person opened with the app (Explorer's Open with, a file dragged onto the program): the page collects the
   // ones that arrived before it was ready, and from then on is sent the rest as they come.
   handle('take-open-files', () => {
@@ -110,6 +114,7 @@ function registerBridge() {
     return pendingFiles.splice(0);
   });
   handle('quit', () => {
+    desktopLog('the page asked the app to quit');
     setImmediate(() => app.quit());
     return null;
   });
@@ -327,8 +332,14 @@ function createWindow(pageUrl) {
     openExternally(url);
     return { action: 'deny' };
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    win.show();
+    desktopLog(`the window is ready and is shown (visible=${win.isVisible()}, bounds=${JSON.stringify(win.getBounds())})`);
+  });
+  win.on('unresponsive', () => desktopLog('the window is not responding'));
+  win.on('responsive', () => desktopLog('the window responds again'));
   win.on('closed', () => {
+    desktopLog('the window is closed');
     win = null;
   });
   win.loadURL(pageUrl);
@@ -369,7 +380,9 @@ if (!app.requestSingleInstanceLock()) {
     startUpdater(settings);
     registerBridge();
     registerMediaKeys();
-    handOverFiles(filesFromArgv(process.argv, { defaultApp: process.defaultApp }));
+    const given = filesFromArgv(process.argv, { defaultApp: process.defaultApp });
+    desktopLog(`started: version ${app.getVersion()}, packaged=${app.isPackaged}, ${given.length} song(s) named on the command line`);
+    handOverFiles(given);
     createTray();
     createWindow(`${backendOrigin}/?token=${encodeURIComponent(started.token)}`);
   });
@@ -378,7 +391,12 @@ if (!app.requestSingleInstanceLock()) {
     app.quit();
   });
 
+  // A page or helper process that dies leaves its reason here, where a person reporting "it froze" can find it.
+  app.on('render-process-gone', (_event, _contents, details) => desktopLog(`a page process is gone: ${details.reason} (exit code ${details.exitCode})`));
+  app.on('child-process-gone', (_event, details) => desktopLog(`a ${details.type} process is gone: ${details.reason} (exit code ${details.exitCode})`));
+
   app.on('before-quit', () => {
+    desktopLog('quitting');
     quitting = true;
     globalShortcut.unregisterAll();
     if (tray) {
@@ -386,5 +404,8 @@ if (!app.requestSingleInstanceLock()) {
       tray = null;
     }
     stopBackend();
+    desktopLog('the backend is stopped');
   });
+
+  app.on('will-quit', () => desktopLog('every window is closed; the app is exiting'));
 }
