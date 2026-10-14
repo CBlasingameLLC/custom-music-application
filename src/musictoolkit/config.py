@@ -72,6 +72,7 @@ class AppConfig:
     release_radar: bool = False  # look for new releases by artists you play (ListenBrainz, MusicBrainz) about once a day
     auto_update: bool = True  # the desktop app checks GitHub Releases for new versions and installs them
     close_action: str = "tray_if_playing"  # what the desktop window's close button does: quit | tray_if_playing | tray
+    podcast_refresh: bool = True  # look for new episodes of the podcasts you follow every few hours (only while there are any)
 
 
 @dataclass

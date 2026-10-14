@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any
 
 import requests
 from fastapi.concurrency import run_in_threadpool

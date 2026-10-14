@@ -34,7 +34,6 @@ CREATE TABLE podcasts (
   itunes_id       TEXT,
   subscribed_at   TEXT NOT NULL,
   last_checked_at TEXT,                           -- when the feed was last asked about, answered or not
-  last_changed_at TEXT,                           -- when it last had something new
   etag            TEXT,
   last_modified   TEXT,
   error           TEXT                            -- why the last check failed, if it did
@@ -57,7 +56,8 @@ CREATE TABLE podcast_episodes (
   position_seconds REAL NOT NULL DEFAULT 0,       -- where listening stopped
   played           INTEGER NOT NULL DEFAULT 0,
   played_at        TEXT,
+  is_new           INTEGER NOT NULL DEFAULT 0,    -- came out after the podcast was followed (or is among the latest when it was): under "New episodes" until heard
   UNIQUE(podcast_id, guid)
 );
 CREATE INDEX idx_episodes_podcast ON podcast_episodes(podcast_id, published_at DESC);
-CREATE INDEX idx_episodes_new ON podcast_episodes(played, published_at DESC);
+CREATE INDEX idx_episodes_new ON podcast_episodes(is_new, played, published_at DESC);
