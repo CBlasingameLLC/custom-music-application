@@ -55,6 +55,20 @@ def test_favorites_come_first_and_the_scopes_pick_what_they_say(conn) -> None:
     assert c["id"] not in [s["id"] for s in store.list_stations(conn, "recent")]
 
 
+def test_the_station_played_last_is_the_first_of_the_recent_ones_even_when_the_clock_does_not_move(conn, monkeypatch) -> None:
+    """Windows' clock ticks about every 15 ms, so two plays in a row can have the same time; a clock can also be put back."""
+    first = kept(conn, name="First", url="http://s/1")
+    second = kept(conn, name="Second", url="http://s/2")
+    monkeypatch.setattr(store, "_now", lambda: "2026-10-14T12:00:00.000000+00:00")
+    store.record_play(conn, second["id"])
+    store.record_play(conn, first["id"])
+    assert [s["name"] for s in store.list_stations(conn, "recent")] == ["First", "Second"]
+    monkeypatch.setattr(store, "_now", lambda: "2026-10-14T11:59:00.000000+00:00")  # the clock was put back a minute
+    store.record_play(conn, second["id"])
+    assert [s["name"] for s in store.list_stations(conn, "recent")] == ["Second", "First"]
+    assert all(s["play_count"] == n for s, n in zip(sorted(store.list_stations(conn), key=lambda s: s["name"]), (1, 2)))
+
+
 def test_a_station_can_be_renamed_marked_and_removed(conn) -> None:
     station = kept(conn)
     assert store.update_station(conn, station["id"], favorite=True)["favorite"] is True

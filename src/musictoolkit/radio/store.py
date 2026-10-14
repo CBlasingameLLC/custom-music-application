@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 MAX_NAME = 200
@@ -133,5 +133,12 @@ def delete_station(conn: sqlite3.Connection, station_id: int) -> bool:
 
 
 def record_play(conn: sqlite3.Connection, station_id: int) -> None:
-    conn.execute("UPDATE radio_stations SET last_played_at = ?, play_count = play_count + 1 WHERE id = ?", (_now(), station_id))
+    """Note that a station was played just now. Its time is always later than any station's before it, whatever the clock's resolution (Windows'
+    ticks about every 15 ms, so two quick plays could have the same time) or direction (a clock that was put back), so that the station played last
+    is the first of the recent ones."""
+    stamp = _now()
+    latest = conn.execute("SELECT MAX(last_played_at) FROM radio_stations").fetchone()[0]
+    if latest and stamp <= latest:
+        stamp = (datetime.fromisoformat(latest) + timedelta(microseconds=1)).isoformat(timespec="microseconds")
+    conn.execute("UPDATE radio_stations SET last_played_at = ?, play_count = play_count + 1 WHERE id = ?", (stamp, station_id))
     conn.commit()

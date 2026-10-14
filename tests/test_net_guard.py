@@ -123,6 +123,17 @@ def test_one_private_address_among_public_ones_is_enough_to_refuse_the_name(monk
         guard._resolve("mixed.example", 80)
 
 
+def test_a_number_written_in_an_unusual_way_is_refused_whatever_the_system_makes_of_it(monkeypatch) -> None:
+    """glibc reads every one of these as an IPv4 address and Windows' lookup refuses some: the guard must not depend on that. The lookup is made to
+    answer a public address, so that only the guard's own rule can refuse them."""
+    monkeypatch.setattr(guard.socket, "getaddrinfo", lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))])
+    for spelling in ("2130706433", "134744072", "0x7f.0.0.1", "0x7f000001", "017700000001", "0177.0.0.1", "010.1.1.1", "127.1", "1.2.3", "0"):
+        with pytest.raises(guard.BlockedAddress, match="unusual way"):
+            guard._resolve(spelling, 80)
+    for name in ("radio.example", "1.example", "123abc.example", "0x.example", "a1.2b.example"):
+        assert guard._resolve(name, 80) == ["93.184.216.34"], name
+
+
 def test_a_literal_address_is_checked_like_a_name() -> None:
     for literal in ("127.0.0.1", "[::1]", "[fe80::1]", "[::ffff:10.0.0.1]", "2130706433", "0x7f.0.0.1", "017700000001", "127.1", "10.1.1.1", "localhost"):
         with pytest.raises(guard.BlockedAddress):

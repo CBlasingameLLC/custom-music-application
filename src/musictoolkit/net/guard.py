@@ -21,6 +21,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import os
+import re
 import socket
 import time
 import zlib
@@ -120,13 +121,21 @@ def check_url(url: str) -> str:
 
 # ---------------------------------------------------------------- the connection that checks
 
+# A host that is nothing but numbers written the way old software accepted them: 2130706433, 0x7f.0.0.1, 017700000001, 127.1, 010.1.1.1. The system's own
+# lookup reads some of these as addresses (glibc: every one) and refuses others (Windows), so the answer would depend on the operating system; they are
+# refused here, the same everywhere. No real host name ends in a number.
+_UNUSUAL_NUMBER = re.compile(r"(0x[0-9a-f]+|[0-9]+)(\.(0x[0-9a-f]+|[0-9]+)){0,3}", re.IGNORECASE)
+
+
 def _resolve(host: str, port: int) -> list[str]:
     """Every address `host` has, in the order the system gives them; BlockedAddress if any is not public (unless local ones are allowed)."""
     host = host.strip("[]")
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
-        literal = None  # a name (or one of the odd spellings of an address, which the system's own lookup turns into one)
+        literal = None  # a name
+    if literal is None and _UNUSUAL_NUMBER.fullmatch(host):
+        raise BlockedAddress(f"{host} is a number written in an unusual way; this app only connects to addresses written the usual way (such as 93.184.216.34).")
     if literal is not None and not local_allowed() and not is_public(literal):
         raise BlockedAddress(f"{host} is on this computer or its local network, not on the internet.")
     try:
