@@ -254,6 +254,13 @@ def test_a_length_reported_by_the_page_stands_in_for_an_unknown_one(web, site) -
     assert web.client.post(f"/api/podcasts/episodes/{episode['id']}/progress", json={"position": 1790}).json()["played"] is True
 
 
+def test_a_short_episode_is_only_heard_near_its_own_end(web, site) -> None:
+    site.episodes = [{"guid": "short", "title": "A trailer", "path": "/ep1.mp3", "date": "Tue, 03 Jun 2025 10:00:00 +0000", "duration": "0:00:40"}]
+    trailer = episode_ids(web, follow(web, site)["id"])["A trailer"]
+    assert web.client.post(f"/api/podcasts/episodes/{trailer}/progress", json={"position": 20}).json()["played"] is False, "30 s from the end would be the middle of it"
+    assert web.client.post(f"/api/podcasts/episodes/{trailer}/progress", json={"position": 36.5}).json()["played"] is True
+
+
 def test_the_length_the_page_reports_decides_when_an_episode_is_over(web, site) -> None:
     second = episode_ids(web, follow(web, site)["id"])["Second"]  # the feed says 600 s; the file the page is playing turns out longer
     got = web.client.post(f"/api/podcasts/episodes/{second}/progress", json={"position": 700, "duration": 1800}).json()

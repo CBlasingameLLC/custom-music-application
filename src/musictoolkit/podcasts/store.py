@@ -8,7 +8,7 @@ from typing import Any
 
 from musictoolkit.podcasts.feed import ParsedEpisode, ParsedFeed
 
-PLAYED_WHEN_LEFT = 30.0  # seconds from the end: an episode listened to this far counts as heard
+PLAYED_WHEN_LEFT = 30.0  # seconds from the end: an episode listened to this far counts as heard (a short one: its last tenth)
 PLAYED_FRACTION = 0.97
 NEW_WHEN_FOLLOWED = 3  # the latest episodes of a podcast that has just been followed count as new; its back catalogue does not
 NEW_AT_MOST = 20  # and so many at most of what one check finds (a feed that suddenly lists its whole history is not 700 new episodes)
@@ -179,7 +179,7 @@ def set_progress(conn: sqlite3.Connection, episode_id: int, position: float, dur
         return None
     position = max(0.0, float(position))
     length = float(duration) if duration and duration > 0 else row["duration_seconds"]
-    if length and (position >= length - PLAYED_WHEN_LEFT or position >= length * PLAYED_FRACTION):
+    if length and (position >= length - min(PLAYED_WHEN_LEFT, length * 0.1) or position >= length * PLAYED_FRACTION):
         conn.execute("UPDATE podcast_episodes SET position_seconds = 0, played = 1, played_at = COALESCE(played_at, ?) WHERE id = ?", (_now(), episode_id))
     else:
         conn.execute("UPDATE podcast_episodes SET position_seconds = ? WHERE id = ?", (position, episode_id))
