@@ -40,7 +40,7 @@ from musictoolkit import __version__
 
 USER_AGENT = f"Music Toolkit/{__version__} (https://github.com/CBlasingameLLC/custom-music-application)"
 MAX_URL_LENGTH = 2048
-MAX_REDIRECTS = 5
+MAX_REDIRECTS = 10  # a podcast episode's address often goes through several tracking services before it reaches the file
 CONNECT_TIMEOUT = 8.0
 READ_TIMEOUT = 20.0
 REDIRECT_CODES = {301, 302, 303, 307, 308}

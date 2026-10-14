@@ -208,6 +208,19 @@ def test_redirects_are_followed_and_the_final_address_is_reported(local) -> None
     assert got.content == b"arrived" and got.url == server.url + "/c"
 
 
+def test_a_chain_of_tracking_redirects_such_as_a_podcast_host_uses_is_followed(local) -> None:
+    def script(h):
+        hop = int(h.path.strip("/") or 0)
+        if hop < 7:
+            _reply(h, b"", 302, Location=f"/{hop + 1}")
+        else:
+            _reply(h, b"the file")
+
+    with serve_script(script) as server:
+        got = guard.fetch(server.url + "/", max_bytes=100)
+    assert got.content == b"the file" and len(server.requests) == 8
+
+
 def test_a_redirect_to_an_address_that_cannot_be_used_is_refused(local) -> None:
     for target in ("ftp://example.com/x", "file:///etc/passwd", "http://user:pw@example.com/"):
         with serve_script(lambda h, target=target: _reply(h, b"", 302, Location=target)) as server:
