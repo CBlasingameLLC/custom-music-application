@@ -1,25 +1,32 @@
 // Small shared building blocks: covers, ratings, cards, shelves, and the overlay hosts.
 import { api, html, hashHue, scrollBehavior, useEffect, useLayoutEffect, useRef, useState, useStore, fmt } from './lib.js';
 import { Icon } from './icons.js';
+import { artSrc, fallbackIcon, itemKey } from './items.js';
 import { closeMenu, dismissToast, href, enc, jobs, menu, modals, notifyError, toasts } from './state.js';
 
 const THUMBS = [64, 128, 256, 512, 1024];
 const pickThumb = (cssPixels) => THUMBS.find((t) => t >= cssPixels * (window.devicePixelRatio || 1)) || 1024;
 
-/** Cover art for a track or album. Draws a coloured placeholder when there is none. */
-export function Cover({ trackId, albumKey, name = '', size = 160, round = false, class: className = '' }) {
+/**
+ * Cover art for a song (`trackId`), an album (`albumKey`) or anything the queue can hold (`item`: a song, a radio station or a podcast
+ * episode). Draws a coloured placeholder when there is none.
+ */
+export function Cover({ trackId, albumKey, item, name = '', size = 160, round = false, class: className = '' }) {
   const [failed, setFailed] = useState(false);
-  const src = albumKey
-    ? `/api/art/album/${albumKey}?size=${pickThumb(size)}`
-    : trackId
-      ? `/api/art/track/${trackId}?size=${pickThumb(size)}`
-      : null;
+  const src = item
+    ? artSrc(item, pickThumb(size))
+    : albumKey
+      ? `/api/art/album/${albumKey}?size=${pickThumb(size)}`
+      : trackId
+        ? `/api/art/track/${trackId}?size=${pickThumb(size)}`
+        : null;
   useEffect(() => setFailed(false), [src]);
-  const hue = hashHue(name || String(trackId ?? albumKey ?? ''));
+  const hue = hashHue(name || (item ? itemKey(item) : String(trackId ?? albumKey ?? '')));
+  const glyph = item ? fallbackIcon(item) : round ? 'user' : 'music';
   return html`<div class="cover ${round ? 'round' : ''} ${className}" style=${{ '--hue': hue }}>
     ${src && !failed
       ? html`<img src=${src} loading="lazy" decoding="async" alt="" draggable="false" onError=${() => setFailed(true)} />`
-      : html`<span class="cover-fallback"><${Icon} name=${round ? 'user' : 'music'} size=${Math.max(16, Math.round(size / 3.2))} /></span>`}
+      : html`<span class="cover-fallback"><${Icon} name=${glyph} size=${Math.max(16, Math.round(size / 3.2))} /></span>`}
   </div>`;
 }
 

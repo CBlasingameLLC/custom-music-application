@@ -9,8 +9,9 @@ the in-app player uses), the library tools (organize with undo, duplicates with
 the review folder and the Recycle Bin), device sync to a folder, the Spotify
 import (which needs pandas inside the bundle), listening statistics, mixes and
 song radio, the release radar, lyrics from a stand-in for lrclib.net, the
-scrobbler status and diagnostics, settings and backup all work from the frozen
-binary, and that nothing leaks into the working directory.
+scrobbler status and diagnostics, internet radio and podcasts (against stand-ins for a
+station, the Radio Browser and Apple's directories and a podcast host), settings and
+backup all work from the frozen binary, and that nothing leaks into the working directory.
 
 Standard library only, so it runs on any CI runner without installing anything.
 """
@@ -294,6 +295,183 @@ def personal_layer(client: Client, tracks: list[dict]) -> None:
     check(status == 200 and again["source"] == "lrclib", "and they are kept in the app's database")
 
 
+def mp3_frames(data: bytes) -> bytes:
+    """An MP3's audio without its ID3v2 tag, so it can be repeated end to end like a live stream."""
+    if data[:3] == b"ID3":
+        return data[10 + ((data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]) :]
+    return data
+
+
+def stand_in_for_the_internet(tone: bytes) -> tuple[list[ThreadingHTTPServer], dict[str, str]]:
+    """Local servers standing in for a radio station, the Radio Browser directory, Apple's podcast directory and a podcast host. (The backend is
+    told to connect to addresses on this computer, which it refuses when it really runs.)"""
+    frames = mp3_frames(tone)
+    servers: list[ThreadingHTTPServer] = []
+    urls: dict[str, str] = {}
+
+    def serve(name: str, handler) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 (the name http.server looks for)
+                try:
+                    handler(self)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass  # the listener went away
+
+            def log_message(self, *_args: object) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+        urls[name] = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def send_json(h: BaseHTTPRequestHandler, payload) -> None:
+        body = json.dumps(payload).encode()
+        h.send_response(200)
+        h.send_header("Content-Type", "application/json")
+        h.send_header("Content-Length", str(len(body)))
+        h.end_headers()
+        h.wfile.write(body)
+
+    def station(h: BaseHTTPRequestHandler) -> None:
+        wants = h.headers.get("Icy-MetaData") == "1"
+        h.send_response(200)
+        h.send_header("Content-Type", "audio/mpeg")
+        h.send_header("icy-name", "Smoke FM")
+        h.send_header("icy-genre", "jazz, smooth")
+        h.send_header("icy-br", "48")
+        if wants:
+            h.send_header("icy-metaint", "4096")
+        h.end_headers()
+        position = 0
+        while True:  # a live station does not end
+            block = bytearray()
+            while len(block) < 4096:
+                piece = frames[position : position + 4096 - len(block)]
+                block += piece
+                position = (position + len(piece)) % len(frames)
+            h.wfile.write(bytes(block))
+            if wants:
+                meta = b"StreamTitle='Smoke Artist - Smoke Title';"
+                padded = meta + b"\0" * (-len(meta) % 16)
+                h.wfile.write(bytes([len(padded) // 16]) + padded)
+            h.wfile.flush()
+            time.sleep(0.02)
+
+    serve("station", station)
+    serve(
+        "radio_browser",
+        lambda h: send_json(
+            h,
+            {
+                "/stations/search": [{"stationuuid": "aaaaaaaa-1111-2222-3333-444444444444", "name": "Directory Smoke FM", "url_resolved": urls["station"] + "/live",
+                                      "country": "Norway", "countrycode": "NO", "codec": "MP3", "bitrate": 48, "tags": "jazz", "votes": 1}],
+                "/tags": [{"name": "jazz", "stationcount": 1}],
+                "/countries": [{"name": "Norway", "iso_3166_1": "NO", "stationcount": 1}],
+            }.get(h.path.split("?")[0], {}),
+        ),
+    )
+
+    def host(h: BaseHTTPRequestHandler) -> None:
+        path = h.path.split("?")[0]
+        if path == "/feed.xml":
+            items = "".join(
+                f"<item><title>Smoke episode {n}</title><guid>smoke-{n}</guid><pubDate>Tue, 0{n} Jun 2025 10:00:00 +0000</pubDate><itunes:duration>12</itunes:duration>"
+                f'<enclosure url="{urls["host"]}/ep.mp3" type="audio/mpeg" length="{len(tone)}"/></item>'
+                for n in (1, 2)
+            )
+            body = (
+                '<?xml version="1.0"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>Smoke Cast</title>'
+                f'<itunes:author>Jo Host</itunes:author><itunes:image href="{urls["host"]}/art.png"/>{items}</channel></rss>'
+            ).encode()
+            h.send_response(200)
+            h.send_header("Content-Type", "application/rss+xml")
+            h.send_header("Content-Length", str(len(body)))
+            h.end_headers()
+            h.wfile.write(body)
+        elif path == "/ep.mp3":
+            asked = (h.headers.get("Range") or "").removeprefix("bytes=").split("-")
+            if len(asked) == 2 and asked[0].isdigit():
+                start = int(asked[0])
+                end = min(int(asked[1]) if asked[1].isdigit() else len(tone) - 1, len(tone) - 1)
+                h.send_response(206)
+                h.send_header("Content-Range", f"bytes {start}-{end}/{len(tone)}")
+                h.send_header("Content-Length", str(end - start + 1))
+                h.send_header("Content-Type", "audio/mpeg")
+                h.end_headers()
+                h.wfile.write(tone[start : end + 1])
+            else:
+                h.send_response(200)
+                h.send_header("Content-Length", str(len(tone)))
+                h.send_header("Content-Type", "audio/mpeg")
+                h.end_headers()
+                h.wfile.write(tone)
+        elif path == "/art.png":
+            body = tiny_png(64)
+            h.send_response(200)
+            h.send_header("Content-Type", "image/png")
+            h.send_header("Content-Length", str(len(body)))
+            h.end_headers()
+            h.wfile.write(body)
+        else:
+            h.send_response(404)
+            h.send_header("Content-Length", "0")
+            h.end_headers()
+
+    serve("host", host)
+    serve(
+        "apple",
+        lambda h: send_json(
+            h, {"resultCount": 1, "results": [{"collectionId": 7, "collectionName": "Smoke Cast", "artistName": "Jo Host", "feedUrl": urls["host"] + "/feed.xml", "trackCount": 2}]}
+        ),
+    )
+    return servers, urls
+
+
+def radio_and_podcasts(client: Client, urls: dict[str, str], tone: bytes) -> None:
+    """Radio and podcasts from the frozen binary: the directories, a station kept and listened to (its title taken out of the audio), a podcast
+    followed, its episodes heard through the app with Range, pictures re-drawn, and the check for new episodes."""
+    frames = mp3_frames(tone)
+    plays_before = client.json("/api/history/top-artists?limit=5")[1]["total_plays"]
+    status, found = client.json("/api/radio/directory?q=smoke")
+    check(status == 200 and [s["name"] for s in found["items"]] == ["Directory Smoke FM"], f"the radio directory is searched ({found})")
+    status, tags = client.json("/api/radio/directory/tags")
+    check(status == 200 and tags["items"][0]["name"] == "jazz", "its kinds of music are listed")
+    status, station = client.json("/api/radio/stations", "POST", {"url": urls["station"] + "/live"})
+    check(status == 201 and station["name"] == "Smoke FM" and station["favorite"] and station["bitrate"] == 48, f"a station is kept from its address, trying it first ({station})")
+    request = urllib.request.Request(client.base + f"/api/radio/stations/{station['id']}/stream", headers={"X-MTK-Token": TOKEN})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        audio = response.read(12000)
+        status_now, now = client.json(f"/api/radio/stations/{station['id']}/now")
+        check(response.status == 200 and response.headers.get("Content-Type", "").startswith("audio/mpeg"), "the station plays through the app")
+    check(audio == frames[:12000], "its title is taken out of the audio (what arrives is only sound)")
+    check(status_now == 200 and now["title"] == "Smoke Artist - Smoke Title" and now["artist"] == "Smoke Artist", f"and kept for the player bar ({now})")
+    status, played = client.json(f"/api/radio/stations/{station['id']}/played", "POST", {})
+    check(status == 200 and client.json("/api/radio/stations?scope=recent")[1]["counts"]["recent"] == 1, "a station played is remembered")
+
+    status, followed = client.json("/api/podcasts", "POST", {"feed_url": urls["host"] + "/feed.xml"})
+    check(status == 201 and followed["title"] == "Smoke Cast" and followed["episodes"] == 2 and followed["new"] == 2, f"a podcast is followed from its feed ({followed})")
+    status, shown = client.json(f"/api/podcasts/{followed['id']}")
+    episode = shown["items"][0]
+    check(status == 200 and [e["title"] for e in shown["items"]] == ["Smoke episode 2", "Smoke episode 1"] and episode["duration"] == 12, "its episodes are listed, newest first")
+    status, headers, body = client.request(f"/api/podcasts/episodes/{episode['id']}/stream", headers={"Range": "bytes=100-199"})
+    check(status == 206 and body == tone[100:200] and headers.get("content-range", "").startswith("bytes 100-199/"), f"an episode is heard through the app, and can be sought ({status})")
+    status, headers, body = client.request(f"/api/podcasts/{followed['id']}/art")
+    check(status == 200 and headers.get("content-type") == "image/jpeg" and len(body) > 50, f"the show's picture is re-drawn small ({status} {headers.get('content-type')})")
+    status, progress = client.json(f"/api/podcasts/episodes/{episode['id']}/progress", "POST", {"position": 5, "duration": 12})
+    check(status == 200 and progress["position"] == 5 and not progress["played"] and progress["new"], f"where listening stopped is kept ({progress})")
+    status, finished = client.json(f"/api/podcasts/episodes/{episode['id']}/progress", "POST", {"position": 11.9, "duration": 12})
+    check(status == 200 and finished["played"] and finished["position"] == 0 and not finished["new"], "and near the end the episode counts as heard")
+    status, search = client.json("/api/podcasts/search?q=smoke&country=US")
+    check(status == 200 and search["items"][0]["followed_id"] == followed["id"], "Apple's directory is searched, and says which shows are followed")
+    status, started = client.json("/api/podcasts/refresh", "POST")
+    job = wait_job(client, started["job"]["id"]) if status == 200 else {}
+    check(job.get("status") == "done" and job["result"]["checked"] == 1 and job["result"]["errors"] == 0, f"new episodes are looked for ({job.get('result') or job.get('error')})")
+    status, plays = client.json("/api/history/top-artists?limit=5")
+    check(status == 200 and plays["total_plays"] == plays_before, f"listening to radio and podcasts adds nothing to the music history ({plays_before} plays before, {plays.get('total_plays')} after)")
+
+
 def run(exe: Path, fixtures: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix="mtk-smoke-"))
     profile, elsewhere, music = scratch / "profile", scratch / "elsewhere", scratch / "music"
@@ -309,7 +487,12 @@ def run(exe: Path, fixtures: Path) -> None:
     port = free_port()
     log_path = scratch / "backend.log"
     lrclib, lrclib_url = stand_in_for_lrclib()
-    env = {**os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN, "MTK_LRCLIB_URL": lrclib_url}
+    tone = (fixtures / "tone_12s.mp3").read_bytes() if (fixtures / "tone_12s.mp3").exists() else mp3s[0].read_bytes()
+    internet, internet_urls = stand_in_for_the_internet(tone)
+    env = {
+        **os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN, "MTK_LRCLIB_URL": lrclib_url,
+        "MTK_ALLOW_LOCAL_URLS": "1", "MTK_RADIO_BROWSER_URL": internet_urls["radio_browser"], "MTK_ITUNES_URL": internet_urls["apple"],
+    }
     # A stand-in for mtk-mtp.exe that keeps its "phones" in folders: the real one needs a phone plugged in.
     fake_helper = fixtures.resolve().parent / "fake_mtp_helper.py"
     if fake_helper.exists():
@@ -381,6 +564,7 @@ def run(exe: Path, fixtures: Path) -> None:
         check(client.request(f"/api/tracks/{track['id']}/info")[0] == 200, "song details")
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
         personal_layer(client, tracks["items"])
+        radio_and_podcasts(client, internet_urls, tone)
         check(client.request("/api/home")[0] == 200, "Home data")
         status, settings = client.json("/api/settings")
         check(status == 200 and "library" in settings, "settings")
@@ -397,6 +581,8 @@ def run(exe: Path, fixtures: Path) -> None:
     finally:
         stop(process)
         lrclib.shutdown()
+        for server in internet:
+            server.shutdown()
         time.sleep(0.5)
         if failures:
             print("\n--- backend output ---")

@@ -2,8 +2,10 @@
 import { Fragment, html, render, useEffect, useLayoutEffect, useRef, useState, useStore } from './lib.js';
 import { Empty, MenuHost, ModalHost, ToastHost } from './components.js';
 import { cycleRepeat, current, next, pause, player, previous, restoreQueue, seekBy, setVolume, toggle, toggleMute, toggleShuffle, updateTrack } from './player.js';
-import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, ui } from './state.js';
+import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, toast, ui } from './state.js';
 import { setFavorite } from './tracks.js';
+import { describe, isStation, isTrack } from './items.js';
+import { setStationFavorite } from './radio.js';
 import { installOpenFiles } from './openfiles.js';
 import { PlayerBar, QueueDrawer, Sidebar, TopBar } from './views/shell.js';
 import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, SongsView } from './views/library.js';
@@ -19,6 +21,8 @@ import { EnrichView, ToolsView } from './views/tools.js';
 import { OrganizeView } from './views/organize.js';
 import { DuplicatesView } from './views/duplicates.js';
 import { MissingView } from './views/missing.js';
+import { RadioView } from './views/radio.js';
+import { PodcastsView, PodcastView } from './views/podcasts.js';
 
 function View() {
   const { parts, query } = useStore(route);
@@ -38,6 +42,9 @@ function View() {
     case 'search': return html`<${SearchView} term=${second || ''} />`;
     case 'discover': return html`<${DiscoverView} />`;
     case 'devices': return second ? html`<${DeviceView} key=${second} id=${second} />` : html`<${DevicesView} />`;
+    case 'radio': return html`<${RadioView} />`;
+    case 'podcasts': return html`<${PodcastsView} />`;
+    case 'podcast': return html`<${PodcastView} key=${second} id=${second} />`;
     case 'mixes': return html`<${MixesView} />`;
     case 'mix': return html`<${MixView} key=${second} id=${second} />`;
     case 'stats': return html`<${StatsView} key=${query.range || ''} />`;
@@ -74,9 +81,10 @@ function useShortcuts() {
         case 'r': cycleRepeat(); break;
         case 'q': ui.set({ queueOpen: !ui.get().queueOpen }); break;
         case 'n': go('/now'); break;
-        case 'l': {
-          const track = current(s);
-          if (track) setFavorite([track], !track.favorite).catch(() => {});
+        case 'l': { // favorite what is playing: a song, or a radio station
+          const item = current(s);
+          if (item && isTrack(item)) setFavorite([item], !item.favorite).catch(() => {});
+          else if (item && isStation(item)) setStationFavorite(item, !item.favorite).catch(() => {});
           break;
         }
         default: return;
@@ -94,8 +102,9 @@ function useShortcuts() {
     if (!desktop?.setNowPlaying) return undefined;
     let last = '';
     const send = (s) => {
-      const track = current(s);
-      const info = { title: track?.title || '', artist: track?.artist || '', playing: Boolean(s.playing && track) };
+      const item = current(s);
+      const shown = item ? describe(item, s.liveTitle) : null; // a station shows what it is playing
+      const info = { title: shown?.title || '', artist: shown?.subtitle || '', playing: Boolean(s.playing && item) };
       const key = JSON.stringify(info);
       if (key === last) return; // the position changes four times a second; this only cares about the song and playing
       last = key;
@@ -142,15 +151,26 @@ function useRouteAnnouncer(view, path) {
 function App() {
   const { path } = useStore(route);
   const view = useRef();
-  const track = useStore(player, (s) => current(s));
+  const item = useStore(player, (s) => current(s));
+  const liveTitle = useStore(player, (s) => s.liveTitle);
   const playing = useStore(player, (s) => s.playing);
   const dialogOpen = useStore(modals, (s) => s.stack.length > 0);
   useShortcuts();
   useEffect(() => view.current?.scrollTo(0, 0), [path]);
   const pageName = useRouteAnnouncer(view, path);
   useEffect(() => {
-    document.title = track ? `${playing ? '▶ ' : ''}${track.title} · ${track.artist}` : 'Music Toolkit';
-  }, [track?.id, playing]);
+    const shown = item ? describe(item, liveTitle) : null;
+    document.title = shown ? `${playing ? '▶ ' : ''}${shown.title} · ${shown.subtitle}` : 'Music Toolkit';
+  }, [item?.id, item?.kind, liveTitle, playing]);
+
+  // A song, station or episode that cannot be played says so: the player only keeps the reason.
+  useEffect(() => {
+    let said = null;
+    return player.subscribe((s) => {
+      if (s.error && s.error !== said) toast(s.error, 'error', 9000);
+      said = s.error;
+    });
+  }, []);
 
   // While a dialog is open the rest of the app is inert: no focus, no clicks, and not read out behind the dialog.
   return html`<${Fragment}>

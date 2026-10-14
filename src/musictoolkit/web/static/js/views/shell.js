@@ -2,8 +2,10 @@
 import { api, fmt, html, useEffect, useLayoutEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Cover, IconButton } from '../components.js';
-import { current, cycleRepeat, next, player, previous, seek, setVolume, toggle, toggleMute, toggleShuffle } from '../player.js';
+import { current, cycleRepeat, next, player, previous, seek, seekBy, setSpeed, setVolume, SKIP_BACK, SKIP_FORWARD, toggle, toggleMute, toggleShuffle } from '../player.js';
+import { describe, isEpisode, isStation, isTrack, nextSpeed, pageOf, speedLabel } from '../items.js';
 import { QueueList } from './nowplaying.js';
+import { setStationFavorite } from '../radio.js';
 import { setFavorite, startRadio } from '../tracks.js';
 import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
@@ -37,6 +39,8 @@ export function Sidebar() {
     <div class="nav-group" role="group" aria-labelledby="nav-listen">
       <div class="nav-label" id="nav-listen">Listen</div>
       <${NavItem} to="/recent" icon="clock" label="Recently played" />
+      <${NavItem} to="/radio" icon="radio" label="Radio" />
+      <${NavItem} to="/podcasts" icon="mic" label="Podcasts" match=${(p) => starts('/podcasts')(p) || starts('/podcast')(p)} />
       <${NavItem} to="/discover" icon="compass" label="Discover" />
       <${NavItem} to="/stats" icon="chart" label="Stats" />
       <${NavItem} to="/history" icon="calendar" label="Listening history" match=${starts('/history')} />
@@ -113,6 +117,7 @@ function summarize(job) {
   if (job.kind === 'dedupe-restore') return `${r.moved || 0} restored${r.skipped ? ` · ${r.skipped} could not be restored` : ''}`;
   if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
   if (job.kind === 'radar') return `${r.new || 0} new ${r.new === 1 ? 'release' : 'releases'}${r.owned ? ` · ${r.owned} already in your library` : ''}${r.source ? ` · from ${r.source === 'listenbrainz' ? 'ListenBrainz' : 'MusicBrainz'}` : ''}`;
+  if (job.kind === 'podcasts') return `${r.new || 0} new ${r.new === 1 ? 'episode' : 'episodes'} · ${fmt.plural(r.checked || 0, 'podcast')} checked${r.errors ? ` · ${r.errors} could not be read` : ''}`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   if (job.kind === 'sync-preview') return `${r.to_copy || 0} to copy · ${r.unchanged || 0} already there${r.to_prune ? ` · ${r.to_prune} no longer chosen` : ''}`;
   if (job.kind === 'sync') return `${r.copied || 0} copied${r.pruned ? ` · ${r.pruned} removed` : ''}${r.errors_total ? ` · ${r.errors_total} failed` : ''}${r.aborted ? ` · stopped early` : ''}`;
@@ -165,6 +170,8 @@ function Seek({ track }) {
   const [dragging, setDragging] = useState(null);
   const shown = dragging ?? position;
   const pct = duration ? Math.min(100, (shown / duration) * 100) : 0;
+  // A station is live: there is no length and nothing to seek in.
+  if (track && isStation(track)) return html`<div class="seek live"><span class="live-badge">LIVE</span><span class="subtle">${fmt.time(position)} listened</span></div>`;
   return html`<div class="seek">
     <span class="time">${fmt.time(shown)}</span>
     <input class="slider" type="range" min="0" max=${duration || 0} step="0.1" value=${shown} disabled=${!track} aria-label="Seek"
@@ -175,41 +182,65 @@ function Seek({ track }) {
   </div>`;
 }
 
+/** A station is kept among the favorites with the heart; an episode has none; a song has its own. */
+function Heart({ item }) {
+  if (isStation(item)) {
+    return html`<button class="icon-btn heart ${item.favorite ? 'on' : ''}" aria-label=${item.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${Boolean(item.favorite)}
+      onClick=${() => setStationFavorite(item, !item.favorite).catch(notifyError)}><${Icon} name="heart" size=${18} fill=${Boolean(item.favorite)} /></button>`;
+  }
+  if (!isTrack(item)) return null;
+  return html`<button class="icon-btn heart ${item.favorite ? 'on' : ''}" aria-label=${item.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${item.favorite}
+    onClick=${() => setFavorite([item], !item.favorite).catch(notifyError)}><${Icon} name="heart" size=${18} fill=${item.favorite} /></button>`;
+}
+
+/** A button that skips through an episode by a few seconds. */
+function Skip({ seconds }) {
+  const back = seconds < 0;
+  const label = `${back ? 'Back' : 'Forward'} ${Math.abs(seconds)} seconds`;
+  return html`<button class="icon-btn skip" title=${label} aria-label=${label} onClick=${() => seekBy(seconds)}>
+    <${Icon} name=${back ? 'rewind' : 'fast-forward'} size=${18} /><span class="skip-n" aria-hidden="true">${Math.abs(seconds)}</span></button>`;
+}
+
 export function PlayerBar() {
   const s = useStore(player);
-  const track = current(s);
+  const track = current(s); // what is playing: a song, a station or an episode
   const { queueOpen } = useStore(ui);
   const volumeIcon = s.muted || s.volume === 0 ? 'volume-mute' : s.volume < 0.4 ? 'volume-low' : 'volume';
+  const shown = track ? describe(track, s.liveTitle) : null;
+  const song = !track || isTrack(track);
+  const episode = Boolean(track) && isEpisode(track);
 
   return html`<section class="playerbar" aria-label="Player">
     <div class="pb-track">
       ${track
-        ? html`<a class="pb-art" href=${href('/now')} aria-label="Open Now Playing"><${Cover} trackId=${track.id} name=${track.album} size=56 /></a>
+        ? html`<a class="pb-art" href=${href('/now')} aria-label="Open Now Playing"><${Cover} item=${track} name=${shown.name} size=56 /></a>
             <div class="pb-text">
-              <a class="t1" href=${href('/now')} title=${track.title}>${track.title}</a>
-              <a class="t2" href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a>
+              <a class="t1" href=${href(song ? '/now' : pageOf(track))} title=${shown.title}>${shown.title}</a>
+              ${song
+                ? html`<a class="t2" href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a>`
+                : html`<a class="t2" href=${href(pageOf(track))}>${shown.subtitle}</a>`}
             </div>
-            <button class="icon-btn heart ${track.favorite ? 'on' : ''}" aria-label=${track.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${track.favorite}
-              onClick=${() => setFavorite([track], !track.favorite).catch(notifyError)}><${Icon} name="heart" size=${18} fill=${track.favorite} /></button>`
+            <${Heart} item=${track} />`
         : html`<div class="pb-idle subtle">Nothing playing</div>`}
     </div>
 
     <div class="pb-center">
       <div class="controls">
-        <${IconButton} icon="shuffle" title=${s.shuffle ? 'Shuffle: on' : 'Shuffle: off'} active=${s.shuffle} onClick=${toggleShuffle} />
+        ${episode ? html`<${Skip} seconds=${-SKIP_BACK} />` : track && isStation(track) ? html`<span class="ctl-gap"></span>` : html`<${IconButton} icon="shuffle" title=${s.shuffle ? 'Shuffle: on' : 'Shuffle: off'} active=${s.shuffle} onClick=${toggleShuffle} />`}
         <${IconButton} icon="prev" title="Previous" size=${20} onClick=${previous} />
         <button class="play-btn" aria-label=${s.playing ? 'Pause' : 'Play'} disabled=${!track} onClick=${toggle}>
-          ${s.loading && s.playing ? html`<span class="spinner small"></span>` : html`<${Icon} name=${s.playing ? 'pause' : 'play'} size=${22} />`}
+          ${s.loading && (s.playing || (track && isStation(track))) ? html`<span class="spinner small"></span>` : html`<${Icon} name=${s.playing ? 'pause' : 'play'} size=${22} />`}
         </button>
         <${IconButton} icon="next" title="Next" size=${20} onClick=${next} />
-        <${IconButton} icon=${s.repeat === 'one' ? 'repeat-one' : 'repeat'} title=${`Repeat: ${s.repeat}`} active=${s.repeat !== 'off'} onClick=${cycleRepeat} />
+        ${episode ? html`<${Skip} seconds=${SKIP_FORWARD} />` : track && isStation(track) ? html`<span class="ctl-gap"></span>` : html`<${IconButton} icon=${s.repeat === 'one' ? 'repeat-one' : 'repeat'} title=${`Repeat: ${s.repeat}`} active=${s.repeat !== 'off'} onClick=${cycleRepeat} />`}
       </div>
       <${Seek} track=${track} />
     </div>
 
     <div class="pb-right">
-      ${track && html`<${IconButton} icon="radio" title="Start radio from this song" onClick=${() => startRadio(track)} />`}
-      <${IconButton} icon="mic" title="Now Playing and lyrics" onClick=${() => go('/now')} />
+      ${track && isTrack(track) && html`<${IconButton} icon="radio" title="Start radio from this song" onClick=${() => startRadio(track)} />`}
+      ${episode && html`<button class="speed-btn" title="Playback speed" aria-label=${`Playback speed ${speedLabel(s.speed)}. Press to change it`} onClick=${() => setSpeed(nextSpeed(s.speed))}>${speedLabel(s.speed)}</button>`}
+      <${IconButton} icon="mic" title=${song ? 'Now Playing and lyrics' : 'Now Playing'} onClick=${() => go('/now')} />
       <${IconButton} icon="queue" title="Queue" active=${queueOpen} onClick=${() => ui.set({ queueOpen: !queueOpen })} />
       <${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />
       <input class="slider volume" type="range" min="0" max="1" step="0.01" value=${s.muted ? 0 : s.volume} aria-label="Volume"

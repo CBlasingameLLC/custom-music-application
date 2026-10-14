@@ -3,8 +3,9 @@ import { api, fmt, html, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
-import { bumpLibrary, desktop, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
+import { checkForNewEpisodes } from '../podcasts.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -68,6 +69,19 @@ function OnlineCard({ settings }) {
     <p class="note"><${Icon} name="info" size=${14} /><span>Sends the artist, title, album and length of the song that is showing its lyrics. Lyrics in the file or in a <code>.lrc</code> file beside it always come first. You can also look up one song at a time from its lyrics page, with this switched off.</span></p>
     <${Switch} checked=${settings.app.release_radar} onChange=${(v) => save({ app: { release_radar: v } })}>Look for new releases by artists I play, about once a day<//>
     <p class="note"><${Icon} name="info" size=${14} /><span>With a ListenBrainz username (Accounts above) it asks ListenBrainz, which knows your listens. Otherwise it asks MusicBrainz about the artists you play most, one request each, and needs a contact there. The results appear on Discover, New releases, where you can also check by hand with this switched off. Nothing is downloaded.</span></p>
+  <//>`;
+}
+
+function ListenCard({ settings }) {
+  return html`<${Card} icon="radio" title="Radio and podcasts" hint="Radio stations come from the Radio Browser directory and podcasts from Apple's podcast directory. Each is asked only when you look for something there, and sends only your search words.">
+    <${Switch} checked=${settings.app.podcast_refresh} onChange=${(v) => save({ app: { podcast_refresh: v } })}>Check my podcasts for new episodes every few hours while the app is open<//>
+    <p class="note"><${Icon} name="info" size=${14} /><span>It asks the feed of each show you follow (not Apple) whether anything has come out, at most about every six hours, and only while you follow a show. You can always check by hand on the Podcasts screen with this switched off.</span></p>
+    <div class="row-actions">
+      <${Button} icon="refresh" onClick=${() => checkForNewEpisodes()}>Check for new episodes now<//>
+      <${Button} icon="mic" onClick=${() => go('/podcasts')}>Open Podcasts<//>
+      <${Button} icon="radio" onClick=${() => go('/radio')}>Open Radio<//>
+    </div>
+    <p class="note"><${Icon} name="info" size=${14} /><span>Listening to a station or a show is not part of your music history, statistics or mixes. Only where you stopped in an episode, and your favorite stations, are kept (inside the app, never in your music folders).</span></p>
   <//>`;
 }
 
@@ -393,6 +407,7 @@ export function SettingsView() {
       <${LibraryCard} settings=${settings} about=${about} />
       <${AccountsCard} settings=${settings} />
       <${OnlineCard} settings=${settings} />
+      <${ListenCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}

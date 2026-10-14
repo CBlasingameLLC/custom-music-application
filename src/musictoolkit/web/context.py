@@ -25,6 +25,9 @@ class AppContext:
     previews: dict[str, Any] = field(default_factory=dict)  # the last "show me first" result per tool, kept in memory
     scrobbler: Any = None  # sends plays to ListenBrainz in the background (set up by create_app)
     radar: Any = None  # looks for new releases about once a day when the person turned that on (set up by create_app)
+    radio: Any = None  # the internet radio streams that are open and what each says is playing (set up by create_app)
+    podcast_slots: Any = None  # how many podcast episodes are being passed on at once (set up by create_app)
+    podcasts: Any = None  # looks for new episodes every few hours when the person left that on (set up by create_app)
     stats_cache: dict[Any, Any] = field(default_factory=dict)  # worked-out statistics, kept while the listening history is unchanged
     mixes_cache: dict[Any, Any] = field(default_factory=dict)  # the shelf of mixes, kept while the library and history are unchanged
 

@@ -10,7 +10,12 @@
 //
 // The queue is `items` (what was queued) plus `order` (indices into items, in play order) and `pos` (where we are in
 // `order`). Shuffle only rewrites `order`.
+//
+// An item is a song (the default), a radio station (`kind: 'station'`: live, so nothing to seek in, no gapless, no play log) or a
+// podcast episode (`kind: 'episode'`: it resumes where listening stopped, and where it has got to is sent to the app as it plays).
+// See items.js. Only songs are joined to each other ahead of time and counted in the listening history.
 import { api, createStore } from './lib.js';
+import { SPEEDS, describe, isEpisode, isStation, isTrack, itemKey, kindOf, sameItem, streamUrl, artSrc } from './items.js';
 import { GAPLESS_BLEND, MAX_CROSSFADE, blendSeconds, equalPowerCurves, itemAt, planNext, shuffledOrder } from './transitions.js';
 
 const STORAGE_KEY = 'mtk.player.v1';
@@ -54,6 +59,8 @@ export const player = createStore({
   gapless: saved.gapless ?? true, // start the next song as the last one ends, with no silence between
   sleepAt: null,
   source: '',
+  speed: SPEEDS.includes(saved.speed) ? saved.speed : 1, // how fast podcasts play
+  liveTitle: '', // what the station playing says is on (empty when it says nothing)
 });
 
 export const current = (state = player.get()) => state.items[state.order[state.pos]] || null;
@@ -68,7 +75,6 @@ const makeDeck = (name) => {
 const decks = [makeDeck('a'), makeDeck('b')];
 let active = decks[0]; // the deck playing (or paused on) the current song
 const spare = () => (active === decks[0] ? decks[1] : decks[0]);
-const streamUrl = (track) => `/api/tracks/${track.id}/stream`;
 const loaded = (deck) => Boolean(deck.track) && !deck.failed && deck.el.readyState >= 3 && Number.isFinite(deck.el.duration);
 
 let graph = null;
@@ -89,15 +95,18 @@ export const onPlayLogged = (fn) => {
 export const deckState = () => ({
   active: active.name,
   blending: Boolean(transition),
+  rejoining: rejoinTimer !== null, // a dropped live stream is waiting to be joined again
   ...counts,
   decks: decks.map((d) => ({
     name: d.name,
     track: d.track ? d.track.id : null,
+    src: d.el.getAttribute('src'), // the address it was told to load (null when empty)
     paused: d.el.paused,
     ended: d.el.ended,
     time: d.el.currentTime,
     duration: d.el.duration,
     ready: d.el.readyState,
+    rate: d.el.playbackRate,
     fade: d.nodes ? d.nodes.fade.gain.value : null,
     levelling: d.nodes ? d.nodes.rg.gain.value : null,
   })),
@@ -169,10 +178,10 @@ function applyDeckGain(deck) {
 /** Work out the loudness correction (ReplayGain) of the song on a deck, and apply it once the graph exists. */
 async function syncGain(deck, force = false) {
   const track = deck.track;
-  if (!track || (!force && deck.gainFor === track.id)) return;
-  deck.gainFor = track.id;
+  if (!track || (!force && deck.gainFor === itemKey(track))) return;
+  deck.gainFor = itemKey(track);
   let gain = 1;
-  if (player.get().normalize) {
+  if (isTrack(track) && player.get().normalize) { // radio and podcasts carry no loudness tags: they play as they come
     try {
       const info = await api(`/tracks/${track.id}/info`);
       const db = info.replaygain_track_db ?? info.replaygain_album_db;
@@ -181,19 +190,27 @@ async function syncGain(deck, force = false) {
       /* no gain info is fine */
     }
   }
-  if (deck.track && deck.track.id === track.id) {
+  if (sameItem(deck.track, track)) {
     deck.gain = gain;
     applyDeckGain(deck);
   }
 }
 
-/** Put a song on a deck (it starts loading at once; it plays when told to). */
-function loadInto(deck, track) {
-  deck.track = track;
+const REWIND = 3; // seconds an episode starts before where listening stopped, to pick the thread up again
+const RESUME_AFTER = 10; // an episode heard less than this far in starts from the beginning
+let joins = 0; // how many times a live stream has been joined (each join is a new connection: see streamUrl)
+
+/** Put an item on a deck (it starts loading at once; it plays when told to). */
+function loadInto(deck, item) {
+  deck.track = item;
   deck.gain = null;
   deck.gainFor = null;
   deck.failed = false;
-  deck.el.src = streamUrl(track);
+  deck.el.src = streamUrl(item, ++joins);
+  if (isEpisode(item) && item.position > RESUME_AFTER) {
+    const at = item.position - REWIND;
+    deck.el.addEventListener('loadedmetadata', () => { if (sameItem(deck.track, item)) deck.el.currentTime = at; }, { once: true });
+  }
   syncGain(deck);
 }
 
@@ -228,10 +245,10 @@ function saveNow() {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        ids: s.items.map((t) => t.id),
+        ids: s.items.map((t) => (isTrack(t) ? t.id : null)), // only songs come back next time: a station is live and an episode remembers its own place
         order: s.order,
         pos: s.pos,
-        position: s.position,
+        position: isTrack(current(s)) ? s.position : 0,
         volume: s.volume,
         shuffle: s.shuffle,
         repeat: s.repeat,
@@ -239,6 +256,7 @@ function saveNow() {
         eq: s.eq,
         crossfade: s.crossfade,
         gapless: s.gapless,
+        speed: s.speed,
       }),
     );
   } catch {
@@ -255,7 +273,7 @@ window.addEventListener('pagehide', saveNow);
 export async function restoreQueue() {
   if (!saved.ids?.length) return;
   try {
-    const { items } = await api('/tracks/by-ids', { method: 'POST', body: { ids: saved.ids } });
+    const { items } = await api('/tracks/by-ids', { method: 'POST', body: { ids: saved.ids.filter((id) => id !== null) } });
     const byId = new Map(items.map((t) => [t.id, t]));
     // Tracks removed from disk since last time drop out; remap the saved play order around them.
     const newIndex = new Map();
@@ -296,39 +314,135 @@ async function play() {
   }
 }
 
-function startListen(track) {
-  listen = { id: track.id, startedAt: Date.now() / 1000, ms: 0, logged: false, announced: false, lastTime: 0, duration: track.duration };
+function startListen(item) {
+  // Only songs go into the listening history; an episode has its own record (the place where it stopped), a station has none.
+  listen = item && isTrack(item)
+    ? { id: item.id, startedAt: Date.now() / 1000, ms: 0, logged: false, announced: false, lastTime: 0, duration: item.duration }
+    : null;
+}
+
+// ---- what stations and podcasts need beyond a song
+
+const PROGRESS_EVERY = 10000; // ms between sending where an episode has got to
+const TITLE_EVERY = 15000; // ms between asking what a station is playing
+const MAX_RECONNECTS = 3; // times in a row a live stream that dropped is joined again
+const STEADY_AFTER = 20; // seconds of a stream playing without a break before a drop is a new trouble
+let progressSentAt = 0;
+let titleTimer = null;
+let rejoinTimer = null; // a live stream waiting to be joined again
+let reconnecting = { key: '', count: 0 };
+
+/** Tell the app where listening to an episode has got to: it keeps the place, and counts the episode as heard near the end. */
+function sendProgress(item, position, duration, { leaving = false } = {}) {
+  if (!isEpisode(item) || !Number.isFinite(position) || position < 0) return;
+  progressSentAt = Date.now();
+  const body = { position: Math.round(position * 10) / 10 };
+  if (Number.isFinite(duration) && duration > 0) body.duration = Math.round(duration * 10) / 10;
+  if (leaving) {
+    // The page is closing: a request that outlives it.
+    fetch(`/api/podcasts/episodes/${item.id}/progress`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true }).catch(() => {});
+    return;
+  }
+  updateItem('episode', item.id, { position: body.position });
+  api(`/podcasts/episodes/${item.id}/progress`, { method: 'POST', body })
+    .then((episode) => episode && updateItem('episode', item.id, { position: episode.position, played: episode.played }))
+    .catch(() => {});
+}
+
+/** About to move on from what is playing: keep where an episode got to, stop asking what a station is playing, and stop waiting to rejoin it. */
+function leave() {
+  const item = active.track;
+  if (isEpisode(item) && active.el.currentTime > 0) sendProgress(item, active.el.currentTime, active.el.duration);
+  clearInterval(titleTimer);
+  titleTimer = null;
+  clearTimeout(rejoinTimer);
+  rejoinTimer = null;
+}
+
+/** Ask now and then what the station is playing (the title its stream carries), for the player bar, the tray and the media keys' overlay. */
+function watchStation(item) {
+  clearInterval(titleTimer);
+  const ask = () =>
+    api(`/radio/stations/${item.id}/now`).then(
+      (now) => {
+        const title = now?.title || '';
+        if (!sameItem(current(), item) || title === player.get().liveTitle) return;
+        player.set({ liveTitle: title });
+        updateMediaSession(item, title);
+      },
+      () => {},
+    );
+  titleTimer = setInterval(ask, TITLE_EVERY);
+  setTimeout(ask, 3000);
+}
+
+/**
+ * A live stream that has dropped (or a station that stopped answering): join it again, a few times, a little later each time. The browser
+ * says so in one of two ways, by ending the stream (after a pause event) or by failing it (with no pause event at all), so a stream that has
+ * dropped is marked as not playing here rather than waited for.
+ */
+function rejoin(item) {
+  if (reconnecting.key !== itemKey(item)) reconnecting = { key: itemKey(item), count: 0 };
+  clearTimeout(rejoinTimer);
+  rejoinTimer = null;
+  if (reconnecting.count >= MAX_RECONNECTS) {
+    player.set({ playing: false, loading: false, error: `"${item.name}" stopped playing, and could not be joined again.` });
+    return;
+  }
+  reconnecting.count += 1;
+  player.set({ playing: false, loading: true });
+  rejoinTimer = setTimeout(() => {
+    rejoinTimer = null;
+    if (sameItem(current(), item)) loadCurrent(true, { rejoining: true }); // anything else the person has done since has cleared this timer (see leave)
+  }, 1500 * reconnecting.count);
 }
 
 /** Load the current queue position onto the playing deck (or, if the song is already waiting on the spare, switch to it). */
-async function loadCurrent(autoplay) {
+async function loadCurrent(autoplay, { rejoining = false } = {}) {
   endTransition();
-  const track = current();
-  if (!track) {
+  leave();
+  const item = current();
+  if (!item) {
     for (const deck of decks) resetDeck(deck);
-    player.set({ playing: false, loading: false, position: 0, duration: 0 });
+    startListen(null);
+    player.set({ playing: false, loading: false, position: 0, duration: 0, liveTitle: '' });
+    applySpeed();
     return;
   }
-  startListen(track);
-  player.set({ loading: true, error: null, position: 0, duration: track.duration || 0 });
+  startListen(item);
+  player.set({ loading: true, error: null, position: 0, duration: item.duration || 0, ...(rejoining ? {} : { liveTitle: '' }) });
   const waiting = spare();
-  if (waiting.track && waiting.track.id === track.id && loaded(waiting)) {
+  if (waiting.track && sameItem(waiting.track, item) && loaded(waiting)) {
     // Loaded behind the scenes already: switching to it starts the song at once.
     resetDeck(active);
     active = waiting;
     setFade(waiting, 1);
     player.set({ loading: false, duration: waiting.el.duration });
   } else {
-    loadInto(active, track);
+    loadInto(active, item);
   }
-  updateMediaSession(track);
+  applySpeed();
+  updateMediaSession(item);
+  if (isStation(item)) {
+    watchStation(item);
+    if (autoplay && !rejoining) api(`/radio/stations/${item.id}/played`, { method: 'POST' }).catch(() => {});
+  }
   if (autoplay) await play();
 }
 
 function onFailure(message) {
-  const track = current();
+  const item = current();
   consecutiveErrors += 1;
-  player.set({ loading: false, playing: false, error: `Can't play ${track ? `"${track.title}"` : 'this file'}: ${message}` });
+  const what = item ? `"${isStation(item) ? item.name : item.title}"` : 'this file';
+  if (isStation(item)) {
+    // The media element can only say "unsupported"; the app can say why (a dead address, HLS, the station's own refusal).
+    player.set({ loading: false, playing: false });
+    api(`/radio/stations/${item.id}/check`, { method: 'POST' })
+      .then((check) => (check.ok ? message : check.message), () => message)
+      .then((reason) => sameItem(current(), item) && player.set({ error: `Can't play ${what}: ${reason}` }));
+  } else {
+    player.set({ loading: false, playing: false, error: `Can't play ${what}: ${message}` });
+  }
   const { order, pos } = player.get();
   if (consecutiveErrors < 5 && pos + 1 < order.length) setTimeout(() => advance(false), 700);
 }
@@ -340,16 +454,19 @@ const failureText = (error) =>
 
 // -- joining one song to the next ----------------------------------------
 
-/** Make sure the spare deck holds the song that follows, so it can start without waiting to load. */
+/** Make sure the spare deck holds the song that follows, so it can start without waiting to load. (Only a song joins a song: a station
+ *  is live and would only be listened to later, and a podcast is not joined to the music before it.) */
 function maybePreload(s = player.get()) {
   if (transition) return;
   const deck = spare();
-  const upcoming = s.repeat !== 'one' && (s.gapless || s.crossfade > 0) ? itemAt(s, planNext(s, { preview: true })) : null;
+  const now = current(s);
+  const ahead = now && isTrack(now) && s.repeat !== 'one' && (s.gapless || s.crossfade > 0) ? itemAt(s, planNext(s, { preview: true })) : null;
+  const upcoming = ahead && isTrack(ahead) ? ahead : null;
   if (!upcoming) {
     if (deck.track) resetDeck(deck);
     return;
   }
-  if (!deck.track || deck.track.id !== upcoming.id) loadInto(deck, upcoming);
+  if (!deck.track || !sameItem(deck.track, upcoming)) loadInto(deck, upcoming);
 }
 
 /** Begin blending the playing song into the next one (already loaded on the spare). False if that is not possible. */
@@ -359,7 +476,7 @@ function startTransition(blend) {
   const upcoming = itemAt(s, plan);
   const to = spare();
   const from = active;
-  if (!upcoming || !to.track || to.track.id !== upcoming.id || !loaded(to)) return false;
+  if (!upcoming || !to.track || !sameItem(to.track, upcoming) || !loaded(to)) return false;
   const start = graph.ctx.currentTime + 0.005;
   from.nodes.fade.gain.cancelScheduledValues(0);
   from.nodes.fade.gain.value = 1;
@@ -420,7 +537,7 @@ function tick() {
   const el = active.el;
   if (el.paused || !graph) return; // the 'playing' event starts the clock again
   if (transition && graph.ctx.currentTime >= transition.endsAt) endTransition();
-  let wait = 150;
+  let wait = isTrack(current()) ? 150 : 1000; // a station or an episode is never joined to what follows: nothing to watch for closely
   if (!transition) {
     const s = player.get();
     if (el.currentTime >= 2) maybePreload(s);
@@ -514,20 +631,30 @@ export function clearQueue() {
 // -- transport ----------------------------------------------------------
 
 export function toggle() {
-  const s = player.get();
-  if (!current(s)) return;
-  if (active.el.paused) return play();
-  pause();
+  const item = current();
+  if (!item) return;
+  // A live stream is joined afresh whenever it is started: what was paused (or dropped) is only old sound, and an element that failed
+  // does not say that it is not playing. Anything else carries on from where it was.
+  if (isStation(item)) return player.get().playing ? pause() : loadCurrent(true, { rejoining: true });
+  return active.el.paused ? play() : pause();
 }
 
 export function pause() {
   endTransition();
+  clearTimeout(rejoinTimer); // paused while a dropped stream was about to be joined again: leave it be
+  rejoinTimer = null;
   active.el.pause();
+  if (isStation(current())) {
+    // Live sound that was paused would only be old sound later: let go of the stream, and join it afresh on Play.
+    active.el.removeAttribute('src');
+    active.el.load();
+    player.set({ playing: false, loading: false });
+  }
 }
 
 function advance(fromEnd) {
   const s = player.get();
-  if (s.repeat === 'one' && fromEnd) {
+  if (s.repeat === 'one' && fromEnd && !isStation(current(s))) {
     active.el.currentTime = 0;
     startListen(current(s));
     return play();
@@ -551,7 +678,8 @@ export function next() {
 
 export function previous() {
   const s = player.get();
-  if (active.el.currentTime > 3) {
+  const song = isTrack(current(s)); // Previous restarts a song that has played a while; a station or an episode goes to the one before, or stays
+  if (song && active.el.currentTime > 3) {
     seek(0);
     return;
   }
@@ -563,10 +691,11 @@ export function previous() {
     player.set({ pos: s.order.length - 1 });
     return loadCurrent(true);
   }
-  seek(0);
+  if (song) seek(0);
 }
 
 export function seek(seconds) {
+  if (isStation(current())) return; // live: there is nothing behind and nothing ahead
   endTransition();
   const el = active.el;
   const duration = el.duration || player.get().duration || 0;
@@ -575,6 +704,24 @@ export function seek(seconds) {
 }
 
 export const seekBy = (delta) => seek(active.el.currentTime + delta);
+
+/** How a podcast episode is skipped through: back a little, forward a little more (skipping an advertisement is the usual reason). */
+export const SKIP_BACK = 15;
+export const SKIP_FORWARD = 30;
+
+/** How fast podcast episodes play (songs and stations always play at their own speed). */
+export function setSpeed(speed) {
+  player.set({ speed: SPEEDS.includes(speed) ? speed : 1 });
+  applySpeed();
+}
+
+function applySpeed() {
+  const rate = isEpisode(current()) ? player.get().speed : 1;
+  for (const deck of decks) {
+    deck.el.defaultPlaybackRate = rate; // loading a new address puts the rate back to this
+    deck.el.playbackRate = rate;
+  }
+}
 
 export function setVolume(volume) {
   player.set({ volume: Math.min(Math.max(volume, 0), 1), muted: false });
@@ -623,10 +770,12 @@ export function setEq(patch) {
   applyEq();
 }
 
-export function updateTrack(trackId, patch) {
-  // Keep the queue's copies of a track in step with edits (rating, favorite, ...).
-  player.set((s) => ({ ...s, items: s.items.map((t) => (t.id === trackId ? { ...t, ...patch } : t)) }));
+/** Keep the queue's copies of a song, station or episode in step with changes made elsewhere (rating, favorite, where listening stopped...). */
+export function updateItem(kind, id, patch) {
+  player.set((s) => ({ ...s, items: s.items.map((t) => (kindOf(t) === kind && t.id === id ? { ...t, ...patch } : t)) }));
 }
+
+export const updateTrack = (trackId, patch) => updateItem('track', trackId, patch);
 
 // ------------------------------------------------------------ media element events
 
@@ -658,6 +807,8 @@ for (const deck of decks) {
       player.set({ playing: false });
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
       stopTick();
+      const item = current();
+      if (isEpisode(item) && !el.ended) sendProgress(item, el.currentTime, el.duration); // paused (or the sleep timer): keep the place
     }),
   );
   el.addEventListener('waiting', mine(() => player.set({ loading: true })));
@@ -669,14 +820,22 @@ for (const deck of decks) {
     }),
   );
   el.addEventListener('error', () => {
-    if (active === deck) onFailure(failureText(el.error));
-    else deck.failed = true; // a song that will not load ahead of time is dealt with when its turn comes
+    if (active !== deck) {
+      deck.failed = true; // a song that will not load ahead of time is dealt with when its turn comes
+      return;
+    }
+    const item = current();
+    if (isStation(item) && el.currentTime > 0) rejoin(item); // it was playing and has dropped
+    else onFailure(failureText(el.error));
   });
   el.addEventListener(
     'ended',
     mine(() => {
       counts.hardEnds += 1;
-      advance(true);
+      const item = current();
+      if (isStation(item)) return rejoin(item); // a live stream does not end: it has dropped
+      if (isEpisode(item)) sendProgress(item, el.duration, el.duration); // to the end: heard
+      return advance(true);
     }),
   );
   el.addEventListener(
@@ -684,6 +843,10 @@ for (const deck of decks) {
     mine(() => {
       const time = el.currentTime;
       player.set({ position: time });
+
+      const item = current();
+      if (isEpisode(item) && !el.paused && Date.now() - progressSentAt >= PROGRESS_EVERY) sendProgress(item, time, el.duration);
+      if (isStation(item) && time > STEADY_AFTER) reconnecting.count = 0; // it has been playing steadily: the next drop is a new trouble
 
       if (listen && listen.id === current()?.id) {
         const delta = time - listen.lastTime;
@@ -717,19 +880,27 @@ for (const deck of decks) {
   );
 }
 
+// The page is closing: an episode keeps its place with a request that outlives the page.
+window.addEventListener('pagehide', () => {
+  const item = active.track;
+  if (isEpisode(item) && active.el.currentTime > 0) sendProgress(item, active.el.currentTime, active.el.duration, { leaving: true });
+});
+
 export function setSleepTimer(minutes) {
   player.set({ sleepAt: minutes ? Date.now() + minutes * 60000 : null });
 }
 
 // ------------------------------------------------------------ OS media controls
 
-function updateMediaSession(track) {
-  if (!track || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+function updateMediaSession(item, liveTitle = '') {
+  if (!item || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  const shown = describe(item, liveTitle);
+  const picture = artSrc(item, 512);
   navigator.mediaSession.metadata = new MediaMetadata({
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    artwork: [{ src: `/api/art/track/${track.id}?size=512`, sizes: '512x512', type: 'image/jpeg' }],
+    title: shown.title,
+    artist: shown.subtitle,
+    album: isTrack(item) ? item.album : '',
+    artwork: picture ? [{ src: picture, sizes: '512x512', type: 'image/jpeg' }] : [],
   });
 }
 
@@ -739,8 +910,8 @@ if ('mediaSession' in navigator) {
     pause: () => pause(),
     previoustrack: () => previous(),
     nexttrack: () => next(),
-    seekbackward: () => seekBy(-10),
-    seekforward: () => seekBy(10),
+    seekbackward: () => seekBy(isEpisode(current()) ? -SKIP_BACK : -10),
+    seekforward: () => seekBy(isEpisode(current()) ? SKIP_FORWARD : 10),
     seekto: (d) => seek(d.seekTime),
     stop: () => pause(),
   };

@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.6.0)
+## What it does (v0.7.0)
 
 | Area | Features |
 |---|---|
@@ -38,6 +38,8 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Mixes** | A "Made for you" shelf on Home, new every day: On repeat, Rediscover, On this day, New in your library, Never played, Your favorites, decades and genres, as many as have enough songs. Open one to play it, shuffle it or save it as a playlist. **Start radio** (a song's menu, or the player bar) queues songs that go with it |
 | **History** | Every listen is logged locally, with top-artist stats. **Import your Spotify history** (the extended streaming history ZIP) to start with years of data, and optionally send it to ListenBrainz |
 | **Discover** | **New releases** by artists you play (the release radar: albums, EPs and singles from the last two months or announced for the next six weeks, from ListenBrainz or MusicBrainz), and new-music suggestions from ListenBrainz / Last.fm, minus what you own. A wishlist, plus links to listen or buy. It never downloads music |
+| **Radio** | Live internet radio through the app: your favorite stations, recently played ones, **Browse** the free Radio Browser directory (search by name, kind of music or country; sort by listeners, votes, name or sound quality) and **Add by address** (a stream, or the playlist file a station publishes). The song a station says is on shows in the player bar, the window title, the tray and the media-key overlay. A stream that drops is joined again; a station that cannot be played says why. Nothing is recorded or downloaded. See below |
+| **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
@@ -97,6 +99,36 @@ What is different on a phone:
 
 A small helper program (`mtk-mtp.exe`, installed next to the app) does the talking to Windows Portable Devices.
 
+### Radio and podcasts (Radio and Podcasts in the sidebar)
+
+Both play from the internet, **through the app**. The page may only talk to its own backend (see Security model), and the equalizer and the
+crossfade need the sound to come from there too, so the app fetches a station or an episode and hands it on. It only ever fetches addresses it
+has kept itself (a station you added, a show you followed), never an address the page names.
+
+- **What is sent, and when.** Nothing until you look. The station directory (radio-browser.info) is asked when you open *Browse*, Apple's podcast
+  directory when you search, and a station, feed or episode host when you add, play or check it. Directories see the words you type; every host sees
+  an ordinary request from your computer with the app's name as its User-Agent. Playing a station from *Browse* also tells Radio Browser that one
+  more person listened (it ranks stations by that, and asks apps to say so). No account, no identifier, nothing else.
+- **What is kept.** Your stations, the shows you follow and their episodes (title, date, length, where you stopped) are in the library database;
+  pictures are re-drawn small and cached in `cache/radio` and `cache/podcasts`. Nothing is recorded, saved as a file or downloaded, and listening to
+  radio or podcasts is never added to your music history, statistics, mixes or Year in Music.
+- **Stations.** *Favorites* (the heart), *Recent*, *Browse*, and *Add by address*, which tries the address first: one that does not play is not kept,
+  and what the stream says about itself fills in the name, kind of music and bit rate. A playlist file (`.pls`, `.m3u`, `.asx`) is followed to the
+  stream inside it. The title a station sends is taken out of the audio and shown beside the station's name. A live stream cannot be sought or
+  paused for later: *Pause* lets go of it and *Play* joins it again, live. A stream that drops is joined again up to three times, a little later each
+  time, and then the player says so. HLS streams (`.m3u8`) cannot be played by a browser engine and are refused with a message, and a few stations
+  only play to their own players.
+- **Podcasts.** *Follow* reads the feed first, so an address that is not a podcast is not followed and the message says why. The latest three episodes of
+  a show you have just followed count as new (its back catalogue does not), and so does everything that comes out afterwards, until you have heard it;
+  an episode you have started stays in *New episodes* too. Feeds are asked with the ETag and Last-Modified of the last answer, so an unchanged feed costs
+  almost nothing. Seeking works even with hosts that ignore range requests. An episode is *heard* when it is within 30 seconds of the end (a tenth of
+  its length for a short one); *Mark as heard* and *Mark all as heard* do it by hand. The place in an episode is kept every ten seconds, when you pause
+  or move on, and when you close the window.
+- **Safety.** An address that came from a directory, a feed or a pasted link is connected to only if it leads to the public internet: addresses on this
+  computer or your home network, and redirects that end up there, are refused, and each connection goes to the address that was checked (so a name
+  that changes its answer cannot slip past). A station on your own network is therefore not possible. Feeds are read with a hardened XML reader (no
+  entities, no external files), everything fetched has size and time limits, and at most four streams are open at once.
+
 ### Online lookups (Settings, Online lookups)
 
 Two features talk to a service on their own account, so both are **off until you turn them on**, and both also work
@@ -128,7 +160,7 @@ token: they are kept and retried if you are offline, and a rejected token is rep
 | `←` `→` | Seek 5 s | `S` / `R` | Shuffle / repeat |
 | `Shift` + `←` `→` | Previous / next | `Q` | Queue |
 | `Shift` + `↑` `↓` | Volume | `N` | Now playing |
-| `/` | Search | `L` | Favorite the current song |
+| `/` | Search | `L` | Favorite the current song (or station) |
 
 In a table of songs, Tab reaches the table once (its column headers are the next stops, `Enter` sorts):
 
@@ -188,7 +220,7 @@ defaults to a dry run; pass `--apply` to execute.
 
 - `config.toml`: settings (edited from the app's Settings page)
 - `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
-- `cache/art/`: cached cover thumbnails (safe to delete)
+- `cache/art/`, `cache/radio/`, `cache/podcasts/`: cached pictures (safe to delete)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
 
 ## Security model
@@ -216,8 +248,8 @@ in `src/musictoolkit/web/routers/`.
 
 ```bash
 pytest                       # unit + API tests (~1 min); browser tests skip if Playwright is absent
-pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts, and the accessibility checks (axe-core, keyboard)
-python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates
+pytest tests/e2e             # the UI in real Chromium: playback, queue, tools, shortcuts, radio and podcasts (against fake stations, feeds and directories on this computer), and the accessibility checks (axe-core, keyboard)
+python scripts/smoke_frozen.py dist/mtk-backend.exe tests/fixtures   # the frozen backend: first run, scan, organize, duplicates, a fake station and feed
 python scripts/perf_synthetic.py                                    # time every screen on 100,000 invented songs and 300,000 plays
 cd desktop && npm test       # the desktop shell's logic: updates, tray menu, close button, window position, Open with arguments
 ```
