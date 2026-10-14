@@ -4,12 +4,13 @@ import { Icon } from '../icons.js';
 import { Button, Cover, Empty, IconButton, TabPanel, Tabs } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
 import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
+import { describe, isEpisode, isStation, isTrack, itemKey } from '../items.js';
 import { enc, go, href, loadPlaylists, notifyError, toast } from '../state.js';
 
 // ------------------------------------------------------------ queue
 
 export function QueueList() {
-  const { items, order, pos, playing, source } = useStore(player);
+  const { items, order, pos, playing, source, liveTitle } = useStore(player);
   const dragFrom = useRef(null);
   const [dropAt, setDropAt] = useState(null);
   const currentRow = useRef();
@@ -35,21 +36,26 @@ export function QueueList() {
     return html`<${Empty} icon="queue" title="The queue is empty">Play something, or add songs with “Add to queue”.<//>`;
   }
 
+  // Only songs can be saved as a playlist: stations and episodes are left out.
+  const songs = order.map((i) => items[i]).filter(isTrack);
+  const noun = songs.length === order.length ? 'song' : 'item';
+
   async function saveAsPlaylist() {
     const name = await promptText({ title: 'Save queue as playlist', label: 'Name', value: source ? source.replace(/^[^:]+: /, '') : '', confirm: 'Save' });
     if (!name) return;
     try {
-      const playlist = await api('/playlists', { method: 'POST', body: { name, track_ids: order.map((i) => items[i].id) } });
-      toast(`Saved ${fmt.plural(order.length, 'song')} as "${playlist.name}"`, 'success');
+      const playlist = await api('/playlists', { method: 'POST', body: { name, track_ids: songs.map((t) => t.id) } });
+      toast(`Saved ${fmt.plural(songs.length, 'song')} as "${playlist.name}"`, 'success');
       loadPlaylists();
       go(`/playlist/${playlist.id}`);
     } catch (error) { notifyError(error); }
   }
 
   const row = (orderIndex) => {
-    const track = items[order[orderIndex]];
+    const track = items[order[orderIndex]]; // a song, a station or an episode
+    const shown = describe(track, orderIndex === pos ? liveTitle : '');
     const isCurrent = orderIndex === pos;
-    return html`<div class="qrow ${isCurrent ? 'current' : ''} ${orderIndex < pos ? 'played' : ''} ${dropAt === orderIndex ? 'drop-before' : ''}" key=${orderIndex + ':' + track.id}
+    return html`<div class="qrow ${isCurrent ? 'current' : ''} ${orderIndex < pos ? 'played' : ''} ${dropAt === orderIndex ? 'drop-before' : ''}" key=${orderIndex + ':' + itemKey(track)}
       ref=${isCurrent ? currentRow : null} draggable="true" onKeyDown=${(e) => moveWithKeys(e, orderIndex)}
       onDragStart=${(e) => { dragFrom.current = orderIndex; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(orderIndex)); }}
       onDragOver=${(e) => { e.preventDefault(); setDropAt(orderIndex); }}
@@ -57,12 +63,12 @@ export function QueueList() {
       onDrop=${(e) => { e.preventDefault(); const from = dragFrom.current; dragFrom.current = null; setDropAt(null); if (from !== null) moveInQueue(from, orderIndex); }}
       onDblClick=${() => jumpTo(orderIndex)}>
       <span class="qgrip"><${Icon} name="grip" size=${14} /></span>
-      <button class="qplay" aria-label="Play ${track.title}" onClick=${() => jumpTo(orderIndex)}>
-        <${Cover} trackId=${track.id} name=${track.album} size=40 />
+      <button class="qplay" aria-label="Play ${shown.title}" onClick=${() => jumpTo(orderIndex)}>
+        <${Cover} item=${track} name=${shown.name} size=40 />
         <span class="qplay-overlay">${isCurrent && playing ? html`<span class="eq-bars"><i></i><i></i><i></i></span>` : html`<${Icon} name="play" size=${15} />`}</span>
       </button>
-      <div class="qtext"><span class="t1">${track.title}</span><span class="t2">${track.artist}</span></div>
-      <span class="qtime">${fmt.time(track.duration)}</span>
+      <div class="qtext"><span class="t1">${shown.title}</span><span class="t2">${shown.subtitle}</span></div>
+      <span class="qtime">${shown.live ? 'LIVE' : track.duration ? fmt.time(track.duration) : ''}</span>
       <button class="icon-btn" aria-label="Remove from queue" onClick=${() => removeFromQueue(orderIndex)}><${Icon} name="x" size=${15} /></button>
     </div>`;
   };
@@ -70,10 +76,10 @@ export function QueueList() {
   const upcoming = order.length - pos - 1;
   return html`<div class="queue">
     <div class="queue-head">
-      <span class="subtle">${source ? `Playing from ${source}` : 'Queue'} · ${fmt.plural(order.length, 'song')}${upcoming > 0 ? `, ${upcoming} up next` : ''}</span>
+      <span class="subtle">${source ? `Playing from ${source}` : 'Queue'} · ${fmt.plural(order.length, noun)}${upcoming > 0 ? `, ${upcoming} up next` : null}</span>
       <span class="spacer"></span>
-      <button class="chip-btn" onClick=${saveAsPlaylist}><${Icon} name="plus" size=${14} /> Save as playlist</button>
-      <button class="chip-btn" onClick=${async () => (order.length < 5 || (await confirmDialog({ title: 'Clear the queue', message: `Remove all ${order.length} songs from the queue?`, confirm: 'Clear', danger: true }))) && clearQueue()}><${Icon} name="trash" size=${14} /> Clear</button>
+      ${songs.length > 0 && html`<button class="chip-btn" onClick=${saveAsPlaylist}><${Icon} name="plus" size=${14} /> Save as playlist</button>`}
+      <button class="chip-btn" onClick=${async () => (order.length < 5 || (await confirmDialog({ title: 'Clear the queue', message: `Remove all ${fmt.plural(order.length, noun)} from the queue?`, confirm: 'Clear', danger: true }))) && clearQueue()}><${Icon} name="trash" size=${14} /> Clear</button>
     </div>
     <div class="queue-rows" ref=${rowsBox}>${order.map((_, i) => row(i))}</div>
   </div>`;
@@ -267,29 +273,53 @@ function SoundPanel() {
 
 // ------------------------------------------------------------ the view
 
-const NP_TABS = [{ id: 'lyrics', label: 'Lyrics', icon: 'mic' }, { id: 'queue', label: 'Up next', icon: 'queue' }, { id: 'sound', label: 'Sound', icon: 'sliders' }];
+const TAB_LYRICS = { id: 'lyrics', label: 'Lyrics', icon: 'mic' };
+const TAB_ABOUT = { id: 'about', label: 'About', icon: 'info' };
+const TAB_QUEUE = { id: 'queue', label: 'Up next', icon: 'queue' };
+const TAB_SOUND = { id: 'sound', label: 'Sound', icon: 'sliders' };
+
+/** What the feed says about the episode that is playing. */
+function EpisodeNotes({ episode }) {
+  const facts = [fmt.date(episode.published_at), fmt.length(episode.duration)].filter(Boolean).join(' · ');
+  return html`<div class="notes" tabIndex="0" role="region" aria-label="About this episode">
+    ${facts ? html`<p class="subtle">${facts}</p>` : null}
+    <p class="plain-notes">${episode.description || 'The podcast gave no notes for this episode.'}</p>
+    <p><a href=${href(`/podcast/${episode.podcast_id}`)}>More from ${episode.podcast_title}</a></p>
+  </div>`;
+}
 
 export function NowPlayingView() {
-  const track = useStore(player, (s) => current(s));
+  const track = useStore(player, (s) => current(s)); // a song, a station or an episode
+  const liveTitle = useStore(player, (s) => s.liveTitle);
   const [tab, setTab] = useState('lyrics');
   if (!track) {
-    return html`<${Empty} icon="music" title="Nothing is playing" level=${1}>Pick a song from your library to start. Lyrics, the queue and the equalizer live here.<//>`;
+    return html`<${Empty} icon="music" title="Nothing is playing" level=${1}>Pick a song, a radio station or a podcast episode to start. Lyrics, the queue and the equalizer live here.<//>`;
   }
+  const tabs = isTrack(track) ? [TAB_LYRICS, TAB_QUEUE, TAB_SOUND] : isEpisode(track) ? [TAB_ABOUT, TAB_QUEUE, TAB_SOUND] : [TAB_QUEUE, TAB_SOUND];
+  const selected = tabs.some((t) => t.id === tab) ? tab : tabs[0].id;
+  const shown = describe(track, liveTitle);
   return html`<div class="nowplaying">
     <div class="np-left">
-      <${Cover} albumKey=${track.album_key} name=${track.album} size=480 class="np-art" />
+      ${isTrack(track)
+        ? html`<${Cover} albumKey=${track.album_key} name=${track.album} size=480 class="np-art" />`
+        : html`<${Cover} item=${track} name=${shown.name} size=480 class="np-art" />`}
       <div class="np-meta">
-        <h1>${track.title}</h1>
-        <p><a href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a> · <a href=${href(`/album/${track.album_key}`)}>${track.album}</a></p>
+        <h1>${shown.title}</h1>
+        ${isTrack(track)
+          ? html`<p><a href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a> · <a href=${href(`/album/${track.album_key}`)}>${track.album}</a></p>`
+          : isStation(track)
+            ? html`<p><span class="live-badge">LIVE</span> <a href=${href('/radio')}>${liveTitle ? track.name : 'Live radio'}</a>${liveTitle || !track.country ? null : ` · ${track.country}`}</p>`
+            : html`<p><a href=${href(`/podcast/${track.podcast_id}`)}>${track.podcast_title}</a>${track.published_at ? ` · ${fmt.date(track.published_at)}` : ''}</p>`}
       </div>
       <${Visualizer} />
     </div>
     <div class="np-right">
-      <${Tabs} id="np" label="Now playing" tabs=${NP_TABS} value=${tab} onChange=${setTab} />
-      <${TabPanel} id="np" value=${tab} class="tab-body">
-        ${tab === 'lyrics' && html`<${Lyrics} track=${track} />`}
-        ${tab === 'queue' && html`<${QueueList} />`}
-        ${tab === 'sound' && html`<${SoundPanel} />`}
+      <${Tabs} id="np" label="Now playing" tabs=${tabs} value=${selected} onChange=${setTab} />
+      <${TabPanel} id="np" value=${selected} class="tab-body">
+        ${selected === 'lyrics' && html`<${Lyrics} track=${track} />`}
+        ${selected === 'about' && html`<${EpisodeNotes} episode=${track} />`}
+        ${selected === 'queue' && html`<${QueueList} />`}
+        ${selected === 'sound' && html`<${SoundPanel} />`}
       <//>
     </div>
   </div>`;

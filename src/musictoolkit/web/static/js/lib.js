@@ -121,6 +121,11 @@ export const fmt = {
     const hours = Math.floor(minutes / 60);
     return `${hours} hr ${minutes % 60} min`;
   },
+  /** How long an episode is: in seconds when it is short, otherwise as `duration` says it ("" when it is not known). */
+  length(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return '';
+    return seconds < 60 ? `${Math.round(seconds)} sec` : fmt.duration(seconds);
+  },
   number: (n) => (n ?? 0).toLocaleString(),
   plural: (n, one, many = one + 's') => `${(n ?? 0).toLocaleString()} ${n === 1 ? one : many}`,
   bytes(n) {
