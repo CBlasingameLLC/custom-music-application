@@ -87,6 +87,15 @@ def wait_for(predicate, seconds: float, interval: float = 0.25):
     return None
 
 
+def last_closing_note(profile: Path) -> str:
+    """The shell's own note of the last time its window was asked to close (it says what the shell had been told was playing), or ''."""
+    log_file = profile / ".musictoolkit" / "logs" / "desktop.log"
+    if not log_file.exists():
+        return ""
+    notes = [line for line in log_file.read_text(errors="replace").splitlines() if "window closing:" in line]
+    return notes[-1] if notes else ""
+
+
 # Windows: list the windows the app's process has on screen and, when asked, send WM_CLOSE (what the close button does) to the app's
 # own window. Not Process.CloseMainWindow(): that picks the topmost visible window of the process, and the process often has a
 # second one on top of the real window - a tooltip's popup, for one, which is visible, 160 by 25 pixels, and ignores WM_CLOSE
@@ -445,21 +454,34 @@ def drive(args, command: list[str]) -> None:
             check(info.get("closeAction") == "tray_if_playing", f"closing keeps the music going by default ({info.get('closeAction')!r})")
             if args.expect_tray:
                 check(info.get("tray") is True, "the tray icon exists")
-            if not wait_for(lambda: page.evaluate("import('/static/js/player.js').then((m) => m.player.get().playing)"), 3):
-                page.evaluate("location.hash = '#/songs'")
-                page.wait_for_selector(".trow:not(.skeleton)", timeout=20000)
-                row = page.locator(".trow", has_text="Smoke Tone")
-                (row if row.count() else page.locator(".trow")).first.locator(".t1").dblclick()
+            # The close button is pressed through a helper that can take many seconds to start on a loaded runner (PowerShell compiles it
+            # first: 12 s once), and the long fixture lasts 12 s. A song that is allowed to end meanwhile makes the app, correctly, quit
+            # instead of staying in the tray - this step once failed on exactly that. So the helper is started once now (it also lists
+            # the app's windows), the tone is started fresh (what the earlier steps left playing may last a fraction of a second), and it repeats.
+            if WINDOWS:
+                looked = time.time()
+                describe_windows(process, "before the close button is pressed")
+                print(f"  info  looking at the app's windows took {time.time() - looked:.1f} s", flush=True)
+            page.evaluate("location.hash = '#/songs'")
+            page.wait_for_selector(".trow:not(.skeleton)", timeout=20000)
+            row = page.locator(".trow", has_text="Smoke Tone")
+            (row if row.count() else page.locator(".trow")).first.locator(".t1").dblclick()
             check(bool(wait_for(lambda: page.evaluate("import('/static/js/player.js').then((m) => m.player.get().playing)"), 30)), "music is playing")
+            page.evaluate("import('/static/js/player.js').then((m) => { m.player.set({ repeat: 'one' }); })")
+            check(page.evaluate("import('/static/js/player.js').then((m) => m.player.get().repeat)") == "one", "and it repeats, so it cannot end before the window is closed")
             # Tell the shell what is playing; it needs a moment to hear it (the page sends it as the song starts).
             time.sleep(1.0)
+            pressing = time.time()
             pressed = press_close_button(process)
+            print(f"  info  pressing the close button took {time.time() - pressing:.1f} s", flush=True)
             if not pressed:
                 print("  skip  the window's close button cannot be pressed from here (needs PowerShell on Windows, or python-xlib under X)")
                 for line in WINDOW_LOG:
                     print(f"          {line}", flush=True)
             else:
                 check(True, "the window's close button was pressed")
+                note = wait_for(lambda: last_closing_note(profile), 10)  # the shell writes it as the request arrives
+                check("playing=true" in (note or ""), f"the shell had been told that music was playing when the window was asked to close ({note or 'no such note in desktop.log'})")
             if args.expect_tray:
                 check(pressed, "the window's close button can be pressed on this machine")
             if not pressed:
