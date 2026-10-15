@@ -86,6 +86,7 @@ class DiscConfig:
     rip_scheme: str = ""  # the folder layout of ripped songs ("" is the library's layout)
     rip_cover: bool = True  # fetch the album's front cover (Cover Art Archive) and keep it in the songs and beside them
     eject_after_rip: bool = True  # take the disc out when a rip finished without trouble
+    eject_after_burn: bool = True  # take the disc out when a burn finished well
 
 
 @dataclass

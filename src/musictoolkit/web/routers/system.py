@@ -160,7 +160,10 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
         listing = disc_helper.list_drives() if ready else {"drives": [], "error": None}
         return {
             "supported": sys.platform == "win32", "available": ready, "reason": reason, "error": listing["error"],
-            "drives": [{"id": d["id"], "name": d.get("name"), "media": d.get("media")} for d in listing["drives"]],
+            "drives": [
+                {"id": d["id"], "name": d.get("name"), "media": d.get("media"), "writer": bool(d.get("writer")), "writes": d.get("writes") or []}
+                for d in listing["drives"]
+            ],
         }
 
     def services() -> dict:

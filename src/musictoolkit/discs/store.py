@@ -108,3 +108,86 @@ def recover(conn: sqlite3.Connection, cache_dir: Path | None = None) -> int:
                 except OSError:
                     pass
     return len(rips)
+
+
+# ---------------------------------------------------------------------------------------- burns (a history; a burn cannot be taken back)
+
+
+def create_burn(
+    conn: sqlite3.Connection, *, batch_id: str, kind: str, title: str, drive: str | None, disc_type: str | None = None, label: str | None = None,
+    speed: int | None = None, sectors: int | None = None, items: list[dict[str, Any]] | None = None,
+) -> int:
+    """A burn that is about to start, with every song or file it was asked for as a row (those that will not be written say why).
+    `items`: title, artist, source, track_id, sectors, status, message."""
+    items = items or []
+    cursor = conn.execute(
+        "INSERT INTO disc_burns (batch_id, kind, title, drive, disc_type, label, speed, items, sectors, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (batch_id, kind, title, drive, disc_type, label, speed, sum(1 for i in items if i.get("status", "waiting") == "waiting"), sectors, _now()),
+    )
+    burn_id = cursor.lastrowid
+    conn.executemany(
+        "INSERT INTO disc_burn_items (burn_id, position, title, artist, source, track_id, sectors, status, message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (burn_id, position, i["title"], i.get("artist"), i.get("source"), i.get("track_id"), i.get("sectors"), i.get("status", "waiting"), i.get("message"))
+            for position, i in enumerate(items, start=1)
+        ],
+    )
+    conn.commit()
+    return int(burn_id)
+
+
+def mark_spoiled(conn: sqlite3.Connection, burn_id: int) -> None:
+    """Writing has begun: from here on the disc cannot be trusted until the burn is done."""
+    conn.execute("UPDATE disc_burns SET spoiled = 1 WHERE id = ?", (burn_id,))
+    conn.commit()
+
+
+def finish_burn(
+    conn: sqlite3.Connection, burn_id: int, status: str, message: str | None = None, *, sectors: int | None = None, verified: bool | None = None,
+    output: str | None = None,
+) -> None:
+    """The burn is over. A burn that ended well leaves a usable disc, whatever was marked while it was writing."""
+    conn.execute(
+        "UPDATE disc_burns SET status = ?, message = ?, finished_at = ?, spoiled = CASE WHEN ? = 'done' THEN 0 ELSE spoiled END, "
+        "sectors = COALESCE(?, sectors), verified = COALESCE(?, verified), output = COALESCE(?, output) WHERE id = ?",
+        (status, message, _now(), status, sectors, None if verified is None else int(verified), output, burn_id),
+    )
+    if status == "done":
+        conn.execute("UPDATE disc_burn_items SET status = 'done' WHERE burn_id = ? AND status = 'waiting'", (burn_id,))
+    else:
+        conn.execute(
+            "UPDATE disc_burn_items SET status = 'failed', message = COALESCE(message, 'Not written.') WHERE burn_id = ? AND status = 'waiting'", (burn_id,)
+        )
+    conn.commit()
+
+
+def list_burns(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM disc_burns ORDER BY started_at DESC, id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_burn(conn: sqlite3.Connection, burn_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM disc_burns WHERE id = ?", (burn_id,)).fetchone()
+    if row is None:
+        return None
+    burn = dict(row)
+    burn["tracks"] = [dict(t) for t in conn.execute("SELECT * FROM disc_burn_items WHERE burn_id = ? ORDER BY position", (burn_id,)).fetchall()]
+    return burn
+
+
+def recover_burns(conn: sqlite3.Connection, cache_dir: Path | None = None) -> int:
+    """A burn that was running when the app stopped did not finish: say so, and remove the temporary songs it left. Returns how many."""
+    burns = conn.execute("SELECT id, batch_id, spoiled FROM disc_burns WHERE status = 'running'").fetchall()
+    for burn in burns:
+        words = "The app was closed before the burn was finished."
+        if burn["spoiled"]:
+            words += " Writing had begun, so the disc cannot be trusted. A rewritable disc can be erased and used again."
+        conn.execute("UPDATE disc_burn_items SET status = 'failed', message = 'Not written.' WHERE burn_id = ? AND status = 'waiting'", (burn["id"],))
+        finish_burn(conn, burn["id"], "interrupted", words)
+        if cache_dir is not None and cache_dir.is_dir():
+            for leftover in cache_dir.glob(f"{burn['batch_id']}-*.pcm"):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+    return len(burns)

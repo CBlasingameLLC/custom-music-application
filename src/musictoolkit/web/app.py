@@ -104,8 +104,9 @@ def create_app(
     try:  # a rip that was running when the app stopped did not finish: say so, and remove the half-written files it left
         with ctx.db() as conn:
             disc_store.recover(conn, ctx.data_dir / "cache" / "discs")
+            disc_store.recover_burns(conn, ctx.data_dir / "cache" / "discs" / "burn")
     except Exception:
-        logger.warning("Could not tidy up after an interrupted rip", exc_info=True)
+        logger.warning("Could not tidy up after an interrupted rip or burn", exc_info=True)
     ctx.scrobbler = Scrobbler(ctx)
     ctx.radar = RadarSchedule(ctx)
     ctx.radio = RadioHub()
