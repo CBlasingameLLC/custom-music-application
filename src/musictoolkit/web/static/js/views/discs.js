@@ -61,7 +61,11 @@ function useDrives(watching) {
   const look = useCallback(async (fresh) => {
     try {
       const data = await api('/discs/drives', { params: fresh ? { fresh: true } : {} });
-      setState((before) => (JSON.stringify(before.data) === JSON.stringify(data) && !before.error ? before : { loading: false, data, error: null }));
+      setState((before) => {
+        // Looking failed this time (the helper did not answer): what was seen before stays on the screen, with the trouble above it.
+        if (data.error && !data.drives.length && before.data?.drives.length) return { ...before, loading: false, error: new Error(data.error) };
+        return JSON.stringify(before.data) === JSON.stringify(data) && !before.error ? before : { loading: false, data, error: null };
+      });
     } catch (error) {
       setState((before) => ({ ...before, loading: false, error }));
     }
@@ -283,6 +287,8 @@ function RipTab({ active }) {
   const [again, setAgain] = useState(0);
   const [resumed, setResumed] = useState(false); // has it been looked for yet: a rip that is under way
   const edited = useRef(false);
+  const startedFor = useRef(null); // the disc the form was started from: the same disc read again does not start it over
+  const askedFor = useRef(null); // the disc MusicBrainz was asked about
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   const lookupJob = useRef(null);
@@ -332,11 +338,22 @@ function RipTab({ active }) {
     };
   }, [seen, reads, !current, busy, resumed]);
 
-  // A different disc: start from what is known about it, and ask MusicBrainz if there is a contact to ask with.
+  // An empty tray: the next disc, even the same one, starts from the beginning.
+  const tray = drive?.media;
+  useEffect(() => {
+    if (!drive || tray === 'none') {
+      startedFor.current = null;
+      askedFor.current = null;
+    }
+  }, [tray, Boolean(drive)]);
+
+  // A different disc: start from what is known about it. (The same disc read again, because the drive was busy a moment or a look at
+  // the drives failed once, keeps what has been typed.)
   const discId = disc?.data?.disc_id;
   useEffect(() => {
     const data = discRef.current;
-    if (!data) return;
+    if (!data || startedFor.current === data.disc_id) return;
+    startedFor.current = data.disc_id;
     edited.current = false;
     const cached = looked.get(data.disc_id);
     setPlan(null);
@@ -350,8 +367,15 @@ function RipTab({ active }) {
       setPicked(-1);
       setForm(formFrom(data.manual));
       setLookup({ state: cached ? 'none' : 'idle' });
-      if (!cached && info?.contact_set) askMusicBrainz(data.drive);
     }
+  }, [discId]);
+
+  // ... and ask MusicBrainz about it, once, as soon as there is a contact to ask with (the answer may arrive after the disc was read).
+  useEffect(() => {
+    const data = discRef.current;
+    if (!data || !info?.contact_set || askedFor.current === data.disc_id || looked.has(data.disc_id)) return;
+    askedFor.current = data.disc_id;
+    askMusicBrainz(data.drive);
   }, [discId, info?.contact_set]);
 
   async function askMusicBrainz(driveLetter) {

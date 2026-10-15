@@ -258,10 +258,13 @@ def discs(client: Client, scratch: Path, music: Path) -> None:
     if not found:
         return
     album = found[0]
+    status, options = client.json("/api/discs/options")
+    check(status == 200 and options["roots"], f"the page is offered the library folder to rip into ({options.get('roots')})")
+    root = options["roots"][0]["path"]  # (as the app spells it: a Windows temporary folder has a short and a long spelling, and the page uses the app's)
 
     def rip(kind: str, quality: str, name: str) -> dict:
         asked = {
-            "drive": "E:", "root": str(music), "scheme": "{album_artist}/{album}/{track:02d} - {title}.{ext}", "format": kind, "quality": quality,
+            "drive": "E:", "root": root, "scheme": "{album_artist}/{album}/{track:02d} - {title}.{ext}", "format": kind, "quality": quality,
             "accuracy": "verified", "album": name, "album_artist": album["artist"], "year": album["year"], "date": album["date"], "genre": "Smoke",
             "disc_number": 1, "disc_total": 1, "release_id": album["release_id"], "release_group_id": album["release_group_id"],
             "artist_ids": album["artist_ids"], "barcode": album["barcode"], "label": album["label"],

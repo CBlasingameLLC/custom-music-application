@@ -176,13 +176,129 @@ def test_a_disc_nobody_knows_is_typed_in_by_hand_and_the_paths_follow(page, live
 def test_without_a_contact_the_screen_says_how_to_find_albums_and_typing_still_works(page, live, world) -> None:
     add_library(page, live)
     assert not live.ctx.config.musicbrainz.contact
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(f"{r.method} {r.url.split('/api/')[-1]}") if "/api/discs" in r.url else None)
     open_discs(page)
     note = page.locator(".note", has_text="add your email address")
     expect(note).to_be_visible()
     expect(note.get_by_role("link", name="Settings")).to_have_attribute("href", "#/settings")
     page.get_by_label("Album", exact=True).fill("By Hand")
     page.get_by_label("Album artist").fill("Me")
-    expect(page.locator(".sync-table .where").first).to_have_text("Me/By Hand/01 - Track 01.flac")
+    try:
+        expect(page.locator(".sync-table .where").first).to_have_text("Me/By Hand/01 - Track 01.flac")
+    except AssertionError as error:  # (a failure seen only on a slow machine: say what the page was doing)
+        fields = page.evaluate("Array.from(document.querySelectorAll('.organize-form input'), (i) => i.value)")
+        raise AssertionError(f"{error}\nthe first fields of the form: {fields}\nwhat the page asked the server for, in order: {asked}") from None
+
+
+LISTING = re.compile(r".*/api/discs/drives(\?.*)?$")
+
+
+def test_what_was_typed_stays_when_a_look_at_the_drives_fails_once(page, live, world) -> None:
+    add_library(page, live)
+    open_discs(page)
+    expect(page.get_by_label("Title of song 1")).to_be_visible()
+    page.get_by_label("Album", exact=True).fill("By Hand")
+    failed = []
+
+    def glitch(route) -> None:
+        if not failed:
+            failed.append(True)
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"available": True, "reason": None, "error": "The disc helper did not answer.", "drives": [], "busy": False}))
+        else:
+            route.continue_()
+
+    page.route(LISTING, glitch)
+    page.evaluate("window.dispatchEvent(new Event('focus'))")  # a look at the drives, now
+    expect(page.locator(".callout[role=alert]", has_text="did not answer")).to_be_visible()
+    expect(page.get_by_label("Album", exact=True)).to_have_value("By Hand")  # nothing that was on the screen is thrown away because one look failed
+    expect(page.locator(".callout[role=alert]", has_text="did not answer")).to_have_count(0, timeout=15_000)  # the next look is fine, and the trouble goes
+    expect(page.get_by_label("Album", exact=True)).to_have_value("By Hand")
+
+
+def test_what_was_typed_stays_when_the_drive_loses_the_disc_for_a_moment(page, live, world) -> None:
+    add_library(page, live)
+    open_discs(page)
+    expect(page.get_by_label("Title of song 1")).to_be_visible()
+    page.get_by_label("Album", exact=True).fill("By Hand")
+    flapped = []
+
+    def flap(route) -> None:
+        response = route.fetch()
+        data = response.json()
+        if not flapped:
+            flapped.append(True)
+            for drive in data["drives"]:
+                drive["media"] = "unknown"  # the drive cannot say what is in it, once
+        route.fulfill(response=response, json=data)
+
+    page.route(LISTING, flap)
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.get_by_role("heading", name="This drive cannot read the disc")).to_be_visible()
+    expect(page.get_by_label("Album", exact=True)).to_have_value("By Hand", timeout=15_000)  # and when the same disc is back, so is what was typed
+
+
+def test_a_drive_that_loses_the_disc_for_a_moment_does_not_make_the_app_ask_musicbrainz_again(page, live, world, monkeypatch) -> None:
+    add_library(page, live)
+    live.ctx.config.musicbrainz.contact = "tests@example.com"
+    answer = musicbrainz_script(known={TOC.disc_id(): albums("The Real Name")})
+
+    def slow(h) -> None:  # MusicBrainz takes its time: the drive loses the disc while the app is waiting for it
+        time.sleep(3)
+        answer(h)
+
+    flapped = []
+
+    def flap(route) -> None:
+        response = route.fetch()
+        data = response.json()
+        if flapped:
+            for drive in data["drives"]:
+                drive["media"] = "unknown"
+            flapped.pop()
+        route.fulfill(response=response, json=data)
+
+    with serve_script(slow) as server:
+        monkeypatch.setenv("MTK_MUSICBRAINZ_URL", server.url)
+        page.route(LISTING, flap)
+        open_discs(page)
+        expect(page.locator(".status-line", has_text="Looking the disc up on MusicBrainz")).to_be_visible()
+        flapped.append(True)
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+        expect(page.get_by_role("heading", name="This drive cannot read the disc")).to_be_visible()
+        expect(page.get_by_role("radio", name=re.compile(r"^The Real Name"))).to_be_visible(timeout=30_000)  # the answer of the one question that was asked
+        assert len(server.requests) == 1, f"MusicBrainz was asked {len(server.requests)} times: {[r['path'] for r in server.requests]}"
+
+
+def test_coming_back_to_the_page_does_not_ask_musicbrainz_again_about_a_disc_it_knows(page, live, world, monkeypatch) -> None:
+    add_library(page, live)
+    with musicbrainz(live, monkeypatch, *albums("The Real Name")) as server:
+        open_discs(page)
+        expect(page.get_by_role("radio", name=re.compile(r"^The Real Name"))).to_be_visible()
+        page.evaluate("location.hash = '#/settings'")
+        expect(page.get_by_role("heading", name="Appearance", exact=True)).to_be_visible()
+        page.evaluate("location.hash = '#/discs'")
+        expect(page.get_by_role("radio", name=re.compile(r"^The Real Name"))).to_be_visible()
+        assert len(server.requests) == 1, [r["path"] for r in server.requests]
+
+
+def test_a_disc_taken_out_and_put_back_starts_over(page, live, world) -> None:
+    page.allowed_statuses = {404, 409}  # (looking at the disc again, just as it was taken out, is refused; 404: the pictures of songs without one)
+    add_library(page, live)
+    open_discs(page)
+    expect(page.get_by_label("Title of song 1")).to_be_visible()
+    page.get_by_label("Album", exact=True).fill("By Hand")
+    ejected = (world / "E" / "disc.json").read_text()
+    (world / "E" / "disc.json").unlink()
+    disc_helper.forget_listing()
+    page.get_by_role("button", name="Look again").or_(page.get_by_role("button", name="Read the disc again")).first.click()
+    expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible()
+    (world / "E" / "disc.json").write_text(ejected)
+    disc_helper.forget_listing()
+    page.get_by_role("button", name="Read the disc again").click()
+    expect(page.get_by_label("Title of song 1")).to_be_visible()
+    expect(page.get_by_label("Album", exact=True)).to_have_value("")  # the tray was empty in between: a new start
 
 
 def test_every_song_can_be_left_out_at_once_and_put_back(page, live, world) -> None:
