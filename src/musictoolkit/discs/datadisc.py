@@ -26,6 +26,7 @@ FILESYSTEMS = ("iso9660", "joliet", "udf")
 CD_TYPES = ("CD-R", "CD-RW")
 BLOCK = 1024 * 1024
 _FORBIDDEN = re.compile(r'[<>:"/\\|?*;\x00-\x1f]')
+_TRACK_NUMBER = re.compile(r"^\s*\d{1,3}\s*[-._)]\s*")  # "01 - ", "01. ", "01-": the number a file name starts with when it has no title to go by
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
@@ -163,7 +164,7 @@ def _place(song: DataSong, position: int, total: int, layout: str) -> list[str]:
     extension = path.suffix.lower()
     if layout == "flat":
         width = max(2, len(str(total)))
-        title = (song.title or path.stem).strip()
+        title = (song.title or _TRACK_NUMBER.sub("", path.stem)).strip()  # (a song without a title: its file name, without the number it begins with)
         return [safe_name(f"{position:0{width}d} - {title}{extension}")]
     try:
         relative = path.relative_to(song.root) if song.root else Path(path.name)

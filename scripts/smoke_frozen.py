@@ -308,6 +308,109 @@ def discs(client: Client, scratch: Path, music: Path) -> None:
     check(not left, f"no half-written song or temporary copy is left ({left})")
 
 
+def burning(client: Client, scratch: Path, music: Path) -> None:
+    """Songs burned onto a music CD, a data disc and into an ISO file inside the frozen backend, through a stand-in recorder (drive G:). That proves what
+    only the frozen exe can: that the resampler (soxr, a compiled extension) and the burn code were bundled. One of the two songs is at 48 kHz, so it
+    cannot reach the disc without the resampler. What went on the disc is read back from the stand-in's folder and compared bit for bit."""
+    import array  # noqa: PLC0415
+    import math  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+
+    from tests.fake_disc_helper import add_drive, blank_disc  # noqa: PLC0415 (the repository root is on sys.path by now)
+
+    world = scratch / "drives"
+    profile_cache = scratch / "profile" / ".musictoolkit" / "cache" / "discs"
+
+    def recorder(**disc: object) -> None:
+        add_drive(world, "G", name="Stand-in recorder", writer=True, disc=blank_disc(**disc))
+        client.json("/api/discs/drives?fresh=true")
+
+    def tone(path: Path, rate: int, seconds: int) -> bytes:
+        frames = array.array("h")
+        for n in range(rate * seconds):
+            frames.append(int(12000 * math.sin(2 * math.pi * 440 * n / rate)))
+            frames.append(int(12000 * math.sin(2 * math.pi * 660 * n / rate)))
+        if sys.byteorder == "big":
+            frames.byteswap()
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(2)
+            out.setsampwidth(2)
+            out.setframerate(rate)
+            out.writeframes(frames.tobytes())
+        return frames.tobytes()
+
+    folder = music / "Burn Artist" / "Burn Album"
+    folder.mkdir(parents=True)
+    heard = tone(folder / "01 - Burn One.wav", 44100, 6)
+    tone(folder / "02 - Burn Two.wav", 48000, 6)
+    _, started = client.json("/api/library/scan", "POST")
+    scan = wait_job(client, started["job"]["id"])
+    check(scan["status"] == "done", f"the two songs to burn are scanned ({scan.get('result') or scan.get('error')})")
+    _, library = client.json("/api/tracks?limit=500")
+    ids = {t["title"]: t["id"] for t in library["items"]}
+    one, two = ids.get("01 - Burn One"), ids.get("02 - Burn Two")
+    check(bool(one and two), f"the two songs are in the library ({sorted(t for t in ids if 'Burn' in t)})")
+    if not (one and two):
+        return
+
+    recorder()
+    status, media = client.json("/api/discs/media/G:")
+    check(status == 200 and media["writer"] and media["state"] == "blank" and media["can_audio"], f"the recorder and its blank disc are seen ({media})")
+
+    # a music CD
+    asked = {"drive": "G:", "track_ids": [one, two], "eject": False}
+    status, plan = client.json("/api/discs/burn/preview", "POST", asked)
+    check(status == 200 and plan["ok"] and [s["verdict"] for s in plan["songs"]] == ["ok", "converted"], f"the burn is previewed: the 48 kHz song is converted ({plan})")
+    status, begun = client.json("/api/discs/burn/start", "POST", asked)
+    finished = wait_job(client, begun["job"]["id"], tries=600)
+    result = finished.get("result") or {}
+    check(status == 200 and finished["status"] == "done" and result.get("songs") == 2, f"the music CD is burned ({result or finished.get('error')})")
+    if finished["status"] != "done":
+        return
+    sector = 2352
+    pcm = (world / "G" / "disc.pcm").read_bytes()
+    first_end = -(-len(heard) // sector) * sector
+    check(pcm[:len(heard)] == heard, "the 44.1 kHz song is on the disc bit for bit")
+    check(pcm[first_end:first_end + 150 * sector] == bytes(150 * sector), "two seconds of silence lie between the songs")
+    converted = pcm[first_end + 150 * sector:]
+    check(len(converted) == plan["songs"][1]["sectors"] * sector, f"the converted song has the length that was planned ({len(converted)} bytes)")
+    samples = array.array("h", converted[sector * 20:sector * 400])
+    peak = max(abs(v) for v in samples)
+    check(10_000 <= peak <= 14_000, f"the converted song kept its level: the resampler ran ({peak})")
+    _, burns = client.json("/api/discs/burns")
+    check([(b["kind"], b["status"], b["spoiled"]) for b in burns["burns"]] == [("audio", "done", 0)], f"the history has the burn ({burns})")
+    check(not list(profile_cache.rglob("*.pcm")), f"the temporary copies of the songs are gone ({list(profile_cache.rglob('*'))})")
+
+    # a data disc, read back and checked, on a rewritable disc; then erased
+    recorder(type="CD-RW")
+    asked = {"drive": "G:", "track_ids": [one, two], "layout": "library", "label": "Smoke Disc", "eject": False, "verify": True}
+    status, plan = client.json("/api/discs/data/preview", "POST", asked)
+    check(status == 200 and plan["ok"] and plan["counts"]["going"] == 2, f"the data disc is previewed ({plan})")
+    status, begun = client.json("/api/discs/data/start", "POST", asked)
+    finished = wait_job(client, begun["job"]["id"], tries=600)
+    result = finished.get("result") or {}
+    check(status == 200 and finished["status"] == "done" and result.get("verified") is True, f"the data disc is burned and read back ({result or finished.get('error')})")
+    written = sorted(p.name for p in (world / "G" / "files").rglob("*.wav"))
+    check(written == ["01 - Burn One.wav", "02 - Burn Two.wav"], f"the files are on the disc ({written})")
+    status, erased = client.json("/api/discs/erase", "POST", {"drive": "G:", "confirm": True})
+    done = wait_job(client, erased["job"]["id"], tries=600)
+    check(status == 200 and done["status"] == "done", f"the rewritable disc is erased ({done.get('result') or done.get('error')})")
+    _, media = client.json("/api/discs/media/G:?fresh=true")
+    check(media["state"] == "blank", f"the disc is blank again ({media['state']})")
+
+    # a disc image: needs no disc
+    images = scratch / "images"
+    images.mkdir()
+    asked = {"track_ids": [one, two], "layout": "flat", "label": "Smoke Disc", "folder": str(images)}
+    status, plan = client.json("/api/discs/iso/preview", "POST", asked)
+    check(status == 200 and plan["ok"], f"the disc image is previewed ({plan})")
+    status, begun = client.json("/api/discs/iso/start", "POST", asked)
+    finished = wait_job(client, begun["job"]["id"], tries=600)
+    made = Path((finished.get("result") or {}).get("output") or images / "none.iso")
+    check(status == 200 and finished["status"] == "done" and made.is_file() and made.stat().st_size % 2048 == 0 and made.parent.samefile(images),
+          f"the disc image is saved as a whole number of sectors ({finished.get('result') or finished.get('error')})")
+
+
 LRCLIB_ANSWER = {"id": 7, "instrumental": False, "plainLyrics": "Sparks\nand wire", "syncedLyrics": "[00:01.00]Sparks\n[00:04.00]and wire\n"}
 
 
@@ -651,6 +754,7 @@ def run(exe: Path, fixtures: Path) -> None:
         radio_and_podcasts(client, internet_urls, tone)
         if fake_disc.exists():
             discs(client, scratch, music)
+            burning(client, scratch, music)
         check(client.request("/api/home")[0] == 200, "Home data")
         status, settings = client.json("/api/settings")
         check(status == 200 and "library" in settings, "settings")

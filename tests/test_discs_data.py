@@ -18,6 +18,12 @@ def song(tmp_path: Path, relative: str, size: int = 10, title: str = "", artist:
     return DataSong(str(path), title or path.stem, artist, track_id, root=str(tmp_path / "music"))
 
 
+def virtual(tmp_path: Path, relative: str) -> DataSong:
+    """A song that is only a place in the library (no file is made: a path longer than Windows allows for a real file can still be planned)."""
+    root = tmp_path / "music"
+    return DataSong(str(root / relative), Path(relative).stem, root=str(root))
+
+
 def media(**changes) -> dict:
     return {"writer": True, "state": "blank", "type": "CD-R", "rewritable": False, "blank": True, "free_sectors": 359846, **changes}
 
@@ -162,10 +168,10 @@ def test_folders_nested_too_deep_cannot_go(tmp_path: Path) -> None:
 
 def test_a_long_path_is_shortened_by_cutting_the_folder_names_and_refused_if_that_is_not_enough(tmp_path: Path) -> None:
     long = "/".join("f" * 60 for _ in range(4)) + "/song.mp3"  # 4 x 61 + 8 = 252 characters
-    plan = plan_data([song(tmp_path, long)])
+    plan = plan_data([virtual(tmp_path, long)], stat=lambda _p: 10)
     assert plan.files[0].dest == "/".join("f" * 32 for _ in range(4)) + "/song.mp3" and len(plan.files[0].dest) <= 240
     huge = "/".join("g" * 60 for _ in range(8)) + "/" + "s" * 60 + ".mp3"  # still more than 240 after cutting
-    assert plan_data([song(tmp_path, huge)]).files[0].problem == "The name is too long for a disc."
+    assert plan_data([virtual(tmp_path, huge)], stat=lambda _p: 10).files[0].problem == "The name is too long for a disc."
 
 
 def test_a_file_of_4_gb_or_more_needs_udf(tmp_path: Path) -> None:
@@ -429,9 +435,9 @@ def test_a_path_of_exactly_the_longest_length_is_not_shortened(tmp_path: Path) -
     name = "n" * (datadisc.JOLIET_PATH - 3 * 61 - 4) + ".mp3"
     relative = f"{folder}/{folder}/{folder}/{name}"
     assert len(relative) == datadisc.JOLIET_PATH
-    assert dests(plan_data([song(tmp_path, relative)])) == [relative]
+    assert dests(plan_data([virtual(tmp_path, relative)], stat=lambda _p: 10)) == [relative]
     longer = relative[:-5] + "nn.mp3"  # one character more: the folders are cut to 32
-    shortened = dests(plan_data([song(tmp_path, longer)]))[0]
+    shortened = dests(plan_data([virtual(tmp_path, longer)], stat=lambda _p: 10))[0]
     assert shortened is not None and shortened.startswith("f" * 32 + "/") and len(shortened) < len(longer)
 
 
@@ -477,3 +483,14 @@ def test_a_list_of_empty_files_still_reports_a_whole_to_count_against(tmp_path: 
     seen: list[tuple[int, int]] = []
     verdict = datadisc.verify_files(plan, disc, on_progress=lambda done, total: seen.append((done, total)))
     assert verdict.ok and seen == [(0, 1)]
+
+
+@pytest.mark.parametrize(
+    "stem,expected",
+    [("01 - Loud", "01 - Loud.mp3"), ("07. Quiet Song", "01 - Quiet Song.mp3"), ("3-Short", "01 - Short.mp3"), ("99 Luftballons", "01 - 99 Luftballons.mp3"), ("1984", "01 - 1984.mp3"), ("Plain", "01 - Plain.mp3")],
+)
+def test_a_flat_name_for_a_song_without_a_title_drops_the_number_its_file_name_begins_with(tmp_path: Path, stem: str, expected: str) -> None:
+    path = tmp_path / "music" / f"{stem}.mp3"
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(b"x")
+    assert dests(plan_data([DataSong(str(path), "", root=str(path.parent))], layout="flat")) == [expected]

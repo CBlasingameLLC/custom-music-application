@@ -15,6 +15,7 @@ import pytest
 from musictoolkit.discs import burnjob, datadisc, datajob, store
 from musictoolkit.discs import helper as disc_helper
 from musictoolkit.discs.helper import DiscError
+from musictoolkit.web.jobs import JobCancelled
 from tests.conftest import build_web, ids_by_title, make_track, scan
 from tests.fake_disc_helper import add_drive, audio_disc, blank_disc, set_control
 
@@ -493,3 +494,118 @@ def test_history_lists_every_kind_newest_first(rig) -> None:
     listed = rig.client.get("/api/discs/burns").json()["burns"]
     assert [b["kind"] for b in listed] == ["erase", "data", "iso"] and all(b["status"] == "done" for b in listed)
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT.*", listed[0]["started_at"])
+
+
+# ---------------------------------------------------------------------------------------- corners found by changing the code one way at a time
+
+
+class Handle:
+    """What the job runner gives a job, for calling a job directly: remembers what it was told, and raises the stop when asked."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.updates: list[dict] = []
+        self.logs: list[str] = []
+
+    def check(self) -> None:
+        if self.cancelled:
+            raise JobCancelled()
+
+    def update(self, **fields) -> None:
+        self.updates.append(fields)
+
+    def log(self, line: str) -> None:
+        self.logs.append(line)
+
+
+def data_songs(rig, *relative: str) -> list[datadisc.DataSong]:
+    return [datadisc.DataSong(str(rig.music / r), Path(r).stem[3:], "A", n, root=str(rig.music)) for n, r in enumerate(relative, start=1)]
+
+
+ONE, TWO, THREE = "Artist A/Album 1/01 One.mp3", "Artist A/Album 1/02 Two.mp3", "Artist B/Album 2/03 Three.mp3"
+
+
+def test_a_data_burn_is_named_after_its_label_and_files_or_as_given(rig) -> None:
+    found = rig.client.get("/api/discs/media/E:").json()
+    plan = datadisc.plan_data(data_songs(rig, ONE), label="Mix", media=found)
+    assert datajob.title_of(datajob.DataRequest(drive="E:"), plan) == "Data disc Mix (1 file)"
+    assert datajob.title_of(datajob.IsoRequest(folder="x"), plan) == "Disc image Mix (1 file)"
+    assert datajob.title_of(datajob.DataRequest(drive="E:", title="  My disc \n"), plan) == "My disc"
+    gone = data_songs(rig, ONE, TWO, THREE) + [datadisc.DataSong(str(rig.music / "gone.mp3"), "gone", root=str(rig.music))]
+    assert datajob.title_of(datajob.DataRequest(drive="E:"), datadisc.plan_data(gone, label="Mix", media=found)) == "Data disc Mix (3 files)"
+
+
+def test_the_history_of_a_data_disc_keeps_where_each_file_came_from_and_why_one_was_left_out(rig) -> None:
+    found = rig.client.get("/api/discs/media/E:").json()
+    songs = data_songs(rig, ONE) + [
+        datadisc.DataSong(str(rig.music / TWO), "", "A", None, root=str(rig.music)),  # (a song without a title: its file name stands in)
+        datadisc.DataSong(str(rig.music / "gone.mp3"), "Gone", "A", 9, root=str(rig.music)),
+    ]
+    plan = datadisc.plan_data(songs, label="Mix", media=found)
+    with rig.ctx.db() as conn:
+        burn_id = datajob.begin_data(conn, plan, datajob.DataRequest(drive="E:", speed=75 * 8), "items", found)
+        shown = store.get_burn(conn, burn_id)
+    assert (shown["speed"], shown["items"], shown["label"], shown["disc_type"], shown["sectors"]) == (600, 2, "Mix", "DVD+R", plan.disc_sectors)
+    assert [(t["title"], t["source"], t["track_id"], t["status"], t["message"]) for t in shown["tracks"]] == [
+        ("One", str(rig.music / ONE), 1, "waiting", None),
+        ("02 Two", str(rig.music / TWO), None, "waiting", None),
+        ("Gone", str(rig.music / "gone.mp3"), 9, "skipped", "The file is not there any more."),
+    ]
+    assert [t["sectors"] for t in shown["tracks"]] == [plan.files[0].sectors, plan.files[1].sectors, None]
+
+
+def test_a_file_that_is_gone_stops_the_burn_with_the_disc_untouched(rig) -> None:
+    found = rig.client.get("/api/discs/media/E:").json()
+    plan = datadisc.plan_data(data_songs(rig, ONE), media=found)
+    request = datajob.DataRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = datajob.begin_data(conn, plan, request, "gone", found)
+    (rig.music / ONE).unlink()
+    with pytest.raises(burnjob.BurnError, match=r"^01 One\.mp3 is not there any more\. Look at the list again\.$"):
+        datajob.run_data(db=rig.ctx.db, plan=plan, request=request, batch_id="gone", burn_id=burn_id, handle=Handle())
+    assert not (rig.world / "E" / "files").exists()
+
+
+def test_a_stop_pressed_before_anything_is_looked_at_wins_over_a_file_that_changed(rig) -> None:
+    found = rig.client.get("/api/discs/media/E:").json()
+    plan = datadisc.plan_data(data_songs(rig, ONE), media=found)
+    request = datajob.DataRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = datajob.begin_data(conn, plan, request, "early", found)
+    (rig.music / ONE).write_bytes(b"changed")
+    handle = Handle()
+    handle.cancelled = True
+    with pytest.raises(JobCancelled):
+        datajob.run_data(db=rig.ctx.db, plan=plan, request=request, batch_id="early", burn_id=burn_id, handle=handle)
+    with rig.ctx.db() as conn:
+        shown = store.get_burn(conn, burn_id)
+    assert (shown["status"], shown["spoiled"], shown["message"]) == ("cancelled", 0, "Stopped. Nothing had been written, so the disc is as it was.")
+
+
+def test_while_a_data_disc_is_written_the_drives_are_not_asked_again(rig) -> None:
+    assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:", "F:"]
+    set_control(rig.world, burn_slow=1.0)
+    started = begin(rig, "data")
+    job_id = started["job"]["id"]
+    wait_until(rig, job_id, "Writing to the disc")
+    try:
+        set_control(rig.world, burn_slow=1.0, unplugged=["F"])
+        assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:", "F:"], "the answer from before the write is given"
+    finally:
+        rig.client.post(f"/api/jobs/{job_id}/cancel")
+        rig.ctx.jobs.wait(job_id, timeout=30)
+    assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:"], "and asked again when it is over"
+
+
+def test_while_a_disc_is_erased_the_drives_are_not_asked_again(rig) -> None:
+    used_disc(rig)
+    assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:", "F:"]
+    set_control(rig.world, burn_slow=0.05)
+    started = rig.client.post("/api/discs/erase", json={"drive": "E:", "confirm": True}).json()
+    job_id = started["job"]["id"]
+    wait_until(rig, job_id, "Erasing the disc")
+    try:
+        set_control(rig.world, burn_slow=0.05, unplugged=["F"])
+        assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:", "F:"]
+    finally:
+        rig.ctx.jobs.wait(job_id, timeout=30)

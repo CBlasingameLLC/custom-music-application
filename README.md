@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.8.0)
+## What it does (v0.8.1)
 
 | Area | Features |
 |---|---|
@@ -41,7 +41,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Radio** | Live internet radio through the app: your favorite stations, recently played ones, **Browse** the free Radio Browser directory (search by name, kind of music or country; sort by listeners, votes, name or sound quality) and **Add by address** (a stream, or the playlist file a station publishes). The song a station says is on shows in the player bar, the window title, the tray and the media-key overlay. A stream that drops is joined again; a station that cannot be played says why. Nothing is recorded or downloaded. See below |
 | **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
-| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo (experimental until it has met your drive). See below |
+| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD, a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
@@ -149,10 +149,46 @@ The audio of the song being ripped is held in a temporary file under `cache/disc
 
 **What it does not do.** No AccurateRip, no drive read-offset correction and no C2 error pointers; no hidden tracks (the pre-gap before track 1) and
 no data tracks (the data session of an Enhanced CD is ignored); no CD-Text; a copy-protected disc may fail to read; discs are only noticed while the
-Discs page is open. It is Windows only: the page says so on another system. Burning is not part of this version.
+Discs page is open. It is Windows only: the page says so on another system. Burning has its own tab, described next.
+
+**Burn a disc** (the second tab) puts songs from your library on a disc, or into a disc image file. It is labelled *experimental*, more so than
+ripping: no test of ours has a real recorder. The tests use a stand-in recorder that keeps its discs in plain folders, and Windows' own image
+builder is checked on a real Windows machine as far as one without a burner allows. **Try a CD-RW first** (it can be erased and used again).
+A burn cannot be undone, and one that is stopped or fails once it has begun writing spoils a CD-R for good; the question before every burn says so.
+
+1. **Make a list.** *Add to burn list* is in the menu of a song, on an album and on a playlist. The list is kept while the app is open, can be
+   reordered and trimmed, and is burned in the order shown.
+2. **Choose what to make.**
+   - *Music CD*: plays in any CD player or car stereo. MP3, FLAC, WAV, Ogg and Opus songs can be burned. A song at another sample rate is
+     converted to 44.1 kHz (with a high-quality resampler), a mono song plays on both speakers, a song with more than two channels is refused, and
+     a 24-bit or floating-point song is reduced to 16 bits (with dither). Any other song (M4A/AAC, WMA) is listed as *Cannot be burned* rather than
+     skipped silently. There are two seconds of silence between songs (that is how Windows' track-at-once burning works), at most 99 songs, and
+     about 80 minutes on a CD-R. Only a blank CD-R or CD-RW can take a music CD. It is **not** read back afterwards: listen to it once.
+   - *Data disc*: the song files as they are, for a computer, an MP3 player or a car stereo that reads files, on a CD, DVD or Blu-ray disc. The
+     layout is the folders of your library, or one numbered folder (best for car stereos). File and folder names are made safe for every disc
+     format (ISO 9660, Joliet, and UDF on discs bigger than a CD), and two files that would end up with the same name are told apart. The disc is
+     closed afterwards. Every file is read back from the disc and compared with the original by checksum (switch it off in Settings).
+   - *Disc image (ISO file)*: the same as a data disc, in one file, in the folder you choose (Downloads to begin with). It never replaces a file
+     that is there. No drive is needed.
+3. **Will it fit?** Before anything is written the page shows, for every song or file, what will happen to it, how much of the disc the list
+   takes (a bar), and what is wrong if something is (too long, too many songs, not enough room for the temporary copy of the music, a disc that is
+   not blank). The **Burn** button waits for that, and the app refuses to start a burn that was not first shown.
+4. **Confirm.** The question says what is about to be written, that it cannot be undone, and what stopping does to the disc.
+5. **Burn.** Everything that can go wrong without touching the disc happens first: for a music CD every song is converted into a temporary file
+   (`cache/discs/burn`), the files of a data disc are checked to be as they were, and the disc is looked at again. Then it writes, with progress.
+   **Cancel** is passed on to the recorder at once. The history says what became of the disc and whether it is spoiled; the temporary files are
+   always removed.
+6. **Erase.** A CD-RW or DVD-RW with something on it can be erased (quickly, or fully, which takes many minutes). An erase cannot be stopped once it
+   has begun. The question says that everything on the disc is deleted.
+
+**What it does not do.** No gapless music CDs (two seconds of silence between songs), no CD-Text, no M4A/AAC/WMA songs on music CDs yet, no read-back
+check of a music CD, no adding to a disc that has been written (every burn closes the disc), no disc copying, no DVD-Video. Burning is Windows only,
+through Windows' own disc burning service (IMAPI): no drivers and no administrator rights. A recorder that Windows cannot burn with, or a disc it
+does not support, is reported in words, not guessed at.
 
 A small helper program (`mtk-disc.exe`, installed next to the app) does the talking to the drive, with Windows' own device controls: no drivers, no
-administrator rights. All the decisions (checking, retrying, encoding, tagging, naming) are made in the app, where they are tested without a drive.
+administrator rights. All the decisions (checking, retrying, converting, encoding, tagging, naming) are made in the app, where they are tested
+without a drive.
 
 ### Radio and podcasts (Radio and Podcasts in the sidebar)
 
@@ -276,7 +312,7 @@ defaults to a dry run; pass `--apply` to execute.
 - `config.toml`: settings (edited from the app's Settings page)
 - `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
 - `cache/art/`, `cache/radio/`, `cache/podcasts/`: cached pictures (safe to delete)
-- `cache/discs/`: the temporary copy of the song being ripped (empty unless a rip is running or was cut short)
+- `cache/discs/`: the temporary copy of the song being ripped, and the converted songs of a music CD being burned (empty unless a rip or a burn is running or was cut short)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
 
 ## Security model
@@ -326,7 +362,7 @@ MusicBrainz and Cover Art Archive (`tests/fake_musicbrainz.py`).
 
 ```bash
 dotnet build helpers/disc/MtkDisc.csproj -c Release -o helpers/disc/out    # Windows: the real helper
-python scripts/check_disc_helper.py helpers/disc/out/mtk-disc.exe          # protocol, refusals, stopping, and a mounted disc image (Windows)
+python scripts/check_disc_helper.py helpers/disc/out/mtk-disc.exe          # protocol, refusals, stopping, a mounted disc image, and the image builder (Windows)
 ```
 
 Fixtures under `tests/fixtures/` are tiny synthetic MP3s with known tags (plus a
