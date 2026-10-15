@@ -92,3 +92,24 @@ def test_an_address_on_this_computer_is_refused_unless_a_test_allows_it(monkeypa
         finally:
             guard.allow_local(True)
     assert server.requests == []
+
+
+def test_a_picture_that_is_too_big_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    big = io.BytesIO()
+    Image.frombytes("RGB", (2000, 1500), os.urandom(2000 * 1500 * 3)).save(big, "PNG")  # a perfectly good picture of more than 8 MB
+    assert len(big.getvalue()) > coverart.MAX_BYTES
+    with serve_script(coverart_script({f"release/{RELEASE}": big.getvalue()})) as server:
+        monkeypatch.setenv("MTK_COVERART_URL", server.url)
+        assert coverart.front_cover(RELEASE) is None
+
+
+@pytest.mark.parametrize("kind", ["BMP", "TIFF"])
+def test_only_pictures_of_the_usual_kinds_are_taken(kind: str) -> None:
+    out = io.BytesIO()
+    Image.new("RGB", (50, 50), (1, 2, 3)).save(out, kind)
+    assert coverart.as_jpeg(out.getvalue()) is None
+    plain = io.BytesIO()
+    Image.new("RGB", (50, 50), (1, 2, 3)).save(plain, "PNG")
+    assert coverart.as_jpeg(plain.getvalue()) is not None

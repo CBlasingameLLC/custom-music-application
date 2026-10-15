@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -16,8 +17,11 @@ from mutagen.mp3 import MP3
 
 from musictoolkit.discs import helper as disc_helper
 from musictoolkit.discs import reader
+from musictoolkit.discs import rip as ripping
+from musictoolkit.discs.tagging import TagError
 from musictoolkit.discs.toc import Toc, Track
 from musictoolkit.net import guard
+from musictoolkit.web.routers import discs as api
 from tests.conftest import build_web
 from tests.fake_disc_helper import add_drive, audio, audio_disc, set_control
 from tests.fake_musicbrainz import coverart_script, ident, musicbrainz_script, release_xml
@@ -377,7 +381,14 @@ def test_a_rip_can_be_stopped_and_leaves_no_half_written_song(rig) -> None:
     assert rig.client.get("/api/discs/drives").json()["busy"] is True
     assert rig.client.get("/api/discs/drives/E:/disc").status_code == 409, "the drive is busy"
     assert rig.client.post("/api/discs/rip/preview", json=body(rig)).status_code == 409
-    assert rig.client.post("/api/discs/eject", json={"drive": "E:"}).status_code == 409
+    ejected = rig.client.post("/api/discs/eject", json={"drive": "E:"})
+    assert ejected.status_code == 409 and "ripped right now" in ejected.json()["detail"]
+    asked = body(rig)  # (a preview cannot be made while a rip is going, so this plants one, as if the page had asked an instant before the rip began)
+    rig.ctx.previews["rip"] = {"key": api._key(api.RipBody(**asked)), "toc": TOC}
+    refused = rig.client.post("/api/discs/rip/start", json=asked)
+    assert refused.status_code == 409 and "being ripped already" in refused.json()["detail"]
+    assert rig.ctx.previews.get("rip") is not None, "a request that was refused does not use the preview up"
+    assert rig.client.post("/api/discs/lookup", json={"drive": "E:"}).status_code == 409
     rig.ctx.jobs.cancel(job_id)
     job = rig.ctx.jobs.wait(job_id, timeout=30)
     assert job.status == "cancelled"
@@ -490,7 +501,9 @@ def test_a_rip_left_running_by_a_closed_app_is_marked_when_the_app_starts_again(
 
 
 def test_a_disc_can_be_ejected_from_the_screen(rig) -> None:
+    assert rig.client.get("/api/discs/drives").json()["drives"][0]["media"] == "audio"  # (the answer is remembered for a few seconds)
     assert rig.client.post("/api/discs/eject", json={"drive": "E:"}).json() == {"ok": True}
+    assert rig.client.get("/api/discs/drives").json()["drives"][0]["media"] == "none", "the remembered answer was dropped"
     assert rig.client.get("/api/discs/drives?fresh=true").json()["drives"][0]["media"] == "none"
     again = rig.client.post("/api/discs/eject", json={"drive": "Q:"})
     assert again.status_code == 404
@@ -514,3 +527,275 @@ def test_diagnostics_say_what_the_disc_helper_found(rig) -> None:
     got = rig.client.get("/api/system/diagnostics").json()["discs"]
     assert got["available"] is True and got["error"] is None and got["reason"] is None
     assert [(d["id"], d["media"]) for d in got["drives"]] == [("E:", "audio"), ("F:", "none")]
+
+
+def test_only_the_song_being_ripped_has_a_temporary_copy_and_none_is_left_afterwards(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    scratch = rig.ctx.data_dir / "cache" / "discs"
+    copies: list[int] = []
+    real = ripping.write_tags
+
+    def count_then_tag(path, fmt, tags, cover=None):
+        copies.append(len(list(scratch.glob("*.pcm"))))
+        real(path, fmt, tags, cover)
+
+    monkeypatch.setattr(ripping, "write_tags", count_then_tag)
+    job, _ = rip_it(rig)
+    assert job.status == "done" and copies == [1, 1, 1], "the room check counts one temporary copy, the longest, so a long album must not keep one per song"
+    assert not list(scratch.glob("*.pcm"))
+
+
+def test_a_name_that_is_taken_while_a_song_is_being_ripped_is_never_replaced(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = ripping.write_tags
+
+    def tag_then_someone_takes_the_name(path, fmt, tags, cover=None):
+        real(path, fmt, tags, cover)
+        if tags.track_number == 2:
+            Path(str(path)[: -len(".part")]).write_bytes(b"mine")
+
+    monkeypatch.setattr(ripping, "write_tags", tag_then_someone_takes_the_name)
+    job, found = rip_it(rig)
+    assert job.status == "done" and found["status"] == "partial" and job.result["ripped"] == 2 and job.result["failed"] == 1
+    assert [t["status"] for t in found["tracks"]] == ["done", "failed", "done"] and "appeared while the song was being ripped" in found["tracks"][1]["message"]
+    assert (album(rig) / "02 - Second.flac").read_bytes() == b"mine"
+    assert not list(rig.music.rglob("*.part")), "the half-finished copy does not stay behind"
+    assert set(songs_in_library(rig)) == {"First", "Third"}
+
+
+def test_a_song_that_cannot_be_tagged_ends_the_rip_and_leaves_no_half_written_file(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = ripping.write_tags
+
+    def refuse_the_second(path, fmt, tags, cover=None):
+        if tags.track_number == 2:
+            raise TagError("The tags could not be written.")
+        real(path, fmt, tags, cover)
+
+    monkeypatch.setattr(ripping, "write_tags", refuse_the_second)
+    job, found = rip_it(rig)
+    assert job.status == "error" and "tags could not be written" in job.error
+    assert found["status"] == "partial" and [t["status"] for t in found["tracks"]] == ["done", "failed", "skipped"]
+    assert not list(rig.music.rglob("*.part")) and not list(rig.ctx.data_dir.rglob("*.pcm")) and set(songs_in_library(rig)) == {"First"}
+
+
+def test_a_disc_is_not_ejected_when_a_song_on_it_could_not_be_ripped(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reader, "MAX_UNREADABLE", 1)
+    monkeypatch.setattr(reader, "MAX_ATTEMPTS", 2)
+    set_control(rig.world, bad=[{"from": 60, "to": 139}])
+    job, found = rip_it(rig, eject=True)
+    assert job.status == "done" and job.result["failed"] == 1 and job.result["ejected"] is False
+    assert not (rig.world / "E" / "eject.log").exists(), "the person may want to try the damaged song again"
+
+
+def test_a_temporary_copy_that_cannot_be_deleted_at_once_does_not_stop_the_rip_and_is_removed_at_the_end(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    scratch = rig.ctx.data_dir / "cache" / "discs"
+    unlink = Path.unlink
+    refused: set[Path] = set()
+
+    def busy_the_first_time(self, missing_ok=False):
+        if self.suffix == ".pcm" and self not in refused:
+            refused.add(self)
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", busy_the_first_time)
+    job, found = rip_it(rig)
+    assert job.status == "done" and found["status"] == "done" and len(refused) == 3
+    assert not list(scratch.glob("*.pcm"))
+
+
+def test_copies_left_in_the_cache_by_an_earlier_rip_are_cleared_when_the_next_one_starts(rig) -> None:
+    scratch = rig.ctx.data_dir / "cache" / "discs"
+    scratch.mkdir(parents=True)
+    (scratch / "0123456789ab-01.pcm").write_bytes(b"left behind")
+    (scratch / "keep.txt").write_bytes(b"not a temporary copy")
+    job, _ = rip_it(rig)
+    assert job.status == "done" and not list(scratch.glob("*.pcm")) and (scratch / "keep.txt").exists()
+
+
+def test_a_file_that_a_scanner_still_holds_is_tagged_and_renamed_once_it_is_let_go(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ripping, "PATIENCE", (0, 0, 0))
+    real_tags, real_replace, real_rename = ripping.write_tags, os.replace, os.rename
+    refused = {"tags": 0, "rename": 0}
+
+    def tags_busy(path, fmt, tags, cover=None):
+        if tags.track_number == 2 and refused["tags"] < 2:
+            refused["tags"] += 1
+            raise TagError("The file is read-only or in use by another program.", busy=True)
+        real_tags(path, fmt, tags, cover)
+
+    def rename_busy(source, target, *args, **kwargs):
+        if str(source).endswith("03 - Third.flac.part") and refused["rename"] < 2:
+            refused["rename"] += 1
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return (real_rename if os.name == "nt" else real_replace)(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(ripping, "write_tags", tags_busy)
+    monkeypatch.setattr(os, "rename" if os.name == "nt" else "replace", rename_busy)
+    job, found = rip_it(rig)
+    assert job.status == "done" and found["status"] == "done" and refused == {"tags": 2, "rename": 2}
+    assert [t["status"] for t in found["tracks"]] == ["done", "done", "done"] and not list(rig.music.rglob("*.part"))
+
+
+def test_a_song_that_stays_locked_is_marked_and_the_others_are_still_ripped(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ripping, "PATIENCE", (0, 0))
+    real_replace, real_rename = os.replace, os.rename
+
+    def locked(source, target, *args, **kwargs):
+        if str(source).endswith("02 - Second.flac.part"):
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return (real_rename if os.name == "nt" else real_replace)(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename" if os.name == "nt" else "replace", locked)
+    job, found = rip_it(rig)
+    assert job.status == "done" and found["status"] == "partial"
+    assert [t["status"] for t in found["tracks"]] == ["done", "failed", "done"] and "could not be saved" in found["tracks"][1]["message"]
+    assert not list(rig.music.rglob("*.part")) and set(songs_in_library(rig)) == {"First", "Third"}
+
+
+def test_a_song_that_is_already_gone_is_forgotten_by_the_library_when_the_rip_is_taken_back(rig, recycle) -> None:
+    _, found = rip_it(rig, cover=False)
+    (album(rig) / "02 - Second.flac").unlink()
+    job = rig.ctx.jobs.wait(rig.client.post(f"/api/discs/rips/{found['id']}/undo").json()["job"]["id"], timeout=30)
+    assert job.status == "done" and job.result["gone"] == 1 and job.result["trashed"] == 2
+    assert songs_in_library(rig) == {} and rig.client.get(f"/api/discs/rips/{found['id']}").json()["undone_at"]
+
+
+def test_a_song_the_recycle_bin_refuses_is_reported_and_the_rip_is_not_marked_as_taken_back(rig, recycle, monkeypatch: pytest.MonkeyPatch) -> None:
+    import send2trash
+
+    _, found = rip_it(rig, cover=False)
+    stuck = album(rig) / "02 - Second.flac"
+    works = send2trash.send2trash
+
+    def refuse_the_second(path):
+        if Path(path) == stuck:
+            raise OSError("The Recycle Bin is not available")
+        works(path)
+
+    monkeypatch.setattr(send2trash, "send2trash", refuse_the_second)
+    job = rig.ctx.jobs.wait(rig.client.post(f"/api/discs/rips/{found['id']}/undo").json()["job"]["id"], timeout=30)
+    assert job.status == "done" and job.result["trashed"] == 2 and job.result["failed"] == [{"path": str(stuck), "reason": "The Recycle Bin is not available"}]
+    assert stuck.exists() and set(songs_in_library(rig)) == {"Second"}
+    assert rig.client.get(f"/api/discs/rips/{found['id']}").json()["undone_at"] is None
+
+
+def test_a_file_that_was_there_before_the_rip_is_not_touched_when_the_rip_is_taken_back(rig, recycle) -> None:
+    album(rig).mkdir(parents=True)
+    (album(rig) / "02 - Second.flac").write_bytes(b"mine")
+    _, found = rip_it(rig, cover=False)
+    job = rig.ctx.jobs.wait(rig.client.post(f"/api/discs/rips/{found['id']}/undo").json()["job"]["id"], timeout=30)
+    assert job.status == "done" and job.result["trashed"] == 2 and job.result["changed"] == [] and job.result["failed"] == []
+    assert (album(rig) / "02 - Second.flac").read_bytes() == b"mine" and [p.name for p in album(rig).iterdir()] == ["02 - Second.flac"]
+    assert rig.client.get(f"/api/discs/rips/{found['id']}").json()["undone_at"]
+
+
+def test_a_song_whose_size_changed_is_left_alone_even_when_its_date_was_put_back(rig, recycle) -> None:
+    _, found = rip_it(rig, cover=False)
+    edited = album(rig) / "02 - Second.flac"
+    stamp = edited.stat()
+    with edited.open("ab") as handle:
+        handle.write(b"\0" * 8)
+    os.utime(edited, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    job = rig.ctx.jobs.wait(rig.client.post(f"/api/discs/rips/{found['id']}/undo").json()["job"]["id"], timeout=30)
+    assert job.status == "done" and job.result["trashed"] == 2 and job.result["changed"] == [str(edited)] and edited.exists()
+
+
+def test_a_drive_the_helper_does_not_list_is_not_opened_even_if_it_would_answer(rig) -> None:
+    add_drive(rig.world, "G", disc=audio_disc(seed=3, tracks=(70, 70), label="HIDDEN"))
+    set_control(rig.world, unlisted=["G"])  # (the stand-in still answers for it, as a careless helper might)
+    assert [d["id"] for d in rig.client.get("/api/discs/drives?fresh=true").json()["drives"]] == ["E:", "F:"]
+    assert rig.client.get("/api/discs/drives/G:/disc").status_code == 404
+    assert rig.client.get("/api/discs/drives/E:/disc").status_code == 200
+
+
+def test_a_rip_is_refused_when_the_folder_changed_since_the_preview(rig) -> None:
+    asked = body(rig)
+    assert rig.client.post("/api/discs/rip/preview", json=asked).status_code == 200
+    album(rig).mkdir(parents=True)
+    for name in ("01 - First", "02 - Second", "03 - Third"):
+        (album(rig) / f"{name}.flac").write_bytes(b"mine")
+    refused = rig.client.post("/api/discs/rip/start", json=asked)
+    assert refused.status_code == 409 and "nothing to rip" in refused.json()["detail"]
+    assert rig.client.get("/api/discs/rips").json()["rips"] == []
+
+
+def test_temporary_files_that_cannot_be_deleted_do_not_stop_the_rip(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    scratch = rig.ctx.data_dir / "cache" / "discs"
+    scratch.mkdir(parents=True)
+    (scratch / "0123456789ab-01.pcm").write_bytes(b"left behind by an earlier rip")
+    unlink = Path.unlink
+
+    def held_by_another_program(self, missing_ok=False):
+        if self.suffix == ".pcm":
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", held_by_another_program)
+    job, found = rip_it(rig)
+    assert job.status == "done" and found["status"] == "done" and [t["status"] for t in found["tracks"]] == ["done", "done", "done"]
+    assert set(songs_in_library(rig)) == {"First", "Second", "Third"} and not list(rig.music.rglob("*.part"))
+
+
+def test_a_half_written_song_that_cannot_be_deleted_at_once_is_removed_at_the_end(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = ripping.write_tags
+
+    def tag_then_someone_takes_the_name(path, fmt, tags, cover=None):
+        real(path, fmt, tags, cover)
+        if tags.track_number == 2:
+            Path(str(path)[: -len(".part")]).write_bytes(b"mine")
+
+    unlink = Path.unlink
+    refused: set[Path] = set()
+
+    def busy_the_first_time(self, missing_ok=False):
+        if self.suffix == ".part" and self not in refused:
+            refused.add(self)
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(ripping, "write_tags", tag_then_someone_takes_the_name)
+    monkeypatch.setattr(Path, "unlink", busy_the_first_time)
+    job, found = rip_it(rig)
+    assert job.status == "done" and [t["status"] for t in found["tracks"]] == ["done", "failed", "done"]
+    assert (album(rig) / "02 - Second.flac").read_bytes() == b"mine" and not list(rig.music.rglob("*.part"))
+
+
+def test_tags_are_tried_again_a_few_times_while_the_file_is_in_use_and_then_the_rip_ends(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ripping, "PATIENCE", (0, 0))
+    attempts: list[int] = []
+
+    def always_in_use(path, fmt, tags, cover=None):
+        attempts.append(tags.track_number)
+        raise TagError("The file is read-only or in use by another program.", busy=True)
+
+    monkeypatch.setattr(ripping, "write_tags", always_in_use)
+    job, found = rip_it(rig)
+    assert job.status == "error" and "in use by another program" in job.error
+    assert attempts == [1, 1, 1], "the first try and two more"
+    assert found["status"] == "failed" and not list(rig.music.rglob("*.part")) and not list(rig.music.rglob("*.flac"))
+
+
+def test_a_tag_error_that_waiting_cannot_cure_is_not_tried_again(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ripping, "PATIENCE", (0, 0))
+    attempts: list[int] = []
+
+    def broken(path, fmt, tags, cover=None):
+        attempts.append(tags.track_number)
+        raise TagError("The tags could not be written (No space left on device).")
+
+    monkeypatch.setattr(ripping, "write_tags", broken)
+    job, _ = rip_it(rig)
+    assert job.status == "error" and "No space left" in job.error and attempts == [1]
+
+
+def test_a_name_taken_between_the_check_and_the_rename_is_not_replaced(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = ripping._move_into_place
+
+    def refuse_the_second(source, target):
+        if target.name.startswith("02"):
+            raise FileExistsError(17, "File exists")
+        real(source, target)
+
+    monkeypatch.setattr(ripping, "_move_into_place", refuse_the_second)
+    job, found = rip_it(rig)
+    assert job.status == "done" and [t["status"] for t in found["tracks"]] == ["done", "failed", "done"]
+    assert "appeared while the song was being ripped" in found["tracks"][1]["message"] and not list(rig.music.rglob("*.part"))

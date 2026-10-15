@@ -133,3 +133,45 @@ def test_a_missing_audio_library_is_explained(monkeypatch: pytest.MonkeyPatch, t
     monkeypatch.setattr(builtins, "__import__", refuse)
     with pytest.raises(EncodeError, match="could not be loaded"):
         Encoder(tmp_path / "x.flac", "flac")
+
+
+def test_the_mp3_is_as_loud_as_what_went_in(tmp_path: Path) -> None:
+    path = tmp_path / "song.mp3"
+    encode_pcm(io.BytesIO(PCM), path, "mp3", "320")
+    original = np.frombuffer(PCM, dtype="<i2").reshape(-1, 2).astype(float)[6000:-6000]
+    heard = decoded(path).astype(float)[6000:-6000]
+    assert float(np.sqrt((heard**2).mean()) / np.sqrt((original**2).mean())) == pytest.approx(1.0, abs=0.01)
+
+
+def test_a_full_disk_is_explained_in_words_and_any_other_failure_says_what_it_was(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    def full(_samples) -> None:
+        raise OSError(28, "No space left on device")
+
+    def other(_samples) -> None:
+        raise RuntimeError("the encoder broke")
+
+    with Encoder(tmp_path / "a.flac", "flac") as encoder:
+        encoder._file, real = SimpleNamespace(write=full, close=lambda: None), encoder._file
+        with pytest.raises(EncodeError, match="not enough room"):
+            encoder.write(PCM[:400])
+        encoder._file = SimpleNamespace(write=other, close=lambda: None)
+        with pytest.raises(EncodeError, match="the encoder broke"):
+            encoder.write(PCM[:400])
+        encoder._file = real
+
+
+def test_a_stream_that_is_not_at_its_start_is_encoded_from_its_start(tmp_path: Path) -> None:
+    source = io.BytesIO(PCM)
+    source.seek(0, 2)
+    path = tmp_path / "song.flac"
+    encode_pcm(source, path, "flac")
+    assert decoded(path).tobytes() == PCM
+
+
+def test_mp3_is_256_kbps_unless_another_is_chosen(tmp_path: Path) -> None:
+    path = tmp_path / "song.mp3"
+    with Encoder(path, "mp3") as encoder:
+        encoder.write(PCM)
+    assert abs(MP3(path).info.bitrate / 1000 - 256) <= 1

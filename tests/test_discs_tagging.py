@@ -6,6 +6,7 @@ import io
 from pathlib import Path
 
 import pytest
+from mutagen import MutagenError
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from PIL import Image
@@ -27,7 +28,7 @@ def cover() -> bytes:
 
 def tags(**changes) -> SongTags:
     base = dict(
-        title="Big in Japan", artist="Guano Apes", album="Don’t Give Me Names", album_artist="Guano Apes", track_number=3, track_total=15,
+        title="Big in Japan", artist="Guano Apes", album="Don’t Give Me Names", album_artist="The Album Artist", track_number=3, track_total=15,
         disc_number=2, disc_total=2, year=2000, date="2000-05-02", genre="Rock", recording_id=RECORDING, release_id=RELEASE,
         release_group_id=GROUP, artist_ids=[ARTIST], barcode="743217522421", label="BMG",
     )
@@ -48,7 +49,7 @@ def test_flac_gets_vorbis_comments_musicbrainz_ids_and_a_front_cover(tmp_path: P
     write_tags(path, "flac", tags(), cover())
     audio_file = FLAC(path)
     got = {k.lower(): v for k, v in audio_file.tags.items()}
-    assert got["title"] == ["Big in Japan"] and got["artist"] == ["Guano Apes"] and got["albumartist"] == ["Guano Apes"]
+    assert got["title"] == ["Big in Japan"] and got["artist"] == ["Guano Apes"] and got["albumartist"] == ["The Album Artist"]
     assert got["album"] == ["Don’t Give Me Names"] and got["date"] == ["2000-05-02"] and got["genre"] == ["Rock"]
     assert (got["tracknumber"], got["tracktotal"], got["discnumber"], got["disctotal"]) == (["3"], ["15"], ["2"], ["2"])
     assert got["musicbrainz_trackid"] == [RECORDING] and got["musicbrainz_albumid"] == [RELEASE] and got["musicbrainz_releasegroupid"] == [GROUP]
@@ -84,7 +85,7 @@ def test_mp3_gets_id3v23_with_musicbrainz_ids_and_a_front_cover(tmp_path: Path) 
     write_tags(path, "mp3", tags(), cover())
     frames = ID3(path)
     assert frames.version[:2] == (2, 3), "v2.3: every player and device reads it"
-    assert str(frames["TIT2"]) == "Big in Japan" and str(frames["TPE1"]) == "Guano Apes" and str(frames["TPE2"]) == "Guano Apes"
+    assert str(frames["TIT2"]) == "Big in Japan" and str(frames["TPE1"]) == "Guano Apes" and str(frames["TPE2"]) == "The Album Artist"
     assert str(frames["TALB"]) == "Don’t Give Me Names" and str(frames["TCON"]) == "Rock"
     assert str(frames["TRCK"]) == "3/15" and str(frames["TPOS"]) == "2/2" and str(frames["TDRC"]) == "2000-05-02"  # (read back as v2.4's one date frame)
     stored = ID3(path, translate=False)  # as it is in the file: v2.3 has the year and the day and month apart
@@ -119,7 +120,7 @@ def test_the_library_scanner_reads_what_was_written(tmp_path: Path, fmt: str) ->
     path = song(tmp_path, fmt)
     write_tags(path, fmt, tags(), cover())
     found = scanner.read_basic_tags(path)
-    assert (found["title"], found["artist"], found["album"], found["album_artist"]) == ("Big in Japan", "Guano Apes", "Don’t Give Me Names", "Guano Apes")
+    assert (found["title"], found["artist"], found["album"], found["album_artist"]) == ("Big in Japan", "Guano Apes", "Don’t Give Me Names", "The Album Artist")
     assert (found["track_number"], found["disc_number"], found["year"], found["genre"]) == (3, 2, 2000, "Rock")
     assert found["duration_seconds"] == pytest.approx(2.0, abs=0.1) and found["format"] == fmt
 
@@ -135,3 +136,39 @@ def test_an_unknown_format_or_an_unwritable_file_is_refused(tmp_path: Path) -> N
         write_tags(tmp_path / "x.wav", "wav", tags())
     with pytest.raises(TagError):
         write_tags(tmp_path / "missing.flac", "flac", tags())
+
+
+def test_what_the_file_was_tagged_with_before_is_gone_when_it_is_tagged_again(tmp_path: Path) -> None:
+    path = song(tmp_path, "flac")
+    write_tags(path, "flac", tags(genre="Rock", label="BMG"), cover())
+    write_tags(path, "flac", tags(genre="", label=""), None)
+    audio_file = FLAC(path)
+    assert "genre" not in audio_file and "label" not in audio_file and audio_file.pictures == []
+
+
+def test_a_file_that_cannot_be_written_to_is_explained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from musictoolkit.discs import tagging
+
+    def refused(*_args: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(tagging, "_flac", refused)
+    with pytest.raises(TagError, match="read-only or in use") as caught:
+        write_tags(tmp_path / "x.flac", "flac", tags(), None)
+    assert caught.value.busy is True, "another program may let go of the file in a moment"
+
+    def wrapped(*_args: object) -> None:
+        raise MutagenError(PermissionError(13, "Permission denied"))
+
+    monkeypatch.setattr(tagging, "_flac", wrapped)
+    with pytest.raises(TagError, match="read-only or in use") as caught:
+        write_tags(tmp_path / "x.flac", "flac", tags(), None)
+    assert caught.value.busy is True
+
+    def full(*_args: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tagging, "_flac", full)
+    with pytest.raises(TagError, match="No space left") as caught:
+        write_tags(tmp_path / "x.flac", "flac", tags(), None)
+    assert caught.value.busy is False, "trying again would not help"

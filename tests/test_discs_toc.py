@@ -113,3 +113,11 @@ def test_the_helpers_answer_becomes_a_toc_sorted_by_track_number() -> None:
 def test_a_table_of_contents_no_disc_can_have_is_refused(bad: dict) -> None:
     with pytest.raises(BadToc):
         Toc.from_reply({**reply(), **bad})
+
+
+def test_the_gap_between_the_audio_and_the_data_of_an_enhanced_cd_is_eleven_thousand_four_hundred_sectors() -> None:
+    """The number is MusicBrainz's (the end of the first session, the start of the second and its pre-gap), so it is written out here."""
+    assert CD_EXTRA_GAP == 11400
+    toc = Toc((Track(1, 0), Track(2, 20000), Track(3, 71400, audio=False)), 100000)
+    assert toc.end_of(toc.tracks[1]) == 60000 and toc.sectors_of(toc.tracks[1]) == 40000
+    assert toc.disc_id() == Toc((Track(1, 0), Track(2, 20000)), 60000).disc_id()

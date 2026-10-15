@@ -124,6 +124,7 @@ class DiscHelper:
     def __init__(self, command: list[str] | None = None) -> None:
         self._command = command if command is not None else helper_command()
         self._process: subprocess.Popen | None = None
+        self._complaints: threading.Thread | None = None
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._stderr: deque[str] = deque(maxlen=40)
         self._lock = threading.Lock()  # one request at a time
@@ -150,7 +151,8 @@ class DiscHelper:
         except OSError as exc:
             raise DiscUnavailable(f"The disc helper could not be started ({exc.strerror or exc}).") from None
         threading.Thread(target=self._read_answers, args=(self._process.stdout,), daemon=True).start()
-        threading.Thread(target=self._read_complaints, args=(self._process.stderr,), daemon=True).start()
+        self._complaints = threading.Thread(target=self._read_complaints, args=(self._process.stderr,), daemon=True)
+        self._complaints.start()
         try:
             hello = self._receive(START_TIMEOUT)
         except DiscError as exc:
@@ -186,6 +188,8 @@ class DiscHelper:
                 self.close()
                 raise DiscError("timeout") from None
             if line is None:
+                if self._complaints is not None:
+                    self._complaints.join(timeout=1.0)  # its last words may still be on their way
                 tail = " ".join(self._stderr) or "no details"
                 raise DiscError("stopped", f"The disc helper stopped ({tail[:300]})")
             if not line.startswith("{"):

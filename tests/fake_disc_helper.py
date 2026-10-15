@@ -9,7 +9,9 @@
                               "tracks": [{"number": 1, "audio": true, "sectors": 300}, ...]}     (laid out one after the other from sector 0)
 <root>/control.json          optional, read before every command, to make things go wrong:
     {"unplugged": ["F"],                              the drive is gone
-     "noise": true,                                   stray output between replies
+     "noise": true,                                   stray output between replies (or a list of the lines to print)
+     "lowercase": true,                               the listing gives drive letters in lower case
+     "drives_fail": true,                             the listing is refused ("boom")
      "slow": 0.05,                                    seconds a read takes per sector (cancel can interrupt it)
      "flaky": [{"from": 100, "to": 120, "times": 1}], the first reads of these sectors from the disc come back with a flipped bit
                                                       ("after": k leaves the first k reads alone; "varies": true flips a different bit each time)
@@ -18,7 +20,8 @@
                                                       (what a real drive's cache does, and the reason a re-read must first read elsewhere)
      "change_after": 200,                             after this many reads the disc is reported as changed
      "strict_data": true}                             reading a data track as music is a plain failure, not "unsupported"
-Commands: drives, toc, read, flush, eject, ticks {n} (n progress events), hang (never answers), crash (exits), close.
+Commands: drives, toc, read, flush, eject, ticks {n} (n progress events), hang (never answers), crash (says why on stderr, exits),
+confused (an answer to some other request comes first), nocode (a refusal with no code), silent (a refusal with a code and no words), close.
 
 The audio is a pure function of (seed, sector) - `audio()` - so a test can work out exactly what a good read must give.
 """
@@ -201,20 +204,33 @@ class Fake:
         if cmd == "hang":
             time.sleep(60)
         if cmd == "crash":
+            print("the stand-in crashed on purpose", file=sys.stderr, flush=True)
             os._exit(3)
-        if self.control().get("noise"):
-            print("stray log line from a driver", flush=True)
+        noise = self.control().get("noise")
+        if noise:
+            for line in noise if isinstance(noise, list) else ["stray log line from a driver"]:
+                print(line, flush=True)
+        if cmd == "confused":
+            emit({"id": int(request.get("id") or 0) + 1000, "ok": True, "wrong": True})
+            return {"ok": True}
+        if cmd == "nocode":
+            return {"ok": False, "error": "it went wrong, and the helper gave no code"}
+        if cmd == "silent":
+            return {"ok": False, "code": "no_media"}
+        if cmd == "drives" and self.control().get("drives_fail"):
+            raise Refusal("failed", "boom")
         if cmd == "drives":
             found = []
             for folder in sorted(p for p in self.root.iterdir() if p.is_dir() and (p / "drive.json").exists()):
-                if folder.name in self.control().get("unplugged", []):
+                if folder.name in self.control().get("unplugged", []) or folder.name in self.control().get("unlisted", []):  # (unlisted: still answers, as a careless helper might)
                     continue
                 info = json.loads((folder / "drive.json").read_text())
                 try:
                     disc = json.loads((folder / "disc.json").read_text())
                 except FileNotFoundError:
                     disc = {}
-                found.append({"id": f"{folder.name}:", "name": info.get("name", folder.name), "media": disc.get("kind", "none"), "label": disc.get("label", "")})
+                letter = folder.name.lower() if self.control().get("lowercase") else folder.name
+                found.append({"id": f"{letter}:", "name": info.get("name", folder.name), "media": disc.get("kind", "none"), "label": disc.get("label", "")})
             return {"ok": True, "drives": found}
         if cmd == "toc":
             disc = self.disc(request.get("drive", ""))

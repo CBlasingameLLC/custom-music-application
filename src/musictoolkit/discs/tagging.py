@@ -23,6 +23,10 @@ class TagError(Exception):
 
     for_the_person = True
 
+    def __init__(self, message: str, busy: bool = False) -> None:
+        super().__init__(message)
+        self.busy = busy  # the file is in use by another program for the moment: trying again soon may work
+
 
 @dataclass
 class SongTags:
@@ -70,12 +74,12 @@ def write_tags(path: Path, fmt: str, tags: SongTags, cover: bytes | None = None)
         else:
             raise ValueError(f"cannot tag {fmt} files")
     except PermissionError:
-        raise TagError("The file is read-only or in use by another program.") from None
+        raise TagError("The file is read-only or in use by another program.", busy=True) from None
     except OSError as exc:
         raise TagError(f"The tags could not be written ({exc.strerror or exc}).") from None
     except MutagenError as exc:  # mutagen wraps the OSError of a file it cannot open
         if exc.args and isinstance(exc.args[0], PermissionError):
-            raise TagError("The file is read-only or in use by another program.") from None
+            raise TagError("The file is read-only or in use by another program.", busy=True) from None
         raise TagError(f"The tags could not be written ({exc}).") from None
 
 

@@ -155,10 +155,8 @@ def find_releases(toc: Toc) -> list[Candidate]:
         if getattr(exc.cause, "code", None) in BUSY:
             raise LookupFailed("MusicBrainz is busy right now (it limits how fast apps may ask). Try again in a minute.") from None
         raise LookupFailed("MusicBrainz could not be reached. Check the internet connection and look again.") from None
-    except musicbrainzngs.ResponseError as exc:
+    except musicbrainzngs.ResponseError as exc:  # (a server that is busy never gets here: the library calls that a NetworkError)
         code = getattr(exc.cause, "code", None)
-        if code in BUSY:
-            raise LookupFailed("MusicBrainz is busy right now (it limits how fast apps may ask). Try again in a minute.") from None
         raise LookupFailed(f"MusicBrainz answered with an error{f' ({code})' if code else ''}.") from None
     except musicbrainzngs.WebServiceError as exc:
         logger.warning("MusicBrainz lookup failed: %s", exc)

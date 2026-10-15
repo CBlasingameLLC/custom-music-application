@@ -7,10 +7,12 @@ is complete, so a cancelled or failed rip leaves no half-written song where a pl
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +30,7 @@ logger = logging.getLogger("musictoolkit")
 
 FLAC_RATIO = 0.6  # a FLAC file is roughly this much of the raw audio
 MARGIN = 50 * 1024 * 1024  # room to spare, in bytes
+PATIENCE = (0.2, 0.5, 1.0, 2.0)  # seconds to wait before each further try when Windows says a file is in use
 
 
 # ---------------------------------------------------------------------------------------- what the person decided, and what it comes to
@@ -280,6 +283,9 @@ def run_rip(
     overall = sum(t.sectors for t in tracks) * passes
     before = 0
     cache_dir.mkdir(parents=True, exist_ok=True)
+    for stale in cache_dir.glob("*.pcm"):  # temporary copies an earlier rip could not delete (only one rip runs at a time)
+        with contextlib.suppress(OSError):
+            stale.unlink()
     finished = failed = 0
     status, message = "done", None
     ejected = False
@@ -342,8 +348,10 @@ def run_rip(
             if status == "done" and (failed or not finished):
                 status = "partial" if finished else "failed"
             store.finish_rip(conn, rip_id, status, message)
-        for leftover in cache_dir.glob(f"{batch_id}-*.pcm"):
-            leftover.unlink(missing_ok=True)
+        leftovers = [*cache_dir.glob(f"{batch_id}-*.pcm"), *(t.path.with_name(t.path.name + ".part") for t in tracks if t.path is not None)]
+        for leftover in leftovers:  # (a program that held on to a file a moment ago has most likely let go by now)
+            with contextlib.suppress(OSError):
+                leftover.unlink(missing_ok=True)
     if problem is not None:
         raise problem
     if status == "failed":
@@ -353,6 +361,29 @@ def run_rip(
 
 class _NothingRipped(Exception):
     for_the_person = True
+
+
+def _patiently(action: Callable[[], Any]) -> Any:
+    """Do `action`, trying again a few times if Windows says the file is in use: right after a file was written, a virus scanner, the search indexer or
+    a sync program may hold it for a moment, and it can be neither opened for writing nor renamed until it lets go."""
+    for pause in (*PATIENCE, None):
+        try:
+            return action()
+        except PermissionError:
+            if pause is None:
+                raise
+        except TagError as error:
+            if pause is None or not error.busy:
+                raise
+        time.sleep(pause)
+
+
+def _move_into_place(source: Path, target: Path) -> None:
+    """Rename the finished song to its name. On Windows a name that was taken a moment ago is refused, not replaced."""
+    if os.name == "nt":
+        os.rename(source, target)  # (unlike os.replace, this does not replace a file that is there)
+    else:
+        os.replace(source, target)
 
 
 def _rip_one(
@@ -380,13 +411,20 @@ def _rip_one(
             if error.code == "read_error":
                 raise _TrackFailed(str(error)) from None
             raise
-        write_tags(part, request.format, _tags(request, track, track_total), cover)
+        _patiently(lambda: write_tags(part, request.format, _tags(request, track, track_total), cover))
+        taken = "A file with this name appeared while the song was being ripped. It was left alone."
         if os.path.lexists(track.path):
-            raise _TrackFailed("A file with this name appeared while the song was being ripped. It was left alone.")
-        os.replace(part, track.path)
+            raise _TrackFailed(taken)
+        try:
+            _patiently(lambda: _move_into_place(part, track.path))
+        except FileExistsError:
+            raise _TrackFailed(taken) from None
+        except OSError as error:
+            raise _TrackFailed(f"The song could not be saved as {track.path.name} ({error.strerror or error}).") from None
     finally:
-        raw_path.unlink(missing_ok=True)
-        part.unlink(missing_ok=True)  # nothing is left if the song did not get all the way
+        for temporary in (raw_path, part):  # nothing is left if the song did not get all the way (the end of the rip tries again for a file another program holds)
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
     info = track.path.stat()
     with db() as conn:
         outcome = scanner.add_files(conn, [str(track.path)])

@@ -182,3 +182,17 @@ def test_a_disc_nobody_knows_still_gets_a_track_list_to_fill_in() -> None:
     album = manual_candidate(TOC3)
     assert (album.source, album.release_id, album.title, album.artist) == ("manual", None, "", "")
     assert [(t.number, t.title, t.length_ms) for t in album.tracks] == [(1, "Track 01", 20000), (2, "Track 02", 30000), (3, "Track 03", 25000)]
+
+
+def test_a_server_that_asks_for_slower_requests_is_told_apart_from_no_connection(mb, monkeypatch: pytest.MonkeyPatch) -> None:
+    with serve_script(musicbrainz_script(status=429)) as server:
+        asked(monkeypatch, server)
+        with pytest.raises(LookupFailed, match="busy"):
+            find_releases(TOC3)
+
+
+def test_a_release_known_only_by_its_year_is_not_taken_for_an_earlier_one(mb, monkeypatch: pytest.MonkeyPatch) -> None:
+    releases = [release("year-only", title="Year only", date="2001"), release("dated", title="Dated", date="2001-03-04")]
+    with serve_script(musicbrainz_script(known={ID3: releases})) as server:
+        asked(monkeypatch, server)
+        assert [c.title for c in find_releases(TOC3)] == ["Dated", "Year only"]

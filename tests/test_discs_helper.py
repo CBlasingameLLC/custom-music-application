@@ -126,6 +126,40 @@ def test_stray_output_between_replies_is_not_an_answer(world: Path) -> None:
         assert helper.call("toc", drive="E:")["last"] == 3
 
 
+def test_stray_output_that_is_valid_json_but_no_answer_is_ignored_too(world: Path) -> None:
+    set_control(world, noise=["5", "[1, 2]", "null", "true", '"text"', "stray words"])
+    with start(world) as helper:
+        assert read(helper, 3, 2) == audio(3, 3, 2)
+
+
+def test_an_answer_to_another_request_is_not_taken_for_ours(world: Path) -> None:
+    with start(world) as helper:
+        assert helper.call("confused") == {"id": 1, "ok": True}
+        assert [d["id"] for d in helper.call("drives")["drives"]] == ["E:", "F:"]
+
+
+def test_a_refusal_with_no_code_is_a_failure_and_one_with_no_words_has_the_standard_ones(world: Path) -> None:
+    with start(world) as helper:
+        with pytest.raises(DiscError) as nocode:
+            helper.call("nocode")
+        with pytest.raises(DiscError) as silent:
+            helper.call("silent")
+    assert nocode.value.code == "failed" and "gave no code" in str(nocode.value)
+    assert silent.value.code == "no_media" and str(silent.value) == disc_helper.MESSAGES["no_media"]
+
+
+def test_the_helpers_own_words_are_what_the_person_reads(world: Path) -> None:
+    with start(world) as helper, pytest.raises(DiscError) as caught:
+        helper.call("read", drive="E:", lba=70, count=10)
+    assert caught.value.code == "read_error" and "outside the disc" in str(caught.value)
+
+
+def test_what_a_helper_said_on_its_way_out_is_in_the_message(world: Path) -> None:
+    with start(world) as helper, pytest.raises(DiscError) as caught:
+        helper.call("crash")
+    assert caught.value.code == "stopped" and "crashed on purpose" in str(caught.value)
+
+
 def test_a_helper_that_goes_quiet_is_given_up_on_and_stopped(world: Path) -> None:
     helper = start(world)
     helper.start()
@@ -243,6 +277,19 @@ def test_the_listing_never_raises_and_says_what_went_wrong(monkeypatch: pytest.M
     monkeypatch.setattr(sys, "platform", "linux")
     absent = disc_helper.list_drives()
     assert absent["available"] is False and "Windows" in absent["reason"] and absent["drives"] == []
+
+
+def test_the_letters_the_listing_gives_are_upper_case(monkeypatch: pytest.MonkeyPatch, world: Path) -> None:
+    set_control(world, lowercase=True)
+    monkeypatch.setenv("MTK_DISC_HELPER", json.dumps([sys.executable, str(FAKE), str(world)]))
+    assert [d["id"] for d in disc_helper.list_drives(fresh=True)["drives"]] == ["E:", "F:"]
+
+
+def test_a_helper_that_refuses_the_listing_is_reported_in_it_and_not_raised(monkeypatch: pytest.MonkeyPatch, world: Path) -> None:
+    set_control(world, drives_fail=True)
+    monkeypatch.setenv("MTK_DISC_HELPER", json.dumps([sys.executable, str(FAKE), str(world)]))
+    listing = disc_helper.list_drives(fresh=True)
+    assert listing["available"] is True and listing["drives"] == [] and listing["error"] == "boom"
 
 
 def test_the_listing_is_reused_for_a_moment_and_while_a_rip_has_the_drive_open(monkeypatch: pytest.MonkeyPatch, world: Path) -> None:

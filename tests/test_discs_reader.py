@@ -252,3 +252,35 @@ def test_a_push_that_finds_the_disc_gone_stops_the_rip(code: str) -> None:
     with pytest.raises(DiscError) as stopped:
         read_track(Scripted(DiscError(code)), 0, 16, io.BytesIO(), disc_sectors=DISC_SECTORS, accuracy="fast")
     assert stopped.value.code == code
+
+
+def test_a_block_that_reads_wrongly_five_times_over_is_still_put_right(drive) -> None:
+    root, source = drive
+    set_control(root, flaky=[{"from": 10, "to": 10, "times": 5, "varies": True}])
+    data, stats = rip(source)
+    assert data == audio(SEED, 0, TRACKS[0]) and stats.rereads == 1 and stats.problems == 0, "eight attempts are enough where two would not be"
+
+
+def test_a_cancel_between_the_blocks_of_the_second_pass_is_noticed(drive) -> None:
+    _, source = drive
+    blocks = -(-TRACKS[0] // BLOCK_SECTORS)
+    calls: list[int] = []
+
+    class Stop(Exception):
+        pass
+
+    def check() -> None:
+        calls.append(1)
+        if len(calls) > blocks:  # the first pass is over
+            raise Stop
+
+    with pytest.raises(Stop):
+        rip(source, check=check)
+    assert len(calls) == blocks + 1
+
+
+def test_a_block_put_right_in_the_middle_of_the_disc_goes_where_it_belongs(drive) -> None:
+    root, source = drive
+    set_control(root, flaky=[{"from": TRACKS[0] + 12, "to": TRACKS[0] + 12, "times": 1}])  # a sector of the second track, read wrongly the first time
+    data, stats = rip(source, first=TRACKS[0], count=TRACKS[1])
+    assert data == audio(SEED, TRACKS[0], TRACKS[1]) and stats.rereads == 1 and stats.problems == 0

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -239,3 +240,87 @@ def test_a_rip_that_was_running_when_the_app_stopped_is_marked_and_its_leftovers
     assert done.exists() and not half.exists() and not (cache / "run1-02.pcm").exists() and (cache / "other-01.pcm").exists()
     assert store.get_rip(conn, finished)["status"] == "done"
     assert store.recover(conn, cache) == 0, "once is enough"
+
+
+@pytest.mark.parametrize("error", [KeyError("genre"), ValueError("not a path"), IndexError("no such field")], ids=["KeyError", "ValueError", "IndexError"])
+def test_a_layout_that_cannot_name_one_song_leaves_that_song_out_and_plans_the_rest(
+    music: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    real = rip.organizer.render_relative
+
+    def render(row, scheme, *args, **kwargs):
+        if row["title"] == "Second":
+            raise error
+        return real(row, scheme, *args, **kwargs)
+
+    monkeypatch.setattr(rip.organizer, "render_relative", render)
+    p = plan(music, tmp_path)
+    assert [t.action for t in p.tracks] == ["rip", "problem", "rip"] and p.tracks[1].path is None
+    assert "layout cannot name this song" in p.tracks[1].note and p.problems == []
+
+
+def test_a_song_with_trouble_still_counts_as_a_song_in_the_history(conn, tmp_path: Path) -> None:
+    rip_id = make_rip(conn, tmp_path)
+    store.set_track(conn, rip_id, 1, status="problem", suspect=1)
+    store.set_track(conn, rip_id, 2, status="done")
+    assert store.list_rips(conn)[0]["songs"] == 2
+
+
+def test_the_history_lists_the_newest_rip_first(conn, tmp_path: Path) -> None:
+    first, second, third = (make_rip(conn, tmp_path, batch) for batch in ("a", "b", "c"))
+    conn.execute("UPDATE disc_rips SET started_at = ? WHERE id = ?", ("2020-01-01T00:00:00+00:00", third))
+    conn.commit()
+    assert [r["id"] for r in store.list_rips(conn)] == [second, first, third]
+    assert [r["id"] for r in store.list_rips(conn, limit=1)] == [second]
+
+
+def test_a_rip_cannot_be_taken_back_twice_or_when_it_is_not_known(conn, tmp_path: Path) -> None:
+    rip_id = make_rip(conn, tmp_path)
+    store.finish_rip(conn, rip_id, "done")
+    assert rip.undo_rip(conn, rip_id, [tmp_path], trash=lambda path: None)["trashed"] == 0
+    with pytest.raises(ValueError, match="already been taken back"):
+        rip.undo_rip(conn, rip_id, [tmp_path], trash=lambda path: None)
+    with pytest.raises(ValueError, match="no such rip"):
+        rip.undo_rip(conn, 999, [tmp_path], trash=lambda path: None)
+
+
+def test_on_windows_a_song_is_found_in_the_library_whatever_the_case_of_its_path(conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Windows:  # the same code as it runs there, where one file can be spelled in several ways
+        name = "nt"
+
+        def __getattr__(self, attribute: str):
+            return getattr(os, attribute)
+
+    monkeypatch.setattr(rip, "os", Windows())
+    rip_id = make_rip(conn, tmp_path)
+    song = tmp_path / "one.flac"
+    song.write_bytes(b"x")
+    store.set_track(conn, rip_id, 1, status="done", size=1, mtime=song.stat().st_mtime)
+    conn.execute("INSERT INTO tracks (file_path) VALUES (?)", (str(song).upper(),))
+    conn.commit()
+    result = rip.undo_rip(conn, rip_id, [tmp_path], trash=lambda path: Path(path).unlink())
+    assert result["trashed"] == 1 and not song.exists()
+    assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0, "the library forgot it too"
+
+
+def test_a_song_is_moved_into_place_in_the_way_each_system_does_not_overwrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, Path, Path]] = []
+
+    class System:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def rename(self, source, target) -> None:
+            calls.append(("rename", source, target))
+
+        def replace(self, source, target) -> None:
+            calls.append(("replace", source, target))
+
+        def __getattr__(self, attribute: str):
+            return getattr(os, attribute)
+
+    for name, expected in (("nt", "rename"), ("posix", "replace")):
+        calls.clear()
+        monkeypatch.setattr(rip, "os", System(name))
+        rip._move_into_place(Path("a.part"), Path("a"))
+        assert calls == [(expected, Path("a.part"), Path("a"))], f"on {name}"
