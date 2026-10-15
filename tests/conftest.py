@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import musicbrainzngs
 import pytest
 from fastapi.testclient import TestClient
 from mutagen.easyid3 import EasyID3
@@ -12,6 +13,8 @@ from mutagen.id3 import APIC, ID3
 from PIL import Image
 
 from musictoolkit.config import Config
+from musictoolkit.discs import lookup as disc_lookup
+from musictoolkit.integrations import musicbrainz_client
 from musictoolkit.web.app import create_app
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -111,3 +114,18 @@ def empty_web(tmp_path: Path) -> SimpleNamespace:
 def ids_by_title(client: TestClient) -> dict[str, int]:
     items = client.get("/api/tracks", params={"limit": 1000}).json()["items"]
     return {item["title"]: item["id"] for item in items}
+
+
+@pytest.fixture
+def mb(monkeypatch: pytest.MonkeyPatch):
+    """The MusicBrainz library set up for tests: asks no more than it must, does not wait a minute for a server that is busy, and is put back as it was."""
+    library = musicbrainzngs.musicbrainz
+    for name in ("hostname", "https", "_useragent", "do_rate_limit", "limit_interval", "limit_requests"):
+        monkeypatch.setattr(library, name, getattr(library, name))
+    monkeypatch.setattr(musicbrainz_client, "_configured", musicbrainz_client._configured)
+    monkeypatch.setattr(disc_lookup, "_override_applied", False)
+    musicbrainz_client.configure("Music Toolkit tests", "0", "tests@example.com")
+    monkeypatch.setattr(library, "do_rate_limit", False)
+    original = library._safe_read
+    monkeypatch.setattr(library, "_safe_read", lambda opener, req, body=None, **_: original(opener, req, body, max_retries=2, retry_delay_delta=0.0))
+    return library

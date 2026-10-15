@@ -7,7 +7,6 @@ import socket
 import musicbrainzngs
 import pytest
 
-from musictoolkit.discs import lookup
 from musictoolkit.discs.lookup import LookupFailed, find_releases, manual_candidate
 from musictoolkit.integrations import musicbrainz_client
 from tests.fake_musicbrainz import EXAMPLE_ID, REAL_ANSWER, example_toc, musicbrainz_script, release_xml, three_track_toc
@@ -15,21 +14,6 @@ from tests.fake_streams import serve_script
 
 TOC3 = three_track_toc()
 ID3 = TOC3.disc_id()
-
-
-@pytest.fixture
-def mb(monkeypatch: pytest.MonkeyPatch):
-    """The MusicBrainz library set up for tests: asks no more than it must, does not wait a minute for a server that is busy, and is put back as it was."""
-    library = musicbrainzngs.musicbrainz
-    for name in ("hostname", "https", "_useragent", "do_rate_limit", "limit_interval", "limit_requests"):
-        monkeypatch.setattr(library, name, getattr(library, name))
-    monkeypatch.setattr(musicbrainz_client, "_configured", musicbrainz_client._configured)
-    monkeypatch.setattr(lookup, "_override_applied", False)
-    musicbrainz_client.configure("Music Toolkit tests", "0", "tests@example.com")
-    monkeypatch.setattr(library, "do_rate_limit", False)
-    original = library._safe_read
-    monkeypatch.setattr(library, "_safe_read", lambda opener, req, body=None, **_: original(opener, req, body, max_retries=2, retry_delay_delta=0.0))
-    return library
 
 
 def asked(monkeypatch: pytest.MonkeyPatch, server) -> None:

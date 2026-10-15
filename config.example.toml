@@ -27,3 +27,12 @@ path = "./data/library.db"   # relative paths resolve against this file's folder
 [logging]
 level = "INFO"
 dir = "./logs"
+
+[disc]
+rip_format = "flac"          # flac | mp3
+rip_mp3_quality = "256"      # kbps, constant: 320 | 256 | 192 | 128
+rip_accuracy = "verified"    # verified: read twice and compare, read again what differs | fast: read once
+rip_root = ""                # the library folder rips go into (empty: the first one)
+rip_scheme = ""              # the folder layout of ripped songs (empty: the library's)
+rip_cover = true             # fetch the album's front cover from the Cover Art Archive
+eject_after_rip = true       # take the disc out when a rip finished without trouble

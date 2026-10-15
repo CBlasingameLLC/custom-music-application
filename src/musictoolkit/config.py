@@ -76,6 +76,19 @@ class AppConfig:
 
 
 @dataclass
+class DiscConfig:
+    """What ripping a CD starts with (each rip can change it)."""
+
+    rip_format: str = "flac"  # flac | mp3
+    rip_mp3_quality: str = "256"  # kbps, constant: 320 | 256 | 192 | 128
+    rip_accuracy: str = "verified"  # verified (read twice, compare, read again what differs) | fast (read once)
+    rip_root: str = ""  # the library folder rips go into ("" is the first one)
+    rip_scheme: str = ""  # the folder layout of ripped songs ("" is the library's layout)
+    rip_cover: bool = True  # fetch the album's front cover (Cover Art Archive) and keep it in the songs and beside them
+    eject_after_rip: bool = True  # take the disc out when a rip finished without trouble
+
+
+@dataclass
 class Config:
     library: LibraryConfig = field(default_factory=LibraryConfig)
     musicbrainz: MusicBrainzConfig = field(default_factory=MusicBrainzConfig)
@@ -85,6 +98,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     app: AppConfig = field(default_factory=AppConfig)
+    disc: DiscConfig = field(default_factory=DiscConfig)
 
 
 def resolve_config_path(explicit: str | Path | None) -> Path:
@@ -173,6 +187,7 @@ def load_config(path: Path | str | None = None) -> Config:
         database=database,
         logging=logging_cfg,
         app=_section(AppConfig, raw.get("app", {})),
+        disc=_section(DiscConfig, raw.get("disc", {})),
     )
 
 

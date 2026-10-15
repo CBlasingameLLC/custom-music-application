@@ -20,7 +20,9 @@ _ALPHABET = str.maketrans("+/=", "._-")  # MusicBrainz's base64 uses these in pl
 
 
 class BadToc(ValueError):
-    """The table of contents the drive gave is not one a disc can have."""
+    """The table of contents the drive gave is not one a disc can have. The message is written for the person."""
+
+    for_the_person = True
 
 
 @dataclass(frozen=True)
