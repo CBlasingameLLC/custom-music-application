@@ -25,6 +25,8 @@
      "unlisted": ["G"],                               the listing leaves the drive out, but it still answers (a careless helper)
      "burn_fail_at": 120,                             a burn fails (an underrun) when it has written this many sectors, and ruins the disc
      "write_protected": true,                         every burn and erase is refused as a write-protected disc
+     "corrupt_burn": true,                            a data disc is written with its first file changed in its last byte (a bad burn that looked fine)
+     "no_root": true,                                 a disc with files does not say where they can be read (Windows has not shown them yet)
      "burn_slow": 0.002}                              seconds a burn takes per sector (cancel can interrupt it)
 Commands: drives, toc, read, flush, eject, media, burn_audio, burn_data, build_iso, erase, ticks {n} (n progress events), hang (never
 answers), crash (says why on stderr, exits), confused (an answer to some other request comes first), nocode (a refusal with no code),
@@ -260,7 +262,7 @@ class Fake:
         capacity = int(disc.get("capacity", 0))
         reply.update(state="blank" if blank else "written", type=kind, rewritable=bool(disc.get("rewritable")), blank=blank, capacity_sectors=capacity,
                      free_sectors=capacity if blank else 0, can_audio=bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", [])))
-        if disc.get("kind") == "data":
+        if disc.get("kind") == "data" and not self.control().get("no_root"):
             reply["root"] = str(folder / "files")  # where the files of the disc can be read (Windows gives the drive letter)
         return reply
 
@@ -365,6 +367,11 @@ class Fake:
             shutil.rmtree(root, ignore_errors=True)
             self.ruin(folder, disc)
             raise
+        if self.control().get("corrupt_burn"):
+            first = root.joinpath(*places[0])
+            damaged = bytearray(first.read_bytes())
+            damaged[-1] ^= 1
+            first.write_bytes(bytes(damaged))
         (folder / "disc.json").write_text(json.dumps({
             "kind": "data", "label": str(request.get("label") or ""), "seed": 0, "type": disc.get("type", ""), "rewritable": bool(disc.get("rewritable")),
             "capacity": capacity, "files": manifest, "tracks": [{"number": 1, "audio": False, "sectors": max(need, 1)}],
@@ -398,12 +405,16 @@ class Fake:
         emit({"event": "progress", "id": request.get("id"), "done": len(image) // 2048, "total": len(image) // 2048, "message": "Image written"})
         return {"ok": True, "sectors": len(image) // 2048, "bytes": len(image)}
 
-    def erase(self, request: dict) -> dict:
+    def erase(self, request: dict, emit=None) -> dict:
         folder, info, disc = self.writable(request)
         if disc.get("kind") == "blank":
             return {"ok": True}
         if not disc.get("rewritable"):
             raise Refusal("unsupported", "This disc cannot be erased.")
+        if emit:
+            emit({"event": "progress", "id": request.get("id"), "done": 0, "total": 0, "message": "Erasing the disc (1 seconds so far)"})
+        if self.control().get("burn_slow"):
+            self.pause(float(self.control()["burn_slow"]) * 100)
         (folder / "disc.pcm").unlink(missing_ok=True)
         shutil.rmtree(folder / "files", ignore_errors=True)
         (folder / "disc.json").write_text(json.dumps(blank_disc(type=disc.get("type", "CD-RW"), capacity=int(disc.get("capacity", CD_BLANK_SECTORS)))), encoding="utf-8")
@@ -478,7 +489,7 @@ class Fake:
         if cmd == "build_iso":
             return self.build_iso(request, emit)
         if cmd == "erase":
-            return self.erase(request)
+            return self.erase(request, emit)
         if cmd == "ticks":
             for i in range(int(request.get("n", 3))):
                 emit({"event": "progress", "id": request.get("id"), "done": i + 1, "total": int(request.get("n", 3)), "message": f"step {i + 1}"})

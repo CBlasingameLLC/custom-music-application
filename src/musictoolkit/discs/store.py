@@ -144,13 +144,16 @@ def mark_spoiled(conn: sqlite3.Connection, burn_id: int) -> None:
 
 def finish_burn(
     conn: sqlite3.Connection, burn_id: int, status: str, message: str | None = None, *, sectors: int | None = None, verified: bool | None = None,
-    output: str | None = None,
+    output: str | None = None, spoiled: bool | None = None,
 ) -> None:
-    """The burn is over. A burn that ended well leaves a usable disc, whatever was marked while it was writing."""
+    """The burn is over. A burn that ended well leaves a usable disc, whatever was marked while it was writing. `spoiled` says otherwise
+    when the caller knows better (a stop that came after the disc was finished)."""
     conn.execute(
-        "UPDATE disc_burns SET status = ?, message = ?, finished_at = ?, spoiled = CASE WHEN ? = 'done' THEN 0 ELSE spoiled END, "
+        "UPDATE disc_burns SET status = ?, message = ?, finished_at = ?, "
+        "spoiled = CASE WHEN ? IS NOT NULL THEN ? WHEN ? = 'done' THEN 0 ELSE spoiled END, "
         "sectors = COALESCE(?, sectors), verified = COALESCE(?, verified), output = COALESCE(?, output) WHERE id = ?",
-        (status, message, _now(), status, sectors, None if verified is None else int(verified), output, burn_id),
+        (status, message, _now(), None if spoiled is None else int(spoiled), None if spoiled is None else int(spoiled), status, sectors,
+         None if verified is None else int(verified), output, burn_id),
     )
     if status == "done":
         conn.execute("UPDATE disc_burn_items SET status = 'done' WHERE burn_id = ? AND status = 'waiting'", (burn_id,))
@@ -182,7 +185,6 @@ def recover_burns(conn: sqlite3.Connection, cache_dir: Path | None = None) -> in
         words = "The app was closed before the burn was finished."
         if burn["spoiled"]:
             words += " Writing had begun, so the disc cannot be trusted. A rewritable disc can be erased and used again."
-        conn.execute("UPDATE disc_burn_items SET status = 'failed', message = 'Not written.' WHERE burn_id = ? AND status = 'waiting'", (burn["id"],))
         finish_burn(conn, burn["id"], "interrupted", words)
         if cache_dir is not None and cache_dir.is_dir():
             for leftover in cache_dir.glob(f"{burn['batch_id']}-*.pcm"):

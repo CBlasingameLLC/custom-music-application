@@ -130,9 +130,9 @@ def test_diagnostics_say_which_drives_can_write_and_what(rig) -> None:
 
 
 def test_the_options_say_what_burning_starts_with(rig) -> None:
-    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": True}
+    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": True, "verify": True}
     assert rig.client.put("/api/settings", json={"disc": {"eject_after_burn": False}}).json()["disc"]["eject_after_burn"] is False
-    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": False}
+    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": False, "verify": True}
 
 
 # ---------------------------------------------------------------------------------------- looking before burning
@@ -387,7 +387,7 @@ def test_the_job_looks_at_the_disc_again_before_it_writes(rig) -> None:
     songs = [SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
     plan = burn.plan_audio(songs, found, scratch(rig))
     assert plan.problems == []
-    request = burnjob.AudioRequest(drive="E:", songs=songs, eject=False)
+    request = burnjob.AudioRequest(drive="E:", eject=False)
     with rig.ctx.db() as conn:
         burn_id = burnjob.begin_audio(conn, plan, request, "abc123", found)
     add_drive(rig.world, "E", writer=True, disc=audio_disc(seed=2, tracks=(60,)))  # the disc was changed after the plan was made
@@ -406,7 +406,7 @@ def test_a_disc_with_less_room_than_the_plan_counted_on_is_refused_before_it_is_
     songs = [SongInput(str(rig.music / "Burner" / "Mix" / f"{t}.flac"), t, "Burner", rig.ids[t]) for t, _, _ in SONGS]
     plan = burn.plan_audio(songs, found, scratch(rig))
     assert plan.problems == []
-    request = burnjob.AudioRequest(drive="E:", songs=songs, eject=False)
+    request = burnjob.AudioRequest(drive="E:", eject=False)
     with rig.ctx.db() as conn:
         burn_id = burnjob.begin_audio(conn, plan, request, "tight", found)
     add_drive(rig.world, "E", writer=True, disc=blank_disc(capacity=1200))  # a smaller disc than the plan was made for

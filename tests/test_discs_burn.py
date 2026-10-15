@@ -417,6 +417,12 @@ def test_nothing_chosen_and_nothing_that_can_be_burned(tmp_path: Path) -> None:
             "This CD-RW already has something on it. Erase it first (Erase, on this screen), or put in a blank disc.",
         ),
         ({"type": "DVD-R", "can_audio": False}, "A music CD can only be made on a blank CD-R or CD-RW, and this is a DVD-R."),
+        (
+            {"state": "unusable", "blank": False, "type": "CD-R"},
+            "This drive cannot use this CD-R: it may be damaged, dirty, or a kind of disc the drive does not write. Try another disc.",
+        ),
+        ({"state": "unusable", "blank": False, "type": ""}, "This drive cannot use this disc: it may be damaged, dirty, or a kind of disc the drive does not write. Try another disc."),
+        ({"protected": True}, "This CD-R is write-protected. Use another disc."),
     ],
 )
 def test_a_disc_that_cannot_take_music_says_why(tmp_path: Path, disc: dict | None, said: str) -> None:

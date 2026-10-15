@@ -314,10 +314,14 @@ def media_problems(media: dict[str, Any] | None) -> list[str]:
     if state == "none":
         return ["There is no disc in the drive."]
     kind = str(media.get("type") or "disc")
+    if state == "unusable":
+        return [f"This drive cannot use this {kind}: it may be damaged, dirty, or a kind of disc the drive does not write. Try another disc."]
     if state != "blank" or not media.get("blank"):
         if media.get("rewritable"):
             return [f"This {kind} already has something on it. Erase it first (Erase, on this screen), or put in a blank disc."]
         return [f"This {kind} is not blank, and a disc that has been written cannot be used again. Put in a blank CD-R."]
+    if media.get("protected"):
+        return [f"This {kind} is write-protected. Use another disc."]
     if not media.get("can_audio"):
         return [f"A music CD can only be made on a blank CD-R or CD-RW, and this is a {kind}."]
     return []

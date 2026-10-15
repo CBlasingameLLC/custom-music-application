@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from musictoolkit.discs import burn, store
 from musictoolkit.discs import helper as disc_helper
-from musictoolkit.discs.burn import AudioPlan, BurnError, SongInput
+from musictoolkit.discs.burn import AudioPlan, BurnError
 from musictoolkit.discs.helper import DiscError, DiscHelper, in_use
 
 logger = logging.getLogger("musictoolkit")
@@ -35,7 +35,6 @@ class _State:
 @dataclass
 class AudioRequest:
     drive: str
-    songs: list[SongInput]
     speed: int | None = None  # one of the speeds the recorder listed; None lets it choose
     eject: bool = True
     title: str = ""  # what the history calls this
@@ -137,7 +136,7 @@ def run_audio(
 
             handle.update(done=prepare_units, total=overall, message="Preparing the disc")
             stop_watching = threading.Event()
-            watcher = threading.Thread(target=_pass_on_cancel, args=(handle, helper, stop_watching), daemon=True)
+            watcher = threading.Thread(target=_pass_on_cancel, args=(handle, helper, stop_watching), name="disc-stop-watcher", daemon=True)
             watcher.start()
             try:
                 helper.call(
