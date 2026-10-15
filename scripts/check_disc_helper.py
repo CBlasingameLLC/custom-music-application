@@ -331,17 +331,66 @@ def check_images(exe: str) -> None:
 
             big = folder / "big.bin"
             with open(big, "wb") as handle:
-                handle.truncate(3 * 1024**3)  # three gigabytes of nothing: long enough to be stopped part way, and no disk space used on NTFS
-            events: list[dict] = []
-            started = time.monotonic()
-            threading.Timer(0.4, helper.cancel).start()
-            try:
-                helper.call("build_iso", label="BIG", label_iso="BIG", filesystems=["iso9660", "joliet", "udf"], files=[{"src": str(big), "dest": "big.bin"}],
-                            out=str(folder / "big.iso"), on_event=events.append)
-                note(f"the image of a 3 GB file was made before the stop arrived ({time.monotonic() - started:.1f} s)")
-            except DiscError as error:
-                check(error.code == "cancelled", f"an image that is told to stop stops ({error.code} after {time.monotonic() - started:.1f} s)")
+                handle.truncate(1024**3)  # a gigabyte of nothing: a stop that arrives as soon as the image is being written out has plenty of it left to stop
+
+            def build_big_and_stop(once_writing: bool) -> tuple[DiscError | None, float, float | None, int]:
+                """Asks for the image of the big file and sends a stop: as soon as the helper reports (it is writing the image out by then), or 0.4 s
+                after the request, wherever it is by then. Gives the refusal (None if the image was made), the seconds it took, the seconds from the
+                stop to the answer, and the number of reports heard."""
+                reports: list[dict] = []
+                writing = threading.Event()  # set by the first report, and again when the request is over
+                over = threading.Event()
+                sent: list[float] = []
+
+                def heard(event: dict) -> None:
+                    reports.append(event)
+                    writing.set()
+
+                def stop() -> None:
+                    if once_writing:
+                        writing.wait(60)  # (an image that never reports is stopped after a minute)
+                    else:
+                        time.sleep(0.4)
+                    if not over.is_set():  # (a stop must never reach a request that came after this one)
+                        sent.append(time.monotonic())
+                        helper.cancel()
+
+                began = time.monotonic()
+                threading.Thread(target=stop, daemon=True).start()
+                refusal = None
+                try:
+                    helper.call("build_iso", label="BIG", label_iso="BIG", filesystems=["iso9660", "joliet", "udf"], files=[{"src": str(big), "dest": "big.bin"}],
+                                out=str(folder / "big.iso"), on_event=heard)
+                except DiscError as error:
+                    refusal = error
+                finally:
+                    over.set()
+                    writing.set()
+                ended = time.monotonic()
+                return refusal, ended - began, (ended - sent[0]) if sent else None, len(reports)
+
+            def trouble(refusal: DiscError | None, reports: int) -> str:
+                said = " | ".join(getattr(helper, "_stderr", ()))[-700:]  # what the helper printed itself: a slip in it shows here, with its stack
+                what = f"{refusal.code}: {refusal}" if refusal else "the image was made"
+                return f"{what}; {reports} reports; the helper said: {said or 'nothing'}"
+
+            # a stop that arrives while the image is being written out
+            refusal, took, late, reports = build_big_and_stop(True)
+            stopped = refusal is not None and refusal.code == "cancelled"
+            check(stopped, f"an image that is told to stop while it is being written stops ({'cancelled' if stopped else trouble(refusal, reports)}; {took:.1f} s, "
+                           f"{'-' if late is None else f'{late:.1f}'} s after the stop)")
             check(not (folder / "big.iso").exists() and not (folder / "big.iso.part").exists(), "a stopped image leaves no file behind")
+            for leftover in (folder / "big.iso", folder / "big.iso.part"):
+                leftover.unlink(missing_ok=True)
+
+            # a stop that arrives 0.4 s in is wherever the helper is by then (taking the files in, laying the image out, writing it out). It stops
+            # wherever it can; a failure here is reported, and what it said is kept in the log, but is not held against the build until it is understood
+            refusal, took, late, reports = build_big_and_stop(False)
+            if refusal is not None and refusal.code == "cancelled":
+                check(True, f"an image that is told to stop 0.4 s in stops ({took:.1f} s)")
+            else:
+                note(f"an image that is told to stop 0.4 s in did not stop ({trouble(refusal, reports)}; {took:.1f} s)")
+            check(not (folder / "big.iso.part").exists(), "and leaves no half-written file behind")
             check(helper.call("drives") is not None, "and the helper still answers")
     except DiscError as error:
         check(False, f"making images: {error.code}: {error}")

@@ -822,6 +822,7 @@ namespace MusicToolkit.Disc
                 using (new Watcher(call, () => tao.CancelAddTrack()))
                 {
                     tao.PrepareMedia();
+                    bool stoppedEarly = true;
                     try
                     {
                         for (int i = 0; i < tracks.Count; i++)
@@ -840,10 +841,18 @@ namespace MusicToolkit.Disc
                         }
 
                         reporter.Set(need, need, "Finishing the disc");
+                        stoppedEarly = false;
                     }
                     finally
                     {
-                        tao.ReleaseMedia();
+                        try
+                        {
+                            tao.ReleaseMedia();
+                        }
+                        catch (Exception) when (stoppedEarly)
+                        {
+                            // the reason the writing stopped is what the person is told; that the session could not be closed after it is only a consequence
+                        }
                     }
                 }
             }
@@ -1094,7 +1103,14 @@ namespace MusicToolkit.Disc
                 finally
                 {
                     Marshal.FreeCoTaskMem(read);
-                    Marshal.ReleaseComObject(stream);
+                    try
+                    {
+                        Marshal.ReleaseComObject(stream);
+                    }
+                    catch (Exception)
+                    {
+                        // tidying up must never hide why the image stopped
+                    }
                 }
 
                 File.Move(part, output); // (refuses to replace a file that appeared in the meantime)
@@ -1109,9 +1125,10 @@ namespace MusicToolkit.Disc
                     {
                         File.Delete(part);
                     }
-                    catch (IOException)
+                    catch (Exception)
                     {
-                        // it will be tidied up with the folder
+                        // a program that is still looking at it (a virus scanner) holds it for a moment: it is tidied up with the folder, and the
+                        // reason the image was not made must not be replaced by this
                     }
                 }
             }
