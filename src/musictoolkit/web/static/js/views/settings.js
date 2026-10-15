@@ -216,6 +216,41 @@ function LayoutsCard({ settings }) {
   <//>`;
 }
 
+const RIP_QUALITIES = [['320', '320 kbps: the best'], ['256', '256 kbps'], ['192', '192 kbps'], ['128', '128 kbps: smallest']];
+
+function DiscsCard({ settings }) {
+  const d = settings.disc;
+  const roots = settings.library.roots;
+  const [scheme, setScheme] = useState(d.rip_scheme);
+  const set = (patch) => save({ disc: patch });
+  return html`<${Card} icon="cd" title="Discs" hint="How audio CDs are ripped into the library. Each disc can be ripped differently on the Discs screen; these are what it starts from.">
+    <label class="field narrow"><span>Format</span>
+      <select value=${d.rip_format} onChange=${(e) => set({ rip_format: e.target.value })}>
+        <option value="flac">FLAC: exactly the disc, about half the size</option><option value="mp3">MP3: small files that play anywhere</option>
+      </select></label>
+    <label class="field narrow"><span>MP3 quality</span>
+      <select value=${d.rip_mp3_quality} onChange=${(e) => set({ rip_mp3_quality: e.target.value })}>
+        ${RIP_QUALITIES.map(([value, label]) => html`<option value=${value} key=${value}>${label}</option>`)}
+      </select></label>
+    <label class="field narrow"><span>Accuracy</span>
+      <select value=${d.rip_accuracy} onChange=${(e) => set({ rip_accuracy: e.target.value })}>
+        <option value="verified">Verified: read twice and compare</option><option value="fast">Fast: read once</option>
+      </select></label>
+    <label class="field"><span>Rip into</span>
+      <select value=${roots.includes(d.rip_root) ? d.rip_root : ''} onChange=${(e) => set({ rip_root: e.target.value })}>
+        <option value="">${roots.length ? 'The first music folder' : 'Add a music folder first'}</option>
+        ${roots.map((path) => html`<option value=${path} key=${path}>${path}</option>`)}
+      </select></label>
+    <label class="field"><span>Folder and file names (empty: the same layout as “Tidy up the library as”)</span>
+      <input type="text" class="mono" spellcheck="false" value=${scheme} onInput=${(e) => setScheme(e.target.value)} /></label>
+    <${Button} onClick=${() => set({ rip_scheme: scheme.trim() })}>Save the layout<//>
+    <${Switch} checked=${d.rip_cover} onChange=${(v) => set({ rip_cover: v })}>Put the album's cover picture in the songs and in their folder<//>
+    <${Switch} checked=${d.eject_after_rip} onChange=${(v) => set({ eject_after_rip: v })}>Eject the disc when it is done, unless a part of it could not be read perfectly<//>
+    <p class="note"><${Icon} name="info" size=${14} /><span>Finding the album sends the disc's table of contents (how long each song is) to musicbrainz.org, once the contact email under Accounts and services is set, and fetches the cover from the Cover Art Archive. Nothing else leaves this computer.</span></p>
+    <div class="row-actions"><${Button} icon="cd" onClick=${() => go('/discs')}>Open Discs<//></div>
+  <//>`;
+}
+
 function UpdatesCard({ settings }) {
   const { status } = useStore(updates);
   if (!desktop?.update || !status) return null;
@@ -271,7 +306,7 @@ const failed = (part) => part && part.error;
 /** The report as rows: { ok: true | false | null, label, detail }. null means "just so you know". */
 function diagnosticRows(report, keys, update, shell) {
   const rows = [];
-  const { database: db, library, drives, devices, phones, services, jobs } = report;
+  const { database: db, library, drives, devices, phones, discs, services, jobs } = report;
   if (failed(db)) rows.push({ ok: false, label: 'Library database', detail: db.error });
   else {
     rows.push({ ok: true, label: 'Library database', detail: `${fmt.bytes(db.size)} · ${fmt.plural(db.songs, 'song')} · ${fmt.plural(db.plays, 'play')} recorded · ${fmt.plural(db.playlists, 'playlist')}` });
@@ -286,6 +321,16 @@ function diagnosticRows(report, keys, update, shell) {
   else for (const d of devices) rows.push({ ok: d.connected, label: `${d.kind === 'mtp' ? 'Phone or player' : 'Device'} “${d.label}”`, detail: `${d.connected ? 'connected' : d.kind === 'mtp' ? 'not connected (plug it in, unlock it and choose File transfer)' : 'not connected'} · ${fmt.plural(d.synced, 'song')} copied${d.last_synced_at ? ` · last synced ${fmt.date(d.last_synced_at)}` : ''}` });
   if (failed(phones)) rows.push({ ok: false, label: 'Phones and players', detail: phones.error });
   else if (phones?.supported) rows.push({ ok: phones.available, label: 'Phones and players without a drive letter', detail: phones.available ? 'the helper that talks to them is installed' : phones.reason });
+  if (failed(discs)) rows.push({ ok: false, label: 'CD and DVD drives', detail: discs.error });
+  else if (discs?.supported || discs?.available) {
+    const words = { none: 'no disc', loading: 'reading', audio: 'audio CD', mixed: 'audio CD', data: 'data disc', unknown: 'disc not recognised' };
+    rows.push({
+      ok: discs.available && !discs.error,
+      label: 'CD and DVD drives',
+      detail: !discs.available ? discs.reason : discs.error ? discs.error
+        : discs.drives.length ? discs.drives.map((d) => `${d.id} ${d.name || ''} (${words[d.media] || d.media})`).join(' · ') : 'the helper that reads discs is installed; no drive was found',
+    });
+  }
   if (!failed(services)) {
     const lb = services.listenbrainz;
     const sc = lb.scrobbler;
@@ -409,6 +454,7 @@ export function SettingsView() {
       <${OnlineCard} settings=${settings} />
       <${ListenCard} settings=${settings} />
       <${LayoutsCard} settings=${settings} />
+      <${DiscsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
       <${AppearanceCard} />

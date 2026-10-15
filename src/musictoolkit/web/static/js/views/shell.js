@@ -48,6 +48,7 @@ export function Sidebar() {
     <div class="nav-group" role="group" aria-labelledby="nav-manage">
       <div class="nav-label" id="nav-manage">Manage</div>
       <${NavItem} to="/tools" icon="wrench" label="Library tools" match=${starts('/tools')} />
+      <${NavItem} to="/discs" icon="cd" label="Discs" match=${starts('/discs')} />
       <${NavItem} to="/devices" icon="drive" label="Devices" match=${starts('/devices')} />
       <${NavItem} to="/settings" icon="sliders" label="Settings" />
     </div>
@@ -118,6 +119,9 @@ function summarize(job) {
   if (job.kind === 'dedupe-purge') return `${r.moved || 0} moved to the Recycle Bin${r.skipped ? ` · ${r.skipped} left alone` : ''}`;
   if (job.kind === 'radar') return `${r.new || 0} new ${r.new === 1 ? 'release' : 'releases'}${r.owned ? ` · ${r.owned} already in your library` : ''}${r.source ? ` · from ${r.source === 'listenbrainz' ? 'ListenBrainz' : 'MusicBrainz'}` : ''}`;
   if (job.kind === 'podcasts') return `${r.new || 0} new ${r.new === 1 ? 'episode' : 'episodes'} · ${fmt.plural(r.checked || 0, 'podcast')} checked${r.errors ? ` · ${r.errors} could not be read` : ''}`;
+  if (job.kind === 'rip') return `${r.ripped || 0} ${r.ripped === 1 ? 'song' : 'songs'} ripped${r.failed ? ` · ${r.failed} could not be read` : ''}${r.ejected ? ' · disc ejected' : ''}`;
+  if (job.kind === 'rip-undo') return `${r.trashed || 0} moved to the Recycle Bin${r.changed?.length ? ` · ${r.changed.length} changed since, left alone` : ''}${r.failed?.length ? ` · ${r.failed.length} could not be moved` : ''}`;
+  if (job.kind === 'disc-lookup') return `${(r.candidates || []).length} ${(r.candidates || []).length === 1 ? 'album' : 'albums'} found`;
   if (job.kind === 'enrich') return `${r.found || 0} matches · ${r.no_match || 0} without a match${r.errors ? ` · ${r.errors} errors` : ''}`;
   if (job.kind === 'sync-preview') return `${r.to_copy || 0} to copy · ${r.unchanged || 0} already there${r.to_prune ? ` · ${r.to_prune} no longer chosen` : ''}`;
   if (job.kind === 'sync') return `${r.copied || 0} copied${r.pruned ? ` · ${r.pruned} removed` : ''}${r.errors_total ? ` · ${r.errors_total} failed` : ''}${r.aborted ? ` · stopped early` : ''}`;
