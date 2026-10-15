@@ -373,7 +373,7 @@ def test_an_image_that_fails_leaves_no_file_behind(rig, monkeypatch: pytest.Monk
 def test_an_image_that_is_stopped_before_it_begins_is_not_made(rig) -> None:
     songs = [datadisc.DataSong(str(rig.music / "Artist A" / "Album 1" / "01 One.mp3"), "One", "A", 1, root=str(rig.music))]
     plan = datadisc.plan_data(songs)
-    request = datajob.IsoRequest(folder=str(rig.home / "Downloads"))
+    request = datajob.IsoRequest()
     with rig.ctx.db() as conn:
         burn_id = datajob.begin_iso(conn, plan, request, "iso1")
     output = rig.home / "Downloads" / "x.iso"
@@ -529,7 +529,7 @@ def test_a_data_burn_is_named_after_its_label_and_files_or_as_given(rig) -> None
     found = rig.client.get("/api/discs/media/E:").json()
     plan = datadisc.plan_data(data_songs(rig, ONE), label="Mix", media=found)
     assert datajob.title_of(datajob.DataRequest(drive="E:"), plan) == "Data disc Mix (1 file)"
-    assert datajob.title_of(datajob.IsoRequest(folder="x"), plan) == "Disc image Mix (1 file)"
+    assert datajob.title_of(datajob.IsoRequest(), plan) == "Disc image Mix (1 file)"
     assert datajob.title_of(datajob.DataRequest(drive="E:", title="  My disc \n"), plan) == "My disc"
     gone = data_songs(rig, ONE, TWO, THREE) + [datadisc.DataSong(str(rig.music / "gone.mp3"), "gone", root=str(rig.music))]
     assert datajob.title_of(datajob.DataRequest(drive="E:"), datadisc.plan_data(gone, label="Mix", media=found)) == "Data disc Mix (3 files)"

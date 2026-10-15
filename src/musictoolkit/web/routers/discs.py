@@ -502,10 +502,7 @@ def data_start(body: DataBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, 
     plan = _data_plan(ctx, body.track_ids, body.layout, body.label, media_found)  # plan again: the disc or the files may have changed since
     if plan.problems:
         raise HTTPException(status_code=409, detail=plan.problems[0])
-    request = datajob.DataRequest(
-        drive=drive, layout=body.layout, label=plan.label, speed=body.speed, eject=body.eject, verify=body.verify,
-        title=body.title,
-    )
+    request = datajob.DataRequest(drive=drive, speed=body.speed, eject=body.eject, verify=body.verify, title=body.title)
     batch_id = rip.new_batch_id()
     with ctx.db() as conn:
         burn_id = datajob.begin_data(conn, plan, request, batch_id, media_found)
@@ -535,7 +532,7 @@ def iso_start(body: IsoBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, An
     if plan.problems:
         raise HTTPException(status_code=409, detail=plan.problems[0])
     output = datadisc.iso_target(folder, plan.label)  # (never a name that is taken: one that appeared since the preview gets another)
-    request = datajob.IsoRequest(folder=str(folder), layout=body.layout, label=plan.label, title=body.title)
+    request = datajob.IsoRequest(title=body.title)
     batch_id = rip.new_batch_id()
     with ctx.db() as conn:
         burn_id = datajob.begin_iso(conn, plan, request, batch_id)

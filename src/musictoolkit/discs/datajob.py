@@ -28,7 +28,6 @@ logger = logging.getLogger("musictoolkit")
 MOUNT_WAIT = 90.0  # seconds Windows may take to show the files of a disc that has just been written
 MOUNT_LOOK = 1.0
 ERASE_TIMEOUT = 3600.0  # a full erase of a rewritable disc takes many minutes; IMAPI itself gives up after an hour
-REWRITABLE = ("CD-RW", "DVD-RW", "DVD+RW", "DVD-RAM", "BD-RE")
 TRANSIENT = ("not_ready", "busy", "no_media", "media_changed")  # what a drive says for a moment after it has written and closed a disc
 
 
@@ -43,8 +42,6 @@ class _State:
 @dataclass
 class DataRequest:
     drive: str
-    layout: str = "library"
-    label: str = ""
     speed: int | None = None
     eject: bool = True
     verify: bool = True
@@ -53,9 +50,6 @@ class DataRequest:
 
 @dataclass
 class IsoRequest:
-    folder: str
-    layout: str = "library"
-    label: str = ""
     title: str = ""
 
 
