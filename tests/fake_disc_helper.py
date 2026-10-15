@@ -3,10 +3,12 @@
     python tests/fake_disc_helper.py <root>          run it (what MTK_DISC_HELPER points at)
     python tests/fake_disc_helper.py --make <root>   make a small world to run it in: drive E: with a 2-track audio disc, drive F: empty
 
-<root>/<letter>/drive.json   {"name": "Stand-in CD/DVD drive"}            one folder per drive (E, F, ...)
+<root>/<letter>/drive.json   {"name": "Stand-in CD/DVD drive", "writer": false, "writes": ["CD-R", "CD-RW"]}     one folder per drive (E, F, ...)
 <root>/<letter>/disc.json    present while a disc is in the drive:
-                             {"kind": "audio" | "data" | "blank", "label": "...", "seed": 1,
-                              "tracks": [{"number": 1, "audio": true, "sectors": 300}, ...]}     (laid out one after the other from sector 0)
+                             {"kind": "audio" | "data" | "blank" | "unknown", "label": "...", "seed": 1,
+                              "tracks": [{"number": 1, "audio": true, "sectors": 300}, ...]}     (laid out one after the other from sector 0,
+                             unless a track has a "start"; "pcm": "disc.pcm" holds the audio of a disc that was burned here)
+                             a blank or burned disc also has "type" ("CD-R", "CD-RW", ...), "rewritable" and "capacity" (sectors)
 <root>/control.json          optional, read before every command, to make things go wrong:
     {"unplugged": ["F"],                              the drive is gone
      "noise": true,                                   stray output between replies (or a list of the lines to print)
@@ -19,9 +21,14 @@
      "cache": 512,                                    the drive remembers the last N sectors it read: reading them again gives the same data
                                                       (what a real drive's cache does, and the reason a re-read must first read elsewhere)
      "change_after": 200,                             after this many reads the disc is reported as changed
-     "strict_data": true}                             reading a data track as music is a plain failure, not "unsupported"
-Commands: drives, toc, read, flush, eject, ticks {n} (n progress events), hang (never answers), crash (says why on stderr, exits),
-confused (an answer to some other request comes first), nocode (a refusal with no code), silent (a refusal with a code and no words), close.
+     "strict_data": true,                             reading a data track as music is a plain failure, not "unsupported"
+     "unlisted": ["G"],                               the listing leaves the drive out, but it still answers (a careless helper)
+     "burn_fail_at": 120,                             a burn fails (an underrun) when it has written this many sectors, and ruins the disc
+     "write_protected": true,                         every burn and erase is refused as a write-protected disc
+     "burn_slow": 0.002}                              seconds a burn takes per sector (cancel can interrupt it)
+Commands: drives, toc, read, flush, eject, media, burn_audio, burn_data, build_iso, erase, ticks {n} (n progress events), hang (never
+answers), crash (says why on stderr, exits), confused (an answer to some other request comes first), nocode (a refusal with no code),
+silent (a refusal with a code and no words), close.
 
 The audio is a pure function of (seed, sector) - `audio()` - so a test can work out exactly what a good read must give.
 """
@@ -36,6 +43,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -77,10 +85,22 @@ def audio_disc(*, seed: int = 1, tracks: tuple[int, ...] = (60, 80, 70), label: 
     return {"kind": "audio", "label": label, "seed": seed, "tracks": layout}
 
 
-def add_drive(root: Path, letter: str, *, name: str = "Stand-in CD/DVD drive", disc: dict | None = None) -> Path:
+CD_TYPES = ("CD-R", "CD-RW")
+CD_BLANK_SECTORS = 359846  # a blank 80-minute CD-R holds this many sectors (a little under 80 minutes)
+SPEEDS = (8, 16, 24, 32, 48)  # what the stand-in writer offers, as multiples of 75 sectors a second
+
+
+def blank_disc(*, type: str = "CD-R", capacity: int = CD_BLANK_SECTORS, label: str = "") -> dict:
+    """A disc that has nothing on it yet. (CD-RW and the other rewritable kinds can be erased back to this.)"""
+    return {"kind": "blank", "type": type, "rewritable": type.endswith("RW"), "capacity": capacity, "label": label}
+
+
+def add_drive(
+    root: Path, letter: str, *, name: str = "Stand-in CD/DVD drive", disc: dict | None = None, writer: bool = False, writes: tuple[str, ...] = CD_TYPES
+) -> Path:
     folder = Path(root) / letter.upper().rstrip(":")
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "drive.json").write_text(json.dumps({"name": name}), encoding="utf-8")
+    (folder / "drive.json").write_text(json.dumps({"name": name, "writer": writer, "writes": list(writes) if writer else []}), encoding="utf-8")
     if disc is not None:
         (folder / "disc.json").write_text(json.dumps(disc), encoding="utf-8")
     return folder
@@ -99,7 +119,9 @@ def layout(disc: dict) -> tuple[list[dict], int]:
     start = 0
     tracks = []
     for t in disc.get("tracks", []):
-        if not t["audio"] and tracks and tracks[-1]["audio"]:
+        if "start" in t:  # a disc that was burned here says where each track starts (a gap of silence lies between them)
+            start = t["start"]
+        elif not t["audio"] and tracks and tracks[-1]["audio"]:
             start += CD_EXTRA_GAP
         tracks.append({"number": t["number"], "audio": bool(t["audio"]), "start": start, "sectors": t["sectors"]})
         start += t["sectors"]
@@ -152,11 +174,19 @@ class Fake:
                 raise Refusal("cancelled", "Stopped.")
             time.sleep(0.01)
 
-    def sector(self, disc: dict, tracks: list[dict], number: int, control: dict) -> bytes:
+    def audio_of(self, disc: dict, drive: str, number: int) -> bytes:
+        """What sector `number` holds: the pure function of the seed, or (for a disc that was burned here) what was written."""
+        if disc.get("pcm"):
+            with (self.folder(drive) / disc["pcm"]).open("rb") as stored:
+                stored.seek(number * SECTOR_BYTES)
+                return stored.read(SECTOR_BYTES).ljust(SECTOR_BYTES, b"\0")
+        return sector_audio(int(disc.get("seed", 0)), number)
+
+    def sector(self, disc: dict, tracks: list[dict], number: int, control: dict, drive: str = "") -> bytes:
         track = next((t for t in tracks if t["start"] <= number < t["start"] + t["sectors"]), None)
-        if track is None:
+        if track is None and not (disc.get("pcm") and number < tracks[-1]["start"] + tracks[-1]["sectors"]):  # (the gaps between burned songs can be read: they are silence)
             raise Refusal("read_error", "That sector is outside the disc.")
-        if not track["audio"]:
+        if track is not None and not track["audio"]:
             raise Refusal("failed" if control.get("strict_data") else "unsupported", "That is a data track, not audio.")
         size = int(control.get("cache", 0))
         if size and number in self.cache:
@@ -165,7 +195,7 @@ class Fake:
         for bad in control.get("bad", []):
             if bad["from"] <= number <= bad["to"]:
                 raise Refusal("read_error", f"The drive could not read sector {number}.")
-        data = sector_audio(int(disc.get("seed", 0)), number)
+        data = self.audio_of(disc, drive, number)
         for index, flaky in enumerate(control.get("flaky", [])):
             if flaky["from"] <= number <= flaky["to"]:
                 self.flaky_used[(index, number)] += 1
@@ -196,8 +226,198 @@ class Fake:
         for number in range(lba, lba + count):
             if keep and control.get("slow"):
                 self.pause(float(control["slow"]))
-            out.append(self.sector(disc, tracks, number, control))
+            out.append(self.sector(disc, tracks, number, control, request.get("drive", "")))
         return b"".join(out) if keep else b""
+
+    # ------------------------------------------------------------------------------------- writing
+
+    def info(self, drive: str) -> dict:
+        return json.loads((self.folder(drive) / "drive.json").read_text())
+
+    def writable(self, request: dict) -> tuple[Path, dict, dict]:
+        """The drive's folder, its description and the disc in it, for a command that writes - refused the way the real helper refuses."""
+        drive = request.get("drive", "")
+        folder, info = self.folder(drive), self.info(drive)
+        if not info.get("writer"):
+            raise Refusal("unsupported", "This drive cannot write discs.")
+        disc = self.disc(drive)
+        if self.control().get("write_protected"):
+            raise Refusal("write_protected", "The disc is write protected.")
+        return folder, info, disc
+
+    def media(self, request: dict) -> dict:
+        """What is in the drive, as far as writing to it goes."""
+        drive = request.get("drive", "")
+        folder, info = self.folder(drive), self.info(drive)
+        reply = {"ok": True, "writer": bool(info.get("writer")), "writes": list(info.get("writes", [])),
+                 "speeds": [{"speed": 75 * x, "label": f"{x}x"} for x in SPEEDS] if info.get("writer") else []}
+        try:
+            disc = json.loads((folder / "disc.json").read_text())
+        except FileNotFoundError:
+            return {**reply, "state": "none", "type": "", "rewritable": False, "blank": False, "capacity_sectors": 0, "free_sectors": 0, "can_audio": False}
+        blank = disc.get("kind") == "blank"
+        kind = disc.get("type", "CD-ROM")
+        capacity = int(disc.get("capacity", 0))
+        reply.update(state="blank" if blank else "written", type=kind, rewritable=bool(disc.get("rewritable")), blank=blank, capacity_sectors=capacity,
+                     free_sectors=capacity if blank else 0, can_audio=bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", [])))
+        if disc.get("kind") == "data":
+            reply["root"] = str(folder / "files")  # where the files of the disc can be read (Windows gives the drive letter)
+        return reply
+
+    def ruin(self, folder: Path, disc: dict) -> None:
+        """A write that stopped half way leaves a disc nobody can use (and a CD-RW can be erased)."""
+        (folder / "disc.pcm").unlink(missing_ok=True)
+        (folder / "disc.json").write_text(json.dumps({"kind": "unknown", "type": disc.get("type", ""), "rewritable": bool(disc.get("rewritable")),
+                                                      "capacity": int(disc.get("capacity", 0)), "label": ""}), encoding="utf-8")
+
+    def burn_audio(self, request: dict, emit) -> dict:
+        folder, info, disc = self.writable(request)
+        kind = disc.get("type", "")
+        if disc.get("kind") != "blank":
+            raise Refusal("not_blank", "The disc is not blank.")
+        if kind not in CD_TYPES or kind not in info.get("writes", []):
+            raise Refusal("unsupported", "Music can only be written to a blank CD-R or CD-RW.")
+        tracks = request.get("tracks") or []
+        if not 1 <= len(tracks) <= 99:
+            raise Refusal("failed", "A music CD holds 1 to 99 songs.")
+        lengths = []
+        for item in tracks:
+            path = Path(str(item.get("path", "")))
+            if not path.is_file() or not path.stat().st_size or path.stat().st_size % SECTOR_BYTES:
+                raise Refusal("failed", f"{path.name} is not audio the drive can write.")
+            lengths.append(max(path.stat().st_size // SECTOR_BYTES, 4 * 75))  # (a track is at least four seconds long)
+        need = sum(lengths) + 150 * (len(lengths) - 1)  # two seconds of silence between songs
+        capacity = int(disc.get("capacity", 0))
+        if need > capacity:
+            raise Refusal("no_space", f"The songs need {need} sectors and the disc holds {capacity}.")
+        control = self.control()
+        written, starts = 0, []
+        try:
+            with (folder / "disc.pcm").open("wb") as out:
+                for index, (item, sectors) in enumerate(zip(tracks, lengths), start=1):
+                    if index > 1:
+                        out.write(b"\0" * (150 * SECTOR_BYTES))
+                        written += 150
+                    starts.append(written)
+                    data = Path(item["path"]).read_bytes()
+                    data += b"\0" * (sectors * SECTOR_BYTES - len(data))
+                    for first in range(0, sectors, 64):
+                        chunk = data[first * SECTOR_BYTES:(first + 64) * SECTOR_BYTES]
+                        count = len(chunk) // SECTOR_BYTES
+                        if control.get("burn_slow"):
+                            self.pause(float(control["burn_slow"]) * count)
+                        if control.get("burn_fail_at") is not None and written + count > int(control["burn_fail_at"]):
+                            raise Refusal("underrun", "The drive did not get its data fast enough, and the disc is spoiled.")
+                        out.write(chunk)
+                        written += count
+                        emit({"event": "progress", "id": request.get("id"), "done": written, "total": need, "message": f"Song {index} of {len(tracks)}"})
+        except Refusal:
+            self.ruin(folder, disc)
+            raise
+        (folder / "disc.json").write_text(json.dumps({
+            "kind": "audio", "label": "", "seed": 0, "pcm": "disc.pcm", "type": kind, "rewritable": bool(disc.get("rewritable")), "capacity": capacity,
+            "tracks": [{"number": i + 1, "audio": True, "sectors": n, "start": starts[i]} for i, n in enumerate(lengths)],
+        }), encoding="utf-8")
+        self.cache.clear()
+        if request.get("eject"):
+            self.eject(request.get("drive", ""))
+        return {"ok": True, "tracks": len(tracks), "sectors": written}
+
+    @staticmethod
+    def parts(dest: object) -> list[str]:
+        names = [n for n in str(dest or "").replace("\\", "/").split("/") if n]
+        if not names or any(n in (".", "..") or ":" in n for n in names):
+            raise Refusal("failed", f"{dest!r} is not a place on a disc.")
+        return names
+
+    def burn_data(self, request: dict, emit) -> dict:
+        folder, info, disc = self.writable(request)
+        if disc.get("kind") != "blank":
+            raise Refusal("not_blank", "The disc is not blank.")
+        files = request.get("files") or []
+        if not files:
+            raise Refusal("failed", "There is nothing to write.")
+        sizes = []
+        for item in files:
+            path = Path(str(item.get("src", "")))
+            if not path.is_file():
+                raise Refusal("failed", f"{path.name or 'A file'} is not there.")
+            sizes.append(path.stat().st_size)
+        places = [self.parts(item.get("dest")) for item in files]  # (every name is looked at before the disc is touched)
+        need = sum(-(-n // 2048) for n in sizes) + 32  # whole sectors, and a little for the file system itself
+        capacity = int(disc.get("capacity", 0))
+        if need > capacity:
+            raise Refusal("no_space", f"The files need {need} sectors and the disc holds {capacity}.")
+        root = folder / "files"
+        shutil.rmtree(root, ignore_errors=True)
+        manifest, done = [], 0
+        try:
+            for item, size, names in zip(files, sizes, places):
+                target = root.joinpath(*names)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if self.control().get("burn_slow"):
+                    self.pause(float(self.control()["burn_slow"]) * max(size // 2048, 1))
+                shutil.copyfile(item["src"], target)
+                manifest.append({"dest": "/".join(names), "size": size})
+                done += -(-size // 2048)
+                emit({"event": "progress", "id": request.get("id"), "done": done, "total": need, "message": f"File {len(manifest)} of {len(files)}"})
+        except Refusal:
+            shutil.rmtree(root, ignore_errors=True)
+            self.ruin(folder, disc)
+            raise
+        (folder / "disc.json").write_text(json.dumps({
+            "kind": "data", "label": str(request.get("label") or ""), "seed": 0, "type": disc.get("type", ""), "rewritable": bool(disc.get("rewritable")),
+            "capacity": capacity, "files": manifest, "tracks": [{"number": 1, "audio": False, "sectors": max(need, 1)}],
+        }), encoding="utf-8")
+        if request.get("eject"):
+            self.eject(request.get("drive", ""))
+        return {"ok": True, "files": len(files), "sectors": need}
+
+    def build_iso(self, request: dict, emit) -> dict:
+        """Needs no drive. The stand-in's image is a header of what is in it, then every file in whole sectors - the size is what matters."""
+        files = request.get("files") or []
+        out = Path(str(request.get("out", "")))
+        if out.suffix.lower() != ".iso" or not out.parent.is_dir():
+            raise Refusal("failed", "That is not a place an image can be written.")
+        if out.exists():
+            raise Refusal("failed", "A file with that name is already there.")
+        if not files:
+            raise Refusal("failed", "There is nothing to write.")
+        blocks, listing = [], []
+        for item in files:
+            path = Path(str(item.get("src", "")))
+            if not path.is_file():
+                raise Refusal("failed", f"{path.name or 'A file'} is not there.")
+            names = self.parts(item.get("dest"))
+            data = path.read_bytes()
+            listing.append({"dest": "/".join(names), "size": len(data)})
+            blocks.append(data + b"\0" * (-len(data) % 2048))
+        header = json.dumps({"label": str(request.get("label") or ""), "files": listing}).encode()
+        image = header + b"\0" * (-len(header) % 2048) + b"".join(blocks)
+        out.write_bytes(image)
+        emit({"event": "progress", "id": request.get("id"), "done": len(image) // 2048, "total": len(image) // 2048, "message": "Image written"})
+        return {"ok": True, "sectors": len(image) // 2048, "bytes": len(image)}
+
+    def erase(self, request: dict) -> dict:
+        folder, info, disc = self.writable(request)
+        if disc.get("kind") == "blank":
+            return {"ok": True}
+        if not disc.get("rewritable"):
+            raise Refusal("unsupported", "This disc cannot be erased.")
+        (folder / "disc.pcm").unlink(missing_ok=True)
+        shutil.rmtree(folder / "files", ignore_errors=True)
+        (folder / "disc.json").write_text(json.dumps(blank_disc(type=disc.get("type", "CD-RW"), capacity=int(disc.get("capacity", CD_BLANK_SECTORS)))), encoding="utf-8")
+        self.cache.clear()
+        return {"ok": True}
+
+    def eject(self, drive: str) -> None:
+        folder = self.folder(drive)
+        (folder / "disc.json").unlink(missing_ok=True)
+        (folder / "disc.pcm").unlink(missing_ok=True)
+        shutil.rmtree(folder / "files", ignore_errors=True)
+        with (folder / "eject.log").open("a", encoding="utf-8") as log:
+            log.write("ejected\n")
+        self.cache.clear()
 
     def handle(self, request: dict, emit) -> dict:
         cmd = request.get("cmd")
@@ -230,7 +450,8 @@ class Fake:
                 except FileNotFoundError:
                     disc = {}
                 letter = folder.name.lower() if self.control().get("lowercase") else folder.name
-                found.append({"id": f"{letter}:", "name": info.get("name", folder.name), "media": disc.get("kind", "none"), "label": disc.get("label", "")})
+                found.append({"id": f"{letter}:", "name": info.get("name", folder.name), "media": disc.get("kind", "none"), "label": disc.get("label", ""),
+                              "writer": bool(info.get("writer")), "writes": list(info.get("writes", []))})
             return {"ok": True, "drives": found}
         if cmd == "toc":
             disc = self.disc(request.get("drive", ""))
@@ -246,14 +467,18 @@ class Fake:
             self.read(request, keep=False)
             return {"ok": True}
         if cmd == "eject":
-            folder = self.folder(request.get("drive", ""))
-            disc = folder / "disc.json"
-            if disc.exists():
-                disc.unlink()
-            with (folder / "eject.log").open("a", encoding="utf-8") as log:
-                log.write("ejected\n")
-            self.cache.clear()
+            self.eject(request.get("drive", ""))
             return {"ok": True}
+        if cmd == "media":
+            return self.media(request)
+        if cmd == "burn_audio":
+            return self.burn_audio(request, emit)
+        if cmd == "burn_data":
+            return self.burn_data(request, emit)
+        if cmd == "build_iso":
+            return self.build_iso(request, emit)
+        if cmd == "erase":
+            return self.erase(request)
         if cmd == "ticks":
             for i in range(int(request.get("n", 3))):
                 emit({"event": "progress", "id": request.get("id"), "done": i + 1, "total": int(request.get("n", 3)), "message": f"step {i + 1}"})
