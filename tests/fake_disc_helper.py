@@ -461,7 +461,8 @@ class Fake:
                 except FileNotFoundError:
                     disc = {}
                 letter = folder.name.lower() if self.control().get("lowercase") else folder.name
-                found.append({"id": f"{letter}:", "name": info.get("name", folder.name), "media": disc.get("kind", "none"), "label": disc.get("label", ""),
+                kind = disc.get("kind", "none")
+                found.append({"id": f"{letter}:", "name": info.get("name", folder.name), "media": "unknown" if kind == "blank" else kind, "label": disc.get("label", ""),  # (a blank disc has no table of contents to read: to a listing it is one the drive cannot read, as with the real helper)
                               "writer": bool(info.get("writer")), "writes": list(info.get("writes", []))})
             return {"ok": True, "drives": found}
         if cmd == "toc":

@@ -126,7 +126,7 @@ def test_the_media_of_a_drive_that_is_not_there_is_a_404_not_a_crash(rig) -> Non
 
 def test_diagnostics_say_which_drives_can_write_and_what(rig) -> None:
     got = rig.client.get("/api/system/diagnostics").json()["discs"]
-    assert [(d["id"], d["writer"], d["writes"], d["media"]) for d in got["drives"]] == [("E:", True, ["CD-R", "CD-RW"], "blank"), ("F:", False, [], "audio")]
+    assert [(d["id"], d["writer"], d["writes"], d["media"]) for d in got["drives"]] == [("E:", True, ["CD-R", "CD-RW"], "unknown"), ("F:", False, [], "audio")]
 
 
 def test_the_options_say_what_burning_starts_with(rig) -> None:
@@ -296,7 +296,7 @@ def test_what_is_in_the_drive_is_seen_again_as_soon_as_the_burn_is_over(rig) -> 
     job, _ = burn_it(rig)
     assert job.status == "done"
     after = {d["id"]: d["media"] for d in rig.client.get("/api/discs/drives").json()["drives"]}  # (not the list from a moment ago)
-    assert (before["E:"], after["E:"]) == ("blank", "audio")
+    assert (before["E:"], after["E:"]) == ("unknown", "audio")  # (a blank disc is one the listing cannot read)
 
 
 def test_while_a_disc_is_written_nothing_else_starts_a_second_helper_to_look_at_the_drives(rig, monkeypatch: pytest.MonkeyPatch) -> None:

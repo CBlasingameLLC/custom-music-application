@@ -130,7 +130,7 @@ def _wait_for_files(helper: DiscHelper, drive: str, plan: DataPlan, handle: Any)
             if error.code not in TRANSIENT:
                 raise
             root = None  # (the drive is still settling after the write: look again in a moment)
-        if root and Path(root).joinpath(*str(first.dest).split("/")).is_file():
+        if root and (Path(root) / str(first.dest)).is_file():
             return Path(root)
         if time.monotonic() > deadline:
             raise BurnError("The disc was written, but Windows did not show its files in time to check them. Take it out and put it back, then look at it.")

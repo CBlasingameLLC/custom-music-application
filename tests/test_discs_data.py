@@ -347,3 +347,133 @@ def test_a_file_the_disc_cannot_read_counts_as_missing(tmp_path: Path, monkeypat
     monkeypatch.setattr(datadisc, "_digest", fails_on_the_disc)
     verdict = datadisc.verify_files(plan, disc)
     assert verdict.missing == ["b.mp3"] and verdict.different == [] and verdict.checked == 2
+
+
+# ---------------------------------------------------------------------------------------- corners found by changing the code one way at a time
+
+
+def test_the_name_of_the_disc_is_composed_and_a_forbidden_character_becomes_a_space() -> None:
+    assert datadisc.clean_label("Café Mix") == "Café Mix"  # (e and an accent, written as the one letter)
+    assert datadisc.clean_label("A:B/C") == "A B C"
+    assert datadisc.clean_label("  A  \t B  ") == "A B"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("name..", "name"),  # (the dots at the end are all taken off, not the last one only)
+        ("name. .", "name"),
+        ("a.mp3.", "a.mp3"),
+        ("a.mp3 ", "a.mp3"),
+    ],
+)
+def test_dots_and_spaces_at_the_end_of_a_name_are_all_taken_off(raw: str, expected: str) -> None:
+    assert safe_name(raw) == expected
+
+
+def test_only_a_short_ending_is_an_extension_the_rest_is_cut_with_the_name() -> None:
+    cut = safe_name("x" * 100 + ".abcdefghi")  # (nine letters after the dot: part of the name)
+    assert len(cut) == datadisc.JOLIET_NAME and "." not in cut
+    kept = safe_name("x" * 100 + ".abcdefgh")  # (eight: an extension, kept)
+    assert len(kept) == datadisc.JOLIET_NAME and kept.endswith(".abcdefgh")
+
+
+def test_a_limit_smaller_than_the_extension_still_leaves_a_letter_of_the_name() -> None:
+    assert safe_name("abc.mp3", limit=4) == "a.mp3"
+
+
+def test_a_name_made_unique_stays_within_the_length_a_disc_allows() -> None:
+    names: set[str] = set()
+    first = datadisc._unique(names, "A" * 60 + ".mp3")
+    second = datadisc._unique(names, "a" * 60 + ".mp3")
+    third = datadisc._unique(names, "a" * 60 + ".mp3")
+    assert first == "A" * 60 + ".mp3"
+    assert second.endswith(" (2).mp3") and third.endswith(" (3).mp3")
+    assert len(second) <= datadisc.JOLIET_NAME and len(third) <= datadisc.JOLIET_NAME
+
+
+def test_what_the_files_take_counts_only_the_files_that_go(tmp_path: Path) -> None:
+    deep = song(tmp_path, "/".join(["d"] * 10) + "/deep.mp3", size=100)  # (too many folders: left out, but its size is known)
+    plan = plan_data([deep, song(tmp_path, "ok.mp3", size=50)])
+    assert plan.files[0].size == 100 and plan.files[0].dest is None
+    assert plan.total_bytes == 50
+
+
+def test_the_plan_tells_the_page_why_a_file_is_left_out_and_how_many(tmp_path: Path) -> None:
+    gone = DataSong(str(tmp_path / "gone.mp3"), "Gone", root=str(tmp_path))
+    shown = plan_data([song(tmp_path, "ok.mp3"), gone]).to_dict()
+    assert shown["counts"] == {"going": 1, "left_out": 1}
+    assert [(f["dest"], f["problem"]) for f in shown["files"]] == [("ok.mp3", ""), (None, "The file is not there any more.")]
+    assert shown["warnings"] == ["1 file will be left out: see the list."]
+
+
+def test_a_flat_name_uses_the_title_without_stray_spaces_or_the_file_name_when_there_is_none(tmp_path: Path) -> None:
+    one = song(tmp_path, "Loud.MP3", title="Hello ")
+    two = DataSong(str(tmp_path / "music" / "Loud.MP3"), "", root=str(tmp_path / "music"))
+    assert dests(plan_data([one, two], layout="flat")) == ["01 - Hello.mp3", "02 - Loud.mp3"]  # (the extension in lower case)
+
+
+def test_a_song_without_a_library_folder_goes_in_the_top_folder_by_its_name(tmp_path: Path) -> None:
+    plan = plan_data([DataSong("sub/folder/x.mp3", "x")], stat=lambda _p: 10)
+    assert dests(plan) == ["x.mp3"]
+
+
+def test_a_song_that_is_its_own_library_folder_is_named_after_itself(tmp_path: Path) -> None:
+    here = tmp_path / "music"
+    here.mkdir()
+    assert datadisc._place(DataSong(str(here), "", root=str(here)), 1, 1, "library") == ["music"]
+
+
+def test_a_path_of_exactly_the_longest_length_is_not_shortened(tmp_path: Path) -> None:
+    folder = "f" * 60
+    name = "n" * (datadisc.JOLIET_PATH - 3 * 61 - 4) + ".mp3"
+    relative = f"{folder}/{folder}/{folder}/{name}"
+    assert len(relative) == datadisc.JOLIET_PATH
+    assert dests(plan_data([song(tmp_path, relative)])) == [relative]
+    longer = relative[:-5] + "nn.mp3"  # one character more: the folders are cut to 32
+    shortened = dests(plan_data([song(tmp_path, longer)]))[0]
+    assert shortened is not None and shortened.startswith("f" * 32 + "/") and len(shortened) < len(longer)
+
+
+def test_two_files_with_one_name_in_folders_that_differ_only_in_capitals_are_told_apart_but_not_in_different_folders(tmp_path: Path) -> None:
+    plan = plan_data([song(tmp_path, "A/x.mp3"), song(tmp_path, "a/x.mp3"), song(tmp_path, "B/x.mp3")])
+    assert dests(plan) == ["A/x.mp3", "a/x (2).mp3", "B/x.mp3"]
+
+
+def test_a_folder_is_not_a_file_and_has_no_size(tmp_path: Path) -> None:
+    assert datadisc._size_of(str(tmp_path)) is None
+    assert datadisc._size_of(str(tmp_path / "nothing")) is None
+    (tmp_path / "x").write_bytes(b"1234")
+    assert datadisc._size_of(str(tmp_path / "x")) == 4
+
+
+@pytest.mark.parametrize(
+    "size,said",
+    [(0, "0 MB"), (5 * 1024**2, "5 MB"), (1024**3 - 1, "1024 MB"), (1024**3, "1.0 GB"), (int(2.5 * 1024**3), "2.5 GB")],
+)
+def test_sizes_are_said_in_megabytes_until_they_reach_a_gigabyte(size: int, said: str) -> None:
+    assert datadisc.megabytes(size) == said
+
+
+def test_a_disc_that_says_it_is_blank_but_is_not_in_the_state_of_one_is_not_taken_for_blank() -> None:
+    assert datadisc.media_problems(media(state="written", blank=True)) == [
+        "This CD-R is not blank, and a disc that has been written cannot be used again. Put in a blank disc."
+    ]
+
+
+def test_a_verdict_is_good_only_when_nothing_is_missing_and_nothing_differs() -> None:
+    assert datadisc.Verdict(checked=2).ok
+    assert not datadisc.Verdict(checked=2, missing=["a"]).ok
+    assert not datadisc.Verdict(checked=2, different=["b"]).ok
+    assert datadisc.Verdict(checked=2, missing=["a"]).words() == "The disc was written, but it cannot be trusted: a is not on the disc."
+    assert datadisc.Verdict(checked=2, different=["b"]).words() == "The disc was written, but it cannot be trusted: b does not match."
+
+
+def test_a_list_of_empty_files_still_reports_a_whole_to_count_against(tmp_path: Path) -> None:
+    plan = plan_data([song(tmp_path, "empty.mp3", size=0)])
+    disc = tmp_path / "disc"
+    (disc).mkdir()
+    (disc / "empty.mp3").write_bytes(b"")
+    seen: list[tuple[int, int]] = []
+    verdict = datadisc.verify_files(plan, disc, on_progress=lambda done, total: seen.append((done, total)))
+    assert verdict.ok and seen == [(0, 1)]

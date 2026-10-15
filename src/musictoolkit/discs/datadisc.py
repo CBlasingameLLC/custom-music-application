@@ -303,18 +303,18 @@ def verify_files(
     verdict = Verdict()
     total, done = plan.total_bytes, 0
     for entry in plan.going:
-        target = Path(root).joinpath(*str(entry.dest).split("/"))
+        target = Path(root) / str(entry.dest)
         verdict.checked += 1
         try:
-            if not target.is_file():
-                verdict.missing.append(entry.dest)  # type: ignore[arg-type]
-            elif _digest(Path(entry.song.path), check) != _digest(target, check):
-                verdict.different.append(entry.dest)  # type: ignore[arg-type]
+            on_the_disc = _digest(target, check)  # (an error: the disc does not show the file, or cannot read it)
         except OSError:
             verdict.missing.append(str(entry.dest))
+        else:
+            if on_the_disc != _digest(Path(entry.song.path), check):
+                verdict.different.append(str(entry.dest))
         done += entry.size
         if on_progress:
-            on_progress(min(done, total), max(total, 1))
+            on_progress(done, max(total, 1))
     return verdict
 
 

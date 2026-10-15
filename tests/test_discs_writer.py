@@ -64,7 +64,7 @@ def test_a_refusal_the_recorder_can_make_has_words_of_its_own(code: str) -> None
 def test_the_listing_says_which_drives_can_write_and_what(world: Path) -> None:
     with start(world) as helper:
         drives = {d["id"]: d for d in helper.call("drives")["drives"]}
-    assert drives["E:"]["writer"] is True and drives["E:"]["writes"] == ["CD-R", "CD-RW"] and drives["E:"]["media"] == "blank"
+    assert drives["E:"]["writer"] is True and drives["E:"]["writes"] == ["CD-R", "CD-RW"] and drives["E:"]["media"] == "unknown"  # (a blank disc has no table of contents: to the listing it is a disc the drive cannot read, as with the real helper)
     assert drives["F:"]["writer"] is False and drives["F:"]["writes"] == []
 
 
