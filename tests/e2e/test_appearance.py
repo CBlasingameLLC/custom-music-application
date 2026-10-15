@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import expect
@@ -25,8 +26,8 @@ def open_settings(page) -> None:
 
 
 def density_choice(page):
-    # Not get_by_label("Density"): that matches by substring, and a button's label can hold the test's own folder name.
-    return page.locator("label.field", has_text="Density").locator("select")
+    # Not get_by_label("Density"), and not has_text="Density": those match anywhere in the label, and a select's options can hold the test's own folder name.
+    return page.locator("label.field", has_text=re.compile(r"^\s*Density")).locator("select")
 
 
 def test_every_accent_is_readable_in_both_themes_and_so_is_any_colour_someone_picks(page) -> None:

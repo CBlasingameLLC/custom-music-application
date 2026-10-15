@@ -22,10 +22,12 @@ from starlette.types import Scope
 from musictoolkit import __version__
 from musictoolkit.config import Config
 from musictoolkit.db.connection import connect
+from musictoolkit.discs import store as disc_store
 from musictoolkit.web.context import AppContext
 from musictoolkit.web.routers import (
     devices,
     discover,
+    discs,
     duplicates,
     enrich,
     history,
@@ -99,6 +101,11 @@ def create_app(
         db_path=Path(db_path).absolute(), config_path=Path(config_path).absolute(), config=config, token=token
     )
     connect(ctx.db_path).close()  # first launch: create the folder and apply migrations now
+    try:  # a rip that was running when the app stopped did not finish: say so, and remove the half-written files it left
+        with ctx.db() as conn:
+            disc_store.recover(conn, ctx.data_dir / "cache" / "discs")
+    except Exception:
+        logger.warning("Could not tidy up after an interrupted rip", exc_info=True)
     ctx.scrobbler = Scrobbler(ctx)
     ctx.radar = RadarSchedule(ctx)
     ctx.radio = RadioHub()
@@ -141,7 +148,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats, mixes, releases, radio, podcasts):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats, mixes, releases, radio, podcasts, discs):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)

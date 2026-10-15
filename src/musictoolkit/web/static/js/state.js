@@ -166,8 +166,18 @@ onJobFinished((job) => {
     const r = job.result || {};
     const note = r.errors_total ? ` ${r.errors_total} could not be copied.` : '';
     toast(`Copied ${r.copied || 0} ${r.copied === 1 ? 'song' : 'songs'} to ${r.label || 'the device'}.${note}`, r.errors_total || r.aborted ? 'info' : 'success', 8000);
+  } else if (job.status === 'done' && job.kind === 'rip') {
+    const r = job.result || {};
+    const note = r.failed ? ` ${r.failed} could not be read.` : '';
+    toast(`Ripped ${r.ripped || 0} ${r.ripped === 1 ? 'song' : 'songs'}.${note}`, r.failed ? 'info' : 'success', 9000);
+  } else if (job.status === 'cancelled' && job.kind === 'rip') {
+    toast('Stopped. Songs already ripped are in your library, and the history lets you take them back.', 'info', 9000);
+  } else if (job.status === 'done' && job.kind === 'rip-undo') {
+    const r = job.result || {};
+    const note = r.changed?.length ? ` ${r.changed.length} changed since, so they were left alone.` : '';
+    toast(`Moved ${r.trashed || 0} ${r.trashed === 1 ? 'song' : 'songs'} to the Recycle Bin.${note}`, r.changed?.length || r.failed?.length ? 'info' : 'success', 9000);
   }
-  if (job.status === 'done' || job.status === 'cancelled') {
+  if (job.status === 'done' || job.status === 'cancelled' || (job.status === 'error' && job.kind === 'rip')) { // (a rip that stopped part way has still added songs)
     bumpLibrary();
     loadFacets().catch(() => {});
     loadAbout().catch(() => {});

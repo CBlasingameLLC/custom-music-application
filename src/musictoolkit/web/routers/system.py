@@ -12,6 +12,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, HTTPException
 
 from musictoolkit import __version__
+from musictoolkit.discs import helper as disc_helper
 from musictoolkit.sync import device_detect, mtp
 from musictoolkit.web.context import AppContext, get_ctx
 
@@ -154,6 +155,14 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
         ready, reason = mtp.availability()
         return {"supported": sys.platform == "win32", "available": ready, "reason": reason}
 
+    def discs() -> dict:
+        ready, reason = disc_helper.availability()
+        listing = disc_helper.list_drives() if ready else {"drives": [], "error": None}
+        return {
+            "supported": sys.platform == "win32", "available": ready, "reason": reason, "error": listing["error"],
+            "drives": [{"id": d["id"], "name": d.get("name"), "media": d.get("media")} for d in listing["drives"]],
+        }
+
     def services() -> dict:
         cfg = ctx.config
         return {
@@ -186,6 +195,7 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
         "drives": _section(drives),
         "devices": _section(devices),
         "phones": _section(phones),
+        "discs": _section(discs),
         "services": _section(services),
         "jobs": _section(jobs),
         "settings": {"auto_update": ctx.config.app.auto_update, "rescan_on_launch": ctx.config.app.rescan_on_launch},

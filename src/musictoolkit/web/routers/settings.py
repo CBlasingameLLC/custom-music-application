@@ -24,10 +24,17 @@ EDITABLE: dict[str, set[str]] = {
     "lastfm": {"enabled", "api_key", "api_secret"},
     "sync": {"device_scheme"},
     "app": {"rescan_on_launch", "lyrics_lrclib", "release_radar", "auto_update", "close_action", "podcast_refresh"},
+    "disc": {"rip_format", "rip_mp3_quality", "rip_accuracy", "rip_root", "rip_scheme", "rip_cover", "eject_after_rip"},
 }
 # Fields that take one of a few words.
-CHOICES: dict[tuple[str, str], set[str]] = {("app", "close_action"): {"quit", "tray_if_playing", "tray"}}
+CHOICES: dict[tuple[str, str], set[str]] = {
+    ("app", "close_action"): {"quit", "tray_if_playing", "tray"},
+    ("disc", "rip_format"): {"flac", "mp3"},
+    ("disc", "rip_mp3_quality"): {"320", "256", "192", "128"},
+    ("disc", "rip_accuracy"): {"verified", "fast"},
+}
 TEMPLATE_FIELDS = {("library", "canonical_scheme"), ("sync", "device_scheme")}
+TEMPLATE_OR_EMPTY = {("disc", "rip_scheme")}  # a layout, or nothing: use the library's
 
 
 def public_settings(cfg: Config) -> dict[str, Any]:
@@ -49,6 +56,10 @@ def public_settings(cfg: Config) -> dict[str, Any]:
         },
         "sync": {"device_scheme": cfg.sync.device_scheme},
         "app": {"rescan_on_launch": cfg.app.rescan_on_launch, "lyrics_lrclib": cfg.app.lyrics_lrclib, "release_radar": cfg.app.release_radar, "auto_update": cfg.app.auto_update, "close_action": cfg.app.close_action, "podcast_refresh": cfg.app.podcast_refresh},
+        "disc": {
+            "rip_format": cfg.disc.rip_format, "rip_mp3_quality": cfg.disc.rip_mp3_quality, "rip_accuracy": cfg.disc.rip_accuracy,
+            "rip_root": cfg.disc.rip_root, "rip_scheme": cfg.disc.rip_scheme, "rip_cover": cfg.disc.rip_cover, "eject_after_rip": cfg.disc.eject_after_rip,
+        },
     }
 
 
@@ -67,6 +78,7 @@ def put_settings(body: dict[str, dict[str, Any]], ctx: AppContext = Depends(get_
         "lastfm": ctx.config.lastfm,
         "sync": ctx.config.sync,
         "app": ctx.config.app,
+        "disc": ctx.config.disc,
     }
     updates: list[tuple[Any, str, Any]] = []
     for section, values in body.items():
@@ -81,11 +93,13 @@ def put_settings(body: dict[str, dict[str, Any]], ctx: AppContext = Depends(get_
                 raise HTTPException(status_code=422, detail=f"{section}.{key} must be a {type(current).__name__}")
             if (section, key) in CHOICES and value not in CHOICES[(section, key)]:
                 raise HTTPException(status_code=422, detail=f"{section}.{key} must be one of: {', '.join(sorted(CHOICES[(section, key)]))}")
-            if (section, key) in TEMPLATE_FIELDS:
+            if (section, key) in TEMPLATE_FIELDS or ((section, key) in TEMPLATE_OR_EMPTY and value.strip()):
                 try:
                     organizer.validate_scheme(value)
                 except ValueError as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from None
+            if (section, key) == ("disc", "rip_root") and value.strip() and not any(same_path(r, value) for r in ctx.config.library.roots):
+                raise HTTPException(status_code=422, detail="Ripped songs can only go into one of your library folders.")
             updates.append((target, key, value.strip() if isinstance(value, str) else value))
 
     for target, key, value in updates:  # validated first, so a bad field never half-applies the rest

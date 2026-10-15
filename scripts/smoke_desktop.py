@@ -380,6 +380,13 @@ def drive(args, command: list[str]) -> None:
                 check(not listing.get("error"), f"the helper started and looked for devices ({listing.get('error')})")
                 check(listing.get("devices") == [], f"no phone is plugged into this machine ({listing.get('devices')})")
 
+            if args.expect_disc_helper:
+                step("discs")
+                listing = page.evaluate("fetch('/api/discs/drives?fresh=true').then(r => r.json())")
+                check(listing.get("available") is True, f"the installed app found its helper for CDs and DVDs ({listing.get('reason')})")
+                check(not listing.get("error"), f"the helper started and looked for drives ({listing.get('error')})")
+                check(isinstance(listing.get("drives"), list), f"it lists the drives there are ({listing.get('drives')})")
+
             step("first run, library, playback")
             check(page.locator("text=Add your music").count() == 1, "an empty library shows the first-run prompt")
             status = page.evaluate(
@@ -589,6 +596,7 @@ def main() -> None:
     parser.add_argument("--expect-tray", action="store_true", help="the machine has a notification area: the app must create its tray icon and keep running when closed while playing")
     parser.add_argument("--expect-updater", action="store_true", help="the app is an installed build: its updater must be active")
     parser.add_argument("--expect-mtp-helper", action="store_true", help="the app is an installed build: the helper for phones and players must be there and start")
+    parser.add_argument("--expect-disc-helper", action="store_true", help="the app is an installed build: the helper for CDs and DVDs must be there and start")
     parser.add_argument("--skip-external", action="store_true", help="skip the checks that make the app open a link in the system browser")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the command that starts the app")
     args = parser.parse_args()

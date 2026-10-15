@@ -51,6 +51,23 @@ def get_recording(mbid: str) -> dict | None:
     return result.get("recording")
 
 
+def releases_for_disc(disc_id: str, toc: str) -> list[dict]:
+    """The releases MusicBrainz lists for a disc: those that have this disc ID, or, when there are none, the ones whose track lengths are
+    close to the table of contents sent along (`toc`: 'first last leadout offset1 offset2 ...'). Each comes with its tracks, artists, labels
+    and whether it has cover art. An empty list when nothing matches."""
+    if not _configured:
+        raise RuntimeError("musicbrainz_client.configure() must be called first")
+    try:
+        data = musicbrainzngs.get_releases_by_discid(
+            disc_id, includes=["recordings", "artist-credits", "release-groups", "labels"], toc=toc, cdstubs=False
+        )
+    except musicbrainzngs.ResponseError as exc:
+        if getattr(exc.cause, "code", None) == 404:
+            return []
+        raise
+    return (data.get("disc") or {}).get("release-list") or data.get("release-list") or []
+
+
 def ping(app_name: str, app_version: str, contact: str) -> tuple[bool, str]:
     """Look up one well-known artist, introducing the app the way MusicBrainz asks, to learn whether it is reachable."""
     try:

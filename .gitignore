@@ -26,3 +26,8 @@ Thumbs.db
 /helpers/mtp/out/
 /helpers/mtp/bin/
 /helpers/mtp/obj/
+
+# The disc helper (helpers/disc) the same way
+/helpers/disc/out/
+/helpers/disc/bin/
+/helpers/disc/obj/

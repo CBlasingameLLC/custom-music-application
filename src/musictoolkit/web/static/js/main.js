@@ -16,6 +16,7 @@ import { DiscoverView, HistoryView } from './views/discover.js';
 import { StatsView } from './views/stats.js';
 import { MixesView, MixView } from './views/mixes.js';
 import { DeviceView, DevicesView } from './views/devices.js';
+import { DiscsView } from './views/discs.js';
 import { ImportView } from './views/importer.js';
 import { EnrichView, ToolsView } from './views/tools.js';
 import { OrganizeView } from './views/organize.js';
@@ -42,6 +43,7 @@ function View() {
     case 'search': return html`<${SearchView} term=${second || ''} />`;
     case 'discover': return html`<${DiscoverView} />`;
     case 'devices': return second ? html`<${DeviceView} key=${second} id=${second} />` : html`<${DevicesView} />`;
+    case 'discs': return html`<${DiscsView} />`;
     case 'radio': return html`<${RadioView} />`;
     case 'podcasts': return html`<${PodcastsView} />`;
     case 'podcast': return html`<${PodcastView} key=${second} id=${second} />`;

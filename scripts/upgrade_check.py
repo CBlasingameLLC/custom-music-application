@@ -124,7 +124,7 @@ def verify(exe: Path, profile: Path, facts_path: Path) -> None:
 
         # the new schema: tables that only exist after the newer migrations
         for path in ("/api/tools/organize/batches", "/api/tools/duplicates/info", "/api/tools/missing/summary",
-                     "/api/stats/years", "/api/mixes", "/api/releases"):
+                     "/api/stats/years", "/api/mixes", "/api/releases", "/api/discs/rips"):
             status, _ = client.json(path)
             check(status == 200, f"{path} works on the migrated database (HTTP {status})")
 

@@ -286,6 +286,23 @@ def test_a_compressed_answer_is_limited_by_its_size_once_unpacked(local) -> None
             guard.fetch(server.url + "/", max_bytes=100_000)
 
 
+def test_a_failed_certificate_check_is_explained_in_words() -> None:
+    """The ssl module's errors carry a string called `reason` ("CERTIFICATE_VERIFY_FAILED"). Walking the chain of causes once treated it as one
+    more exception and crashed, so a station or a podcast host with a bad certificate was a server error instead of a sentence."""
+    import requests
+    from urllib3.exceptions import MaxRetryError
+    from urllib3.exceptions import SSLError as UrllibSSLError
+
+    class VerifyFailed(OSError):
+        reason = "CERTIFICATE_VERIFY_FAILED"  # a plain string, as on ssl.SSLCertVerificationError
+
+    inner = VerifyFailed(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    middle = UrllibSSLError(inner)
+    middle.__cause__ = inner
+    chain = requests.exceptions.SSLError(MaxRetryError(None, "https://example.com/x", middle))
+    assert guard._explain(chain) == "The server's security certificate could not be trusted."
+
+
 def test_a_server_that_trickles_is_given_up_on(local) -> None:
     def trickle(h):
         h.send_response(200)

@@ -263,10 +263,10 @@ def _explain(exc: Exception) -> str:
             return str(current)
         if isinstance(current, UnsafeURL):
             return str(current)
-        stack.extend([current.__cause__, current.__context__, getattr(current, "reason", None)])
-        for arg in getattr(current, "args", ()):
-            if isinstance(arg, BaseException):
-                stack.append(arg)
+        # `reason` is an exception on urllib3's errors but a plain string ("CERTIFICATE_VERIFY_FAILED") on the ssl module's: only follow exceptions.
+        for further in (current.__cause__, current.__context__, getattr(current, "reason", None), *getattr(current, "args", ())):
+            if isinstance(further, BaseException):
+                stack.append(further)
     if isinstance(exc, (requests.Timeout, ReadTimeoutError, socket.timeout)):
         return "The server took too long to answer."
     if isinstance(exc, (ProtocolError, http.client.HTTPException)):

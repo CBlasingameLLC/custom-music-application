@@ -18,6 +18,7 @@ Standard library only, so it runs on any CI runner without installing anything.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -236,6 +237,75 @@ def phones(client: Client, scratch: Path, count: int) -> None:
     check(len(list(music.rglob("*.mp3"))) == copied, "the copied files are on the phone")
     status, described = client.json(f"/api/devices/{device['id']}")
     check(status == 200 and described["synced"] == copied, "the phone remembers what was copied")
+
+
+def discs(client: Client, scratch: Path, music: Path) -> None:
+    """A CD in a stand-in drive: found, looked up on a stand-in MusicBrainz, and ripped to FLAC and to MP3 inside the frozen backend. That proves what only
+    the frozen exe can: that the audio library (libsndfile with its FLAC and MP3 encoders), the tagger, the image library and the client for the disc
+    helper were all bundled, and that nothing the rip needs is looked for on this machine's Python."""
+    status, listing = client.json("/api/discs/drives?fresh=true")
+    drives = {d["id"]: d["media"] for d in listing.get("drives", [])}
+    check(status == 200 and listing["available"] and not listing["error"] and drives == {"E:": "audio", "F:": "none"},
+          f"the backend starts the disc helper and lists the drives ({listing})")
+    status, disc = client.json("/api/discs/drives/E:/disc")
+    check(status == 200 and len(disc["tracks"]) == 2 and disc["disc_id"], f"it reads the disc's table of contents ({disc})")
+    status, _ = client.json("/api/settings", "PUT", {"musicbrainz": {"contact": "smoke@example.com"}})
+    check(status == 200, "the MusicBrainz contact is saved")
+    status, started = client.json("/api/discs/lookup", "POST", {"drive": "E:"})
+    job = wait_job(client, started["job"]["id"])
+    found = (job.get("result") or {}).get("candidates") or []
+    check(job["status"] == "done" and [c["title"] for c in found] == ["Smoke Album"], f"the album is found on MusicBrainz ({job.get('result') or job.get('error')})")
+    if not found:
+        return
+    album = found[0]
+    status, options = client.json("/api/discs/options")
+    check(status == 200 and options["roots"], f"the page is offered the library folder to rip into ({options.get('roots')})")
+    root = options["roots"][0]["path"]  # (as the app spells it: a Windows temporary folder has a short and a long spelling, and the page uses the app's)
+
+    def rip(kind: str, quality: str, name: str) -> dict:
+        asked = {
+            "drive": "E:", "root": root, "scheme": "{album_artist}/{album}/{track:02d} - {title}.{ext}", "format": kind, "quality": quality,
+            "accuracy": "verified", "album": name, "album_artist": album["artist"], "year": album["year"], "date": album["date"], "genre": "Smoke",
+            "disc_number": 1, "disc_total": 1, "release_id": album["release_id"], "release_group_id": album["release_group_id"],
+            "artist_ids": album["artist_ids"], "barcode": album["barcode"], "label": album["label"],
+            "tracks": [{"number": t["number"], "title": t["title"], "artist": t["artist"], "recording_id": t["recording_id"], "rip": True} for t in album["tracks"]],
+            "cover": True, "eject": False,
+        }
+        status, plan = client.json("/api/discs/rip/preview", "POST", asked)
+        check(status == 200 and plan["ok"] and plan["counts"]["rip"] == 2, f"the {kind} rip is previewed ({plan})")
+        status, begun = client.json("/api/discs/rip/start", "POST", asked)
+        finished = wait_job(client, begun["job"]["id"], tries=600)
+        result = finished.get("result") or {}
+        check(status == 200 and finished["status"] == "done" and result.get("ripped") == 2 and not result.get("failed"),
+              f"the {kind} rip finishes ({result or finished.get('error')})")
+        return begun
+
+    rip("flac", "standard", "Smoke Album")
+    folder = music / "Smoke Artist" / "Smoke Album"
+    flacs = sorted(folder.glob("*.flac"))
+    check([f.name for f in flacs] == ["01 - Smoke One.flac", "02 - Smoke Two.flac"] and all(f.read_bytes()[:4] == b"fLaC" for f in flacs), f"the songs are FLAC files ({[f.name for f in flacs]})")
+    cover = folder / "cover.jpg"
+    check(cover.exists() and cover.read_bytes()[:2] == b"\xff\xd8", "the cover was fetched, re-drawn as a JPEG and put beside the songs")
+    rip("mp3", "128", "Smoke Album (MP3)")
+    mp3s = sorted((music / "Smoke Artist" / "Smoke Album (MP3)").glob("*.mp3"))
+    check(len(mp3s) == 2 and all(f.read_bytes()[:3] == b"ID3" for f in mp3s), f"the songs are MP3 files with tags ({[f.name for f in mp3s]})")
+
+    status, library = client.json("/api/tracks?limit=200")
+    ripped = {(t["title"], t["format"]): t for t in library["items"] if t["album"].startswith("Smoke Album")}
+    check(set(ripped) == {("Smoke One", "flac"), ("Smoke Two", "flac"), ("Smoke One", "mp3"), ("Smoke Two", "mp3")}, f"the songs joined the library, tagged ({sorted(ripped)})")
+    flac = ripped.get(("Smoke One", "flac"))
+    if flac:
+        check(abs(flac["duration"] - 40 / 75) < 0.1 and flac["artist"] == "Smoke Artist", f"a song has the length of the track on the disc ({flac['duration']})")
+        status, headers, body = client.request(f"/api/art/track/{flac['id']}?size=64")
+        check(status == 200 and headers.get("content-type", "").startswith("image/") and len(body) > 50, f"the cover is inside the song ({status})")
+    mp3 = ripped.get(("Smoke One", "mp3"))
+    if mp3:
+        _, info = client.json(f"/api/tracks/{mp3['id']}/info")
+        check(abs((info.get("bitrate") or 0) / 1000 - 128) <= 2, f"the MP3 has the bit rate asked for ({info.get('bitrate')})")
+    status, history = client.json("/api/discs/rips")
+    check(status == 200 and [(r["status"], r["songs"]) for r in history["rips"]] == [("done", 2), ("done", 2)], f"both rips are in the history ({history})")
+    left = [p.name for p in music.rglob("*.part")] + [p.name for p in (scratch / "profile" / ".musictoolkit" / "cache" / "discs").glob("*")]
+    check(not left, f"no half-written song or temporary copy is left ({left})")
 
 
 LRCLIB_ANSWER = {"id": 7, "instrumental": False, "plainLyrics": "Sparks\nand wire", "syncedLyrics": "[00:01.00]Sparks\n[00:04.00]and wire\n"}
@@ -493,6 +563,20 @@ def run(exe: Path, fixtures: Path) -> None:
         **os.environ, "HOME": str(profile), "USERPROFILE": str(profile), "MTK_TOKEN": TOKEN, "MTK_LRCLIB_URL": lrclib_url,
         "MTK_ALLOW_LOCAL_URLS": "1", "MTK_RADIO_BROWSER_URL": internet_urls["radio_browser"], "MTK_ITUNES_URL": internet_urls["apple"],
     }
+    # A stand-in for mtk-disc.exe that keeps its drives and discs in folders (the real one needs a drive with a disc in it), and for MusicBrainz and the
+    # Cover Art Archive: one release, with a picture. Both are plain Python and standard library, kept with the tests.
+    fake_disc = fixtures.resolve().parent / "fake_disc_helper.py"
+    disc_servers = contextlib.ExitStack()
+    if fake_disc.exists():
+        sys.path.insert(0, str(fixtures.resolve().parent.parent))
+        from tests.fake_musicbrainz import coverart_script, ident, musicbrainz_script, release_xml  # noqa: PLC0415
+        from tests.fake_streams import serve_script  # noqa: PLC0415
+
+        subprocess.run([sys.executable, str(fake_disc), "--make", str(scratch / "drives")], check=True)
+        release = release_xml(key="smoke", title="Smoke Album", artist="Smoke Artist", tracks=(("Smoke One", 533), ("Smoke Two", 667)))
+        mb = disc_servers.enter_context(serve_script(musicbrainz_script(fuzzy=[release])))
+        caa = disc_servers.enter_context(serve_script(coverart_script({f"release/{ident('smoke')}": tiny_png(300)})))
+        env.update(MTK_DISC_HELPER=json.dumps([sys.executable, str(fake_disc), str(scratch / "drives")]), MTK_MUSICBRAINZ_URL=mb.url, MTK_COVERART_URL=caa.url)
     # A stand-in for mtk-mtp.exe that keeps its "phones" in folders: the real one needs a phone plugged in.
     fake_helper = fixtures.resolve().parent / "fake_mtp_helper.py"
     if fake_helper.exists():
@@ -565,6 +649,8 @@ def run(exe: Path, fixtures: Path) -> None:
         check(client.request(f"/api/tracks/{track['id']}/lyrics")[0] == 200, "lyrics lookup")
         personal_layer(client, tracks["items"])
         radio_and_podcasts(client, internet_urls, tone)
+        if fake_disc.exists():
+            discs(client, scratch, music)
         check(client.request("/api/home")[0] == 200, "Home data")
         status, settings = client.json("/api/settings")
         check(status == 200 and "library" in settings, "settings")
@@ -580,6 +666,7 @@ def run(exe: Path, fixtures: Path) -> None:
         raise
     finally:
         stop(process)
+        disc_servers.close()
         lrclib.shutdown()
         for server in internet:
             server.shutdown()

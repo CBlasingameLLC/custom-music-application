@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- mtk-disc.exe: the small program that reads audio CDs, ejects discs and (later) burns them for Music Toolkit.
+       .NET Framework 4.8 is part of Windows 10 and 11, so nothing has to be installed alongside it. It has no libraries of its own:
+       everything it does is Windows (device controls for reading, IMAPI for burning). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>mtk-disc</AssemblyName>
+    <RootNamespace>MusicToolkit.Disc</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Description>Music Toolkit helper for audio CDs and burning discs</Description>
+    <Product>Music Toolkit</Product>
+    <Copyright>Music Toolkit</Copyright>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets this build on a machine without the .NET Framework targeting pack (Linux, for a compile check). -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+</Project>
