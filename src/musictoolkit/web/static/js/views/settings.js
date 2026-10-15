@@ -223,7 +223,7 @@ function DiscsCard({ settings }) {
   const roots = settings.library.roots;
   const [scheme, setScheme] = useState(d.rip_scheme);
   const set = (patch) => save({ disc: patch });
-  return html`<${Card} icon="cd" title="Discs" hint="How audio CDs are ripped into the library. Each disc can be ripped differently on the Discs screen; these are what it starts from.">
+  return html`<${Card} icon="cd" title="Discs" hint="How audio CDs are ripped into the library, and what burning starts from. Each disc can be done differently on the Discs screen; these are what it starts from.">
     <label class="field narrow"><span>Format</span>
       <select value=${d.rip_format} onChange=${(e) => set({ rip_format: e.target.value })}>
         <option value="flac">FLAC: exactly the disc, about half the size</option><option value="mp3">MP3: small files that play anywhere</option>
@@ -246,6 +246,8 @@ function DiscsCard({ settings }) {
     <${Button} onClick=${() => set({ rip_scheme: scheme.trim() })}>Save the layout<//>
     <${Switch} checked=${d.rip_cover} onChange=${(v) => set({ rip_cover: v })}>Put the album's cover picture in the songs and in their folder<//>
     <${Switch} checked=${d.eject_after_rip} onChange=${(v) => set({ eject_after_rip: v })}>Eject the disc when it is done, unless a part of it could not be read perfectly<//>
+    <${Switch} checked=${d.eject_after_burn} onChange=${(v) => set({ eject_after_burn: v })}>Eject a burned disc when it is done<//>
+    <${Switch} checked=${d.burn_verify} onChange=${(v) => set({ burn_verify: v })}>After burning a data disc, read every file back and compare it<//>
     <p class="note"><${Icon} name="info" size=${14} /><span>Finding the album sends the disc's table of contents (how long each song is) to musicbrainz.org, once the contact email under Accounts and services is set, and fetches the cover from the Cover Art Archive. Nothing else leaves this computer.</span></p>
     <div class="row-actions"><${Button} icon="cd" onClick=${() => go('/discs')}>Open Discs<//></div>
   <//>`;
@@ -328,7 +330,7 @@ function diagnosticRows(report, keys, update, shell) {
       ok: discs.available && !discs.error,
       label: 'CD and DVD drives',
       detail: !discs.available ? discs.reason : discs.error ? discs.error
-        : discs.drives.length ? discs.drives.map((d) => `${d.id} ${d.name || ''} (${words[d.media] || d.media})`).join(' · ') : 'the helper that reads discs is installed; no drive was found',
+        : discs.drives.length ? discs.drives.map((d) => `${d.id} ${d.name || ''} (${words[d.media] || d.media}${d.writer ? `, writes ${(d.writes || []).join(', ') || 'discs'}` : ''})`).join(' · ') : 'the helper that reads discs is installed; no drive was found',
     });
   }
   if (!failed(services)) {

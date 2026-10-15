@@ -599,7 +599,7 @@ def test_the_history_lists_each_rip_with_what_happened_to_every_song(page, live,
         open_discs(page)
         expect(page.get_by_role("tab", name="History")).to_be_visible()
         page.get_by_role("tab", name="History").click()
-        expect(page.get_by_role("heading", name="Nothing ripped yet")).to_be_visible()
+        expect(page.get_by_role("heading", name="Nothing ripped or burned yet")).to_be_visible()
         page.get_by_role("tab", name="Rip a CD").click()
         start_button(page).click()
         expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
@@ -668,8 +668,9 @@ def test_every_state_of_the_discs_screen_passes_an_automated_accessibility_check
     add_library(page, live)
     problems: list[str] = []
 
-    def look(name: str, *, still: bool = True) -> None:
-        page.evaluate(accessibility.CLEAR)
+    def look(name: str, *, still: bool = True, open_dialog: bool = False) -> None:
+        # (CLEAR closes every dialog: a question that is open to be looked at only has its toasts put away)
+        page.evaluate("() => import('/static/js/state.js').then((s) => s.toasts.set({ items: [] }))" if open_dialog else accessibility.CLEAR)
         if still:
             accessibility.settled(page)
         accessibility.has_a_heading(page, name)
@@ -702,7 +703,7 @@ def test_every_state_of_the_discs_screen_passes_an_automated_accessibility_check
     expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible()
     look("an empty drive")
     page.get_by_role("tab", name="History").click()
-    expect(page.get_by_role("heading", name="Nothing ripped yet")).to_be_visible()
+    expect(page.get_by_role("heading", name="Nothing ripped or burned yet")).to_be_visible()
     look("an empty history")
     page.get_by_role("tab", name="Rip a CD").click()
 
@@ -773,7 +774,7 @@ def test_every_state_of_the_discs_screen_passes_an_automated_accessibility_check
     look("the history, with the details of a rip")
     page.locator(".rip-row").first.get_by_role("button", name="Take back").click()
     expect(page.get_by_role("dialog", name="Take back this rip?")).to_be_visible()
-    look("the question before a rip is taken back", still=False)
+    look("the question before a rip is taken back", still=False, open_dialog=True)
     page.evaluate(accessibility.CLEAR)
 
     assert not problems, f"{len(problems)} accessibility problems in the {theme} theme:\n" + "\n".join(problems)

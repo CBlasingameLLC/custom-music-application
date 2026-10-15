@@ -4,7 +4,7 @@ import { api, fmt, html, useCallback, useEffect, useRef, useState, useStore } fr
 import { Icon } from './icons.js';
 import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
-import { desktop, enc, go, notifyError, openMenu, toast, ui } from './state.js';
+import { addToBurnList, desktop, enc, go, notifyError, openMenu, toast, ui } from './state.js';
 import { openAddToPlaylist, openTrackInfo } from './dialogs.js';
 import { openTagEditor } from './tagtools.js';
 
@@ -53,6 +53,7 @@ export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 
     ...(single ? [{ label: 'Start radio', icon: 'radio', action: () => startRadio(single) }] : []),
     { divider: true },
     { label: 'Add to playlist…', icon: 'plus', action: () => openAddToPlaylist(tracks) },
+    { label: 'Add to burn list', icon: 'cd', action: () => addToBurnList(tracks) },
     {
       label: allFavorite ? 'Remove from favorites' : 'Add to favorites',
       icon: 'heart',

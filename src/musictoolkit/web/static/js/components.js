@@ -87,7 +87,7 @@ export function Button({ icon, children, kind = '', onClick, title, disabled, ty
 }
 
 /** The running background job of one of these kinds: what it is doing, how far along, and a Cancel button. */
-export function JobBanner({ kinds }) {
+export function JobBanner({ kinds, cancelable = true }) {
   const { items } = useStore(jobs);
   const job = items.find((j) => kinds.includes(j.kind) && (j.status === 'running' || j.status === 'queued'));
   if (!job) return null;
@@ -99,7 +99,7 @@ export function JobBanner({ kinds }) {
       <div class="progress"><div style=${{ width: (pct ?? 8) + '%' }}></div></div>
       <span class="subtle">${job.message || (job.status === 'queued' ? 'Waiting for the previous task to finish…' : '')}</span>
     </div>
-    <button class="chip-btn" onClick=${() => api(`/jobs/${job.id}/cancel`, { method: 'POST' }).catch(notifyError)}>Cancel</button>
+    ${cancelable && html`<button class="chip-btn" onClick=${() => api(`/jobs/${job.id}/cancel`, { method: 'POST' }).catch(notifyError)}>Cancel</button>`}
   </div>`;
 }
 

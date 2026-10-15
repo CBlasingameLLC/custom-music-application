@@ -1,13 +1,14 @@
 // Discs: copy an audio CD into the library as FLAC or MP3. Look at the disc, find the album, see where every song would go, rip it,
-// watch it happen, keep the history, take a rip back. (Burning comes next to this.)
+// watch it happen, keep the history, take a rip back. Burning is next to it (views/burn.js).
 import { api, fmt, html, useAsync, useCallback, useDebounced, useEffect, useLayoutEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, Empty, JobBanner, PageHeader, Spinner, TabPanel, Tabs } from '../components.js';
 import { confirmDialog } from '../dialogs.js';
 import { Examples } from './organize.js';
-import { go, href, jobs, notifyError, onJobFinished, trackJob } from '../state.js';
+import { discsFocus, go, href, jobs, notifyError, onJobFinished, trackJob } from '../state.js';
+import { BurnHistory, BurnTab } from './burn.js';
+import { useDrives, when } from './discparts.js';
 
-const WATCH_MS = 3000; // how often the drives are looked at while this page is open
 const looked = new Map(); // disc id -> the albums MusicBrainz offered for it, so that coming back to the page does not ask again
 
 const MEDIA = {
@@ -45,44 +46,9 @@ const PLAN_ACTION = {
 // The chip colours of the sync lists, reused: green for done, amber for trouble, grey for the rest.
 const CHIP = { done: 'new', problem: 'missing', failed: 'damaged', rip: 'new', exists: 'missing', clash: 'damaged', too_long: 'damaged' };
 
-const when = (iso) => {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? '' : `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-};
 const minutes = (seconds) => `${Math.max(1, Math.round(seconds / 60))} min`;
 /** A refusal of the form's contents arrives as a list of what is wrong, for programs; say it in a sentence. */
 const friendly = (message) => (String(message).startsWith('[') ? 'Something in the details above cannot be used (a year, a disc number or a title that is too long).' : message);
-
-// ------------------------------------------------------------ looking at the drives
-
-/** The CD and DVD drives and what is in them, looked at again every few seconds while `watching`. */
-function useDrives(watching) {
-  const [state, setState] = useState({ loading: true, data: null, error: null });
-  const look = useCallback(async (fresh) => {
-    try {
-      const data = await api('/discs/drives', { params: fresh ? { fresh: true } : {} });
-      setState((before) => {
-        // Looking failed this time (the helper did not answer): what was seen before stays on the screen, with the trouble above it.
-        if (data.error && !data.drives.length && before.data?.drives.length) return { ...before, loading: false, error: new Error(data.error) };
-        return JSON.stringify(before.data) === JSON.stringify(data) && !before.error ? before : { loading: false, data, error: null };
-      });
-    } catch (error) {
-      setState((before) => ({ ...before, loading: false, error }));
-    }
-  }, []);
-  useEffect(() => {
-    if (!watching) return undefined;
-    look(true);
-    const timer = setInterval(() => !document.hidden && look(false), WATCH_MS);
-    const onFocus = () => look(true); // coming back to the window after putting a disc in
-    window.addEventListener('focus', onFocus);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [watching, look]);
-  return [state, look];
-}
 
 // ------------------------------------------------------------ choosing the album
 
@@ -294,6 +260,8 @@ function RipTab({ active }) {
   const lookupJob = useRef(null);
   const discRef = useRef(null);
   discRef.current = disc?.data;
+  const visible = useRef(active); // (read by the window's focus handler, which is made once)
+  visible.current = active;
 
   // The drive the person chose, while it is there; otherwise the first with music in it, otherwise the first.
   const list = drives.data?.drives || [];
@@ -323,7 +291,7 @@ function RipTab({ active }) {
   // Read the table of contents when a music disc is in the drive.
   const busy = Boolean(drives.data?.busy); // a rip has the drive: it is not asked anything else
   useEffect(() => {
-    if (!seen || !drive || current || busy || !resumed) {
+    if (!seen || !drive || current || busy || !resumed || !active) { // (a tab that is not on show asks the drive nothing)
       if (!seen) setDisc(null);
       return undefined;
     }
@@ -336,7 +304,7 @@ function RipTab({ active }) {
     return () => {
       alive = false;
     };
-  }, [seen, reads, !current, busy, resumed]);
+  }, [seen, reads, !current, busy, resumed, active]);
 
   // An empty tray: the next disc, even the same one, starts from the beginning.
   const tray = drive?.media;
@@ -373,10 +341,10 @@ function RipTab({ active }) {
   // ... and ask MusicBrainz about it, once, as soon as there is a contact to ask with (the answer may arrive after the disc was read).
   useEffect(() => {
     const data = discRef.current;
-    if (!data || !info?.contact_set || askedFor.current === data.disc_id || looked.has(data.disc_id)) return;
+    if (!active || !data || !info?.contact_set || askedFor.current === data.disc_id || looked.has(data.disc_id)) return;
     askedFor.current = data.disc_id;
     askMusicBrainz(data.drive);
-  }, [discId, info?.contact_set]);
+  }, [discId, info?.contact_set, active]);
 
   async function askMusicBrainz(driveLetter) {
     setLookup({ state: 'working' });
@@ -443,7 +411,7 @@ function RipTab({ active }) {
   const ripping = Boolean(current) || running;
 
   useEffect(() => {
-    if (!wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
+    if (!active || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
     const asked = JSON.parse(wanted);
     if (!asked.scheme) {
       setPlan({ key: wanted, error: 'Type a layout: how the folders and the files are named.' });
@@ -455,11 +423,12 @@ function RipTab({ active }) {
       (error) => mounted.current && setPlan({ key: wanted, error: friendly(error.message) }),
     ).finally(() => mounted.current && setPreviewing(false));
     return undefined;
-  }, [wanted, ripping, previewing, again]);
+  }, [wanted, ripping, previewing, again, active]);
 
   // A file may have been moved or made while the window was away (in File Explorer, say): look at where the songs will go again.
   useEffect(() => {
     const onFocus = () => {
+      if (!visible.current) return;
       setPlan(null);
       setAgain((n) => n + 1);
     };
@@ -500,6 +469,7 @@ function RipTab({ active }) {
 
   // ---- what to show
 
+  if (!active) return null; // (kept up to date while another tab is on show, but not drawn: nothing hidden for a screen reader or a test to meet)
   if (current) {
     return html`<${RipProgress} key=${current} ripId=${current} onNew=${() => { document.getElementById('main')?.focus({ preventScroll: true }); setCurrent(null); setReads((n) => n + 1); look(true); }} />`;
   }
@@ -542,7 +512,7 @@ function RipTab({ active }) {
     ${media === 'loading' && html`<${Spinner} label="The drive is reading the disc…" />`}
     ${media === 'data' && html`<${Empty} icon="cd" title="This is a data disc, not a music CD"><p>${drive.label ? `“${drive.label}” holds files, not songs.` : 'It holds files, not songs.'} To copy files from it, use File Explorer.</p><//>`}
     ${media === 'unknown' && html`<${Empty} icon="cd" title="This drive cannot read the disc">
-      <p>It may be blank, scratched, dirty, or not a music CD. Take it out, wipe it, and put it back in.</p>
+      <p>It may be blank, scratched, dirty, or not a music CD. Take it out, wipe it, and put it back in.${drive.writer ? ' If it is a blank disc, the Burn a disc tab can write on it.' : ''}</p>
     <//>`}
 
     ${(media === 'audio' || media === 'mixed') && html`
@@ -666,8 +636,9 @@ function HistoryTab() {
   const { items: jobItems } = useStore(jobs);
   const [version, setVersion] = useState(0);
   const { data, error } = useAsync(() => api('/discs/rips'), [version]);
+  const { data: burned } = useAsync(() => api('/discs/burns'), [version]);
   const busy = jobItems.some((j) => j.kind === 'rip-undo' && (j.status === 'running' || j.status === 'queued'));
-  useEffect(() => onJobFinished((job) => (job.kind === 'rip' || job.kind === 'rip-undo') && setVersion((v) => v + 1)), []);
+  useEffect(() => onJobFinished((job) => ['rip', 'rip-undo', 'burn', 'iso', 'erase'].includes(job.kind) && setVersion((v) => v + 1)), []);
 
   async function undo(rip) {
     const ok = await confirmDialog({
@@ -686,24 +657,31 @@ function HistoryTab() {
   }
 
   if (error) return html`<p class="subtle">${error.message}</p>`;
-  if (!data) return html`<${Spinner} />`;
-  if (!data.rips.length) {
-    return html`<${Empty} icon="cd" title="Nothing ripped yet"><p>Every disc you rip is listed here, with what happened to each song, so that you can take it back.</p><//>`;
+  if (!data || !burned) return html`<${Spinner} />`;
+  if (!data.rips.length && !burned.burns.length) {
+    return html`<${Empty} icon="cd" title="Nothing ripped or burned yet"><p>Every disc you rip is listed here, with what happened to each song, so that you can take it back. Every disc you burn is listed too, with what became of it.</p><//>`;
   }
   return html`<${JobBanner} kinds=${['rip-undo']} />
-    <ul class="rip-list">${data.rips.map((rip) => html`<${RipRow} key=${rip.id} rip=${rip} busy=${busy} onUndo=${undo} />`)}</ul>`;
+    ${data.rips.length > 0 && html`<h2 class="section-title">Ripped</h2>
+      <ul class="rip-list" aria-label="Ripped discs">${data.rips.map((rip) => html`<${RipRow} key=${rip.id} rip=${rip} busy=${busy} onUndo=${undo} />`)}</ul>`}
+    <${BurnHistory} burns=${burned.burns} />`;
 }
 
 // ------------------------------------------------------------ the page
 
 export function DiscsView() {
   const [tab, setTab] = useState('rip');
+  const asked = useStore(discsFocus);
+  useEffect(() => {
+    if (asked.tab) setTab(asked.tab); // (a toast's "Open the list", from anywhere in the app)
+  }, [asked.n]);
   return html`
-    <${PageHeader} title="Discs" subtitle="Copy an audio CD into your library as FLAC or MP3, with the right names, tags and cover. Experimental: it works with the drive's own interface, and has been tried on stand-in drives, not yet on every real one." />
+    <${PageHeader} title="Discs" subtitle="Copy an audio CD into your library as FLAC or MP3, or burn songs onto a disc. Experimental: it works with the drive's own interface, and has been tried on stand-in drives, not yet on every real one." />
     <${Tabs} id="discs" label="Discs" value=${tab} onChange=${setTab}
-      tabs=${[{ id: 'rip', label: 'Rip a CD', icon: 'cd' }, { id: 'history', label: 'History', icon: 'clock' }]} />
+      tabs=${[{ id: 'rip', label: 'Rip a CD', icon: 'cd' }, { id: 'burn', label: 'Burn a disc', icon: 'disc' }, { id: 'history', label: 'History', icon: 'clock' }]} />
     <${TabPanel} id="discs" value=${tab}>
       <div hidden=${tab !== 'rip'}><${RipTab} active=${tab === 'rip'} /></div>
+      <div hidden=${tab !== 'burn'}><${BurnTab} active=${tab === 'burn'} /></div>
       ${tab === 'history' && html`<${HistoryTab} />`}
     <//>`;
 }

@@ -6,7 +6,7 @@ import { confirmDialog, pickFile, promptText } from '../dialogs.js';
 import { openSmartPlaylistEditor, describeRule } from '../filters.js';
 import { go, library, loadPlaylists, notifyError, toast } from '../state.js';
 import { TrackTable } from '../tracks.js';
-import { playMatching } from './library.js';
+import { addMatchingToBurnList, playMatching } from './library.js';
 
 const playPlaylist = (playlist, shuffle = false) =>
   playMatching({ playlist: playlist.id }, 0, { shuffle, source: `Playlist: ${playlist.name}` });
@@ -105,6 +105,7 @@ export function PlaylistView({ id }) {
         <div class="hero-actions">
           <${Button} kind="primary" icon="play" disabled=${!playlist.tracks} onClick=${() => playPlaylist(playlist)}>Play<//>
           <${Button} icon="shuffle" disabled=${!playlist.tracks} onClick=${() => playPlaylist(playlist, true)}>Shuffle<//>
+          <${Button} icon="cd" disabled=${!playlist.tracks} onClick=${() => addMatchingToBurnList({ playlist: id, sort: sort.key, dir: sort.dir })}>Add to burn list<//>
           ${manual ? html`<${Button} icon="edit" onClick=${rename}>Rename<//>` : html`<${Button} icon="edit" onClick=${() => openSmartPlaylistEditor({ playlist })}>Edit rules<//>`}
           <a class="btn" href="/api/playlists/${id}/export.m3u8" download><${Icon} name="download" size=${17} /><span>Export .m3u8</span></a>
           <${Button} icon="trash" kind="danger-ghost" onClick=${remove}>Delete<//>

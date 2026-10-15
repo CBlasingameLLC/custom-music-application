@@ -855,6 +855,18 @@ input.mono { font-size: 13.5px; }
   .rip-table .rip-time { display: none; }
 }
 
+/* ---- burning ---- */
+.burn-songs li.cannot .rip-song strong { text-decoration: line-through; }
+.burn-song-end { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.burn-song-end .reason { margin-right: 6px; }
+.burn-total { margin: 0 0 8px; }
+.capacity-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 6px 0 12px; }
+progress.capacity { width: min(100%, 420px); height: 10px; accent-color: var(--accent); }
+@media (max-width: 720px) {
+  .burn-songs li { grid-template-columns: 34px minmax(0, 1fr); }
+  .burn-song-end { grid-column: 1 / -1; }
+}
+
 /* ---- connection tests and scrobbling status ---- */
 .test-result { display: inline-flex; align-items: flex-start; gap: 6px; font-size: 13px; line-height: 1.4; }
 .test-result svg { flex: none; margin-top: 2px; }

@@ -172,6 +172,16 @@ onJobFinished((job) => {
     toast(`Ripped ${r.ripped || 0} ${r.ripped === 1 ? 'song' : 'songs'}.${note}`, r.failed ? 'info' : 'success', 9000);
   } else if (job.status === 'cancelled' && job.kind === 'rip') {
     toast('Stopped. Songs already ripped are in your library, and the history lets you take them back.', 'info', 9000);
+  } else if (job.status === 'done' && job.kind === 'burn') {
+    const r = job.result || {};
+    const what = r.files !== undefined ? `${r.files} ${r.files === 1 ? 'file' : 'files'}` : `${r.songs || 0} ${r.songs === 1 ? 'song' : 'songs'}`;
+    toast(`Burned ${what}.${r.verified ? ' Every file was read back from the disc and matches.' : ''}${r.ejected ? ' The disc is out.' : ''}`, 'success', 9000);
+  } else if (job.status === 'cancelled' && job.kind === 'burn') {
+    toast('Stopped. The History says what became of the disc.', 'info', 9000);
+  } else if (job.status === 'done' && job.kind === 'iso') {
+    toast(`Saved the disc image: ${(job.result || {}).output || ''}`, 'success', 9000);
+  } else if (job.status === 'done' && job.kind === 'erase') {
+    toast((job.result || {}).message || 'The disc was erased.', 'success', 9000);
   } else if (job.status === 'done' && job.kind === 'rip-undo') {
     const r = job.result || {};
     const note = r.changed?.length ? ` ${r.changed.length} changed since, so they were left alone.` : '';
@@ -183,6 +193,61 @@ onJobFinished((job) => {
     loadAbout().catch(() => {});
   }
 });
+
+// ------------------------------------------------------------ the list of songs to burn
+
+const BURN_LIST_KEY = 'mtk.burnlist.v1';
+export const BURN_LIST_MAX = 500; // what the server takes in one go (a music CD holds 99; a data disc holds as many files as fit)
+const burnListBefore = (() => {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(BURN_LIST_KEY) || '[]');
+    return Array.isArray(saved) ? saved.filter((i) => Number.isInteger(i?.id)).slice(0, BURN_LIST_MAX) : [];
+  } catch {
+    return [];
+  }
+})();
+
+/** The songs somebody is putting together for a disc, in the order they go on it: { items: [{ id, title, artist, seconds }] }. Kept for the session. */
+export const burnList = createStore({ items: burnListBefore });
+burnList.subscribe((s) => {
+  try {
+    sessionStorage.setItem(BURN_LIST_KEY, JSON.stringify(s.items));
+  } catch {
+    /* storage unavailable */
+  }
+});
+
+/** Which tab of the Discs screen to show, asked for from elsewhere (a toast's "Open"); `n` changes every time, so that asking twice works. */
+export const discsFocus = createStore({ tab: null, n: 0 });
+export function openDiscs(tab) {
+  discsFocus.set((s) => ({ tab, n: s.n + 1 }));
+  go('/discs');
+}
+
+/** Put songs at the end of the list. A song may be on it twice. Tells the person what happened, with a way to the list. */
+export function addToBurnList(tracks) {
+  const room = BURN_LIST_MAX - burnList.get().items.length;
+  const added = tracks.slice(0, Math.max(room, 0)).map((t) => ({ id: t.id, title: t.title || '', artist: t.artist || t.album_artist || '', seconds: t.duration || 0 }));
+  if (!added.length) {
+    toast(`The burn list is full (${BURN_LIST_MAX} songs).`, 'info');
+    return;
+  }
+  burnList.set((s) => ({ items: [...s.items, ...added] }));
+  const left = tracks.length - added.length;
+  const words = added.length === 1 ? `Added "${added[0].title}"` : `Added ${added.length} songs`;
+  toast(`${words} to the burn list${left > 0 ? ` (${left} did not fit)` : ''}`, 'success', 6000, { label: 'Open the list', onClick: () => openDiscs('burn') });
+}
+export const removeFromBurnList = (index) => burnList.set((s) => ({ items: s.items.filter((_, i) => i !== index) }));
+export const clearBurnList = () => burnList.set({ items: [] });
+export function moveInBurnList(index, by) {
+  burnList.set((s) => {
+    const to = index + by;
+    if (to < 0 || to >= s.items.length) return s;
+    const items = [...s.items];
+    [items[index], items[to]] = [items[to], items[index]];
+    return { items };
+  });
+}
 
 // ------------------------------------------------------------ context menu
 
