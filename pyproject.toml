@@ -19,6 +19,7 @@ dependencies = [
     "send2trash",
     "defusedxml",
     "soundfile>=0.13",
+    "soxr>=0.5",
 ]
 
 [project.optional-dependencies]
