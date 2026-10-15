@@ -14,6 +14,7 @@
      "noise": true,                                   stray output between replies (or a list of the lines to print)
      "lowercase": true,                               the listing gives drive letters in lower case
      "drives_fail": true,                             the listing is refused ("boom")
+     "drives_delay": 2.0,                             seconds the listing takes to answer (a busy computer, a drive that is slow to say what it holds)
      "slow": 0.05,                                    seconds a read takes per sector (cancel can interrupt it)
      "flaky": [{"from": 100, "to": 120, "times": 1}], the first reads of these sectors from the disc come back with a flipped bit
                                                       ("after": k leaves the first k reads alone; "varies": true flips a different bit each time)
@@ -448,6 +449,8 @@ class Fake:
             return {"ok": False, "error": "it went wrong, and the helper gave no code"}
         if cmd == "silent":
             return {"ok": False, "code": "no_media"}
+        if cmd == "drives" and self.control().get("drives_delay"):
+            self.pause(float(self.control()["drives_delay"]))
         if cmd == "drives" and self.control().get("drives_fail"):
             raise Refusal("failed", "boom")
         if cmd == "drives":

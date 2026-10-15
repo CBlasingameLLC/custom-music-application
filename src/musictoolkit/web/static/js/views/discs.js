@@ -290,8 +290,10 @@ function RipTab({ active }) {
 
   // Read the table of contents when a music disc is in the drive.
   const busy = Boolean(drives.data?.busy); // a rip has the drive: it is not asked anything else
+  const listed = Boolean(drives.listed); // the drives have been looked at since the rip ended or the tab came back: the disc they name is there now
   useEffect(() => {
-    if (!seen || !drive || current || busy || !resumed || !active) { // (a tab that is not on show asks the drive nothing)
+    // (a tab that is not on show asks the drive nothing; nor is it asked about a disc named by a list from before a rip, which may have ejected it)
+    if (!seen || !drive || current || busy || !resumed || !active || !listed) {
       if (!seen) setDisc(null);
       return undefined;
     }
@@ -304,7 +306,7 @@ function RipTab({ active }) {
     return () => {
       alive = false;
     };
-  }, [seen, reads, !current, busy, resumed, active]);
+  }, [seen, reads, !current, busy, resumed, active, listed]);
 
   // An empty tray: the next disc, even the same one, starts from the beginning.
   const tray = drive?.media;
@@ -411,7 +413,7 @@ function RipTab({ active }) {
   const ripping = Boolean(current) || running;
 
   useEffect(() => {
-    if (!active || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
+    if (!active || !listed || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
     const asked = JSON.parse(wanted);
     if (!asked.scheme) {
       setPlan({ key: wanted, error: 'Type a layout: how the folders and the files are named.' });
@@ -423,7 +425,7 @@ function RipTab({ active }) {
       (error) => mounted.current && setPlan({ key: wanted, error: friendly(error.message) }),
     ).finally(() => mounted.current && setPreviewing(false));
     return undefined;
-  }, [wanted, ripping, previewing, again, active]);
+  }, [wanted, ripping, previewing, again, active, listed]);
 
   // A file may have been moved or made while the window was away (in File Explorer, say): look at where the songs will go again.
   useEffect(() => {
