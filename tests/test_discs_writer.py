@@ -51,6 +51,16 @@ def read(helper: DiscHelper, lba: int, count: int, drive: str = "E:") -> bytes:
 # ---------------------------------------------------------------------------------------- what is in the drive
 
 
+@pytest.mark.parametrize("code", ["not_blank", "write_protected", "no_space", "underrun"])
+def test_a_refusal_the_recorder_can_make_has_words_of_its_own(code: str) -> None:
+    """The real helper sends IMAPI's own words when it has some; when it sends only a code, the person still gets a sentence that says what
+    to do, not "The drive did not accept that."."""
+    words = str(DiscError(code))
+    assert words == disc_helper.MESSAGES[code] and words.endswith((".", "?"))
+    assert words != str(DiscError("some_code_nobody_knows"))
+    assert str(DiscError(code, "IMAPI said so")) == "IMAPI said so"  # the helper's own words win
+
+
 def test_the_listing_says_which_drives_can_write_and_what(world: Path) -> None:
     with start(world) as helper:
         drives = {d["id"]: d for d in helper.call("drives")["drives"]}
