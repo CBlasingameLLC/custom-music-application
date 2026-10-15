@@ -106,7 +106,7 @@ def test_the_library_layout_keeps_the_folders_of_the_library(tmp_path: Path) -> 
 
 
 def test_the_library_layout_makes_every_folder_name_safe(tmp_path: Path) -> None:
-    plan = plan_data([song(tmp_path, "AC_DC/Who Made Who?/01 You Shook Me.mp3")])
+    plan = plan_data([virtual(tmp_path, "AC_DC/Who Made Who?/01 You Shook Me.mp3")], stat=lambda _p: 10)  # (a "?" cannot be in the name of a real folder on Windows)
     assert dests(plan) == ["AC_DC/Who Made Who_/01 You Shook Me.mp3"]
     odd = song(tmp_path, "x/y.mp3")
     odd.path = str(tmp_path / "elsewhere.mp3")

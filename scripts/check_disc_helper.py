@@ -195,9 +195,9 @@ def _directory(data: bytes, extent: int, size: int, joliet: bool, prefix: str = 
         position += length
         if raw in (b"\x00", b"\x01"):  # "." and ".."
             continue
-        name = raw.decode("utf-16-be" if joliet else "ascii")
+        name = re.sub(r";\d+$", "", raw.decode("utf-16-be" if joliet else "ascii"))  # (the version number a name may end with: ";1")
         if not joliet:
-            name = name.split(";")[0].rstrip(".")
+            name = name.rstrip(".")
         if flags & 2:
             found.update(_directory(data, first, size_of, joliet, prefix + name + "/"))
         else:
