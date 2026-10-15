@@ -68,9 +68,14 @@ class ReadStats:
 
 
 def _flush(source: SectorSource, near: int, disc_sectors: int) -> None:
-    """Read somewhere far from `near` (the other end of the disc), so that what the drive remembers of `near` is pushed out."""
+    """Read somewhere far from `near` (the other end of the disc), so that what the drive remembers of `near` is pushed out. Only that the
+    drive went there matters: sectors there that cannot be read do not make the sectors that are wanted any worse."""
     count = min(FLUSH_SECTORS, max(BLOCK_SECTORS, disc_sectors // 4))
-    source.flush(disc_sectors - count if near < disc_sectors // 2 else 0, count)
+    try:
+        source.flush(disc_sectors - count if near < disc_sectors // 2 else 0, count)
+    except DiscError as error:
+        if error.code not in ("read_error", "unsupported"):
+            raise
 
 
 def _read_block(source: SectorSource, lba: int, count: int, disc_sectors: int) -> bytes | None:

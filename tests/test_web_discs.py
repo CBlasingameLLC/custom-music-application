@@ -315,6 +315,17 @@ def test_a_sector_that_comes_wrong_the_first_time_is_put_right_without_anyone_no
     assert found["tracks"][1]["rereads"] == 1 and found["tracks"][1]["status"] == "done"
 
 
+def test_a_disc_with_a_data_track_after_the_music_is_ripped_without_touching_the_data(rig) -> None:
+    add_drive(rig.world, "E", disc=audio_disc(seed=SEED, tracks=SECTORS, label="CD EXTRA", data_sectors=4000))
+    set_control(rig.world, strict_data=True, flaky=[{"from": 10, "to": 10, "times": 1}])  # (a read of the data track as music would fail the rip)
+    asked = body(rig, tracks=[{"number": 1, "title": "First"}, {"number": 2, "title": "Second"}, {"number": 3, "title": "Third"}, {"number": 4, "title": "Data", "rip": False}])
+    shown = rig.client.post("/api/discs/rip/preview", json=asked)
+    assert shown.status_code == 422, "the list of songs has to match the music on the disc: the data track is not a song"
+    job, found = rip_it(rig)
+    assert job.status == "done", job.error
+    assert decoded(album(rig) / "01 - First.flac") == audio(SEED, 0, SECTORS[0]) and found["tracks"][0]["rereads"] == 1 and found["problems"] == 0
+
+
 # ---------------------------------------------------------------------------------------- when it goes wrong
 
 

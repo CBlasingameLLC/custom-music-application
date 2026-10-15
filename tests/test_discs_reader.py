@@ -210,3 +210,45 @@ def test_what_was_found_is_reported_in_plain_numbers() -> None:
     stats = reader.ReadStats(sectors=100, rereads=2, suspect=[16], unreadable=[32, 48])
     assert stats.to_dict() == {"sectors": 100, "rereads": 2, "suspect": [16], "unreadable": [32, 48], "problems": 3}
     assert zlib.crc32(b"") == 0  # (the reader compares reads by their CRC-32)
+
+
+# ---------------------------------------------------------------------------------------- the push that clears the drive's memory
+
+
+def test_far_sectors_that_cannot_be_read_do_not_stop_a_re_read(drive) -> None:
+    root, source = drive
+    set_control(root, flaky=[{"from": 10, "to": 10, "times": 1}], bad=[{"from": DISC_SECTORS - 40, "to": DISC_SECTORS - 1}])
+    data, stats = rip(source)
+    assert data == audio(SEED, 0, TRACKS[0]) and stats.rereads == 1 and stats.problems == 0
+    assert source.flushes, "the memory was pushed out, from the sectors that cannot be read"
+
+
+class Scripted:
+    """A drive whose first read of the first block fails, so that the memory is pushed out; what that push says is the point."""
+
+    def __init__(self, push: DiscError) -> None:
+        self.push = push
+        self.failed = False
+
+    def read(self, lba: int, count: int) -> bytes:
+        if not self.failed:
+            self.failed = True
+            raise DiscError("read_error")
+        return bytes(count * 2352)
+
+    def flush(self, lba: int, count: int) -> None:
+        raise self.push
+
+
+@pytest.mark.parametrize("code", ["read_error", "unsupported"])
+def test_a_push_through_sectors_that_are_not_music_or_not_readable_is_not_a_failure(code: str) -> None:
+    sink = io.BytesIO()
+    read_track(Scripted(DiscError(code)), 0, 16, sink, disc_sectors=DISC_SECTORS, accuracy="fast")
+    assert sink.getvalue() == bytes(16 * 2352)
+
+
+@pytest.mark.parametrize("code", ["no_media", "media_changed", "not_found", "stopped", "timeout"])
+def test_a_push_that_finds_the_disc_gone_stops_the_rip(code: str) -> None:
+    with pytest.raises(DiscError) as stopped:
+        read_track(Scripted(DiscError(code)), 0, 16, io.BytesIO(), disc_sectors=DISC_SECTORS, accuracy="fast")
+    assert stopped.value.code == code

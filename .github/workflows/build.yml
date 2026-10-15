@@ -120,6 +120,16 @@ jobs:
       - name: Smoke-test the MTP helper
         run: .venv\Scripts\python.exe scripts\check_mtp_helper.py helpers\mtp\out\mtk-mtp.exe
 
+      # The helper for audio CDs (and, later, burning): a small C# program too, which uses nothing but Windows itself.
+      - name: Build the disc helper
+        run: dotnet build helpers\disc\MtkDisc.csproj -c Release -o helpers\disc\out
+
+      # A build machine has no CD drive. This proves what can be proved without one: the program starts, speaks the protocol, refuses
+      # everything that is not the letter of an optical drive, stops a request when told to, and (with a disc image mounted, which Windows
+      # presents as a real drive) finds the drive and reads its contents through the real device controls.
+      - name: Smoke-test the disc helper
+        run: .venv\Scripts\python.exe scripts\check_disc_helper.py helpers\disc\out\mtk-disc.exe
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -127,11 +137,12 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Stage backend and helper into desktop resources
+      - name: Stage backend and helpers into desktop resources
         run: |
           New-Item -ItemType Directory -Force -Path desktop\resources | Out-Null
           Copy-Item dist\mtk-backend.exe desktop\resources\mtk-backend.exe
           Copy-Item helpers\mtp\out desktop\resources\mtk-mtp -Recurse
+          Copy-Item helpers\disc\out desktop\resources\mtk-disc -Recurse
 
       - name: Install Electron dependencies
         working-directory: desktop
@@ -197,7 +208,7 @@ jobs:
             throw "the installer did not produce $exe (installer exit code $($setup.ExitCode))"
           }
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper -- $exe
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper --expect-disc-helper -- $exe
 
       - name: Upload installer and update files
         uses: actions/upload-artifact@v4
@@ -328,7 +339,7 @@ jobs:
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'mtk-upgrade'
           python -m pip install playwright
-          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper -- (Join-Path $dir 'Music Toolkit.exe')
+          python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper --expect-disc-helper -- (Join-Path $dir 'Music Toolkit.exe')
 
   release:
     needs: [version, test, e2e, build, upgrade, update]

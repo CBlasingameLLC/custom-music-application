@@ -132,13 +132,17 @@ electron-builder's NSIS target needs Windows. From the repo root:
    token gate, a scan, cover art, Range streaming and a backup. Give it a few
    seconds: onefile builds self-extract on every launch.
 
-4. The helper for phones and players without a drive letter (needs the .NET SDK):
+4. The helpers (they need the .NET SDK): one for phones and players without a
+   drive letter, one for CDs and DVDs:
      dotnet build helpers\mtp\MtkMtp.csproj -c Release -o helpers\mtp\out
      python scripts\check_mtp_helper.py helpers\mtp\out\mtk-mtp.exe
-   Then stage both next to each other:
+     dotnet build helpers\disc\MtkDisc.csproj -c Release -o helpers\disc\out
+     python scripts\check_disc_helper.py helpers\disc\out\mtk-disc.exe
+   Then stage them next to the backend:
      mkdir desktop\resources
      copy dist\mtk-backend.exe desktop\resources\
      xcopy /E /I helpers\mtp\out desktop\resources\mtk-mtp
+     xcopy /E /I helpers\disc\out desktop\resources\mtk-disc
 
 5. cd desktop
    npm ci

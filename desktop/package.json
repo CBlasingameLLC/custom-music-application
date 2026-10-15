@@ -29,7 +29,8 @@
     ],
     "extraResources": [
       { "from": "resources/mtk-backend.exe", "to": "mtk-backend.exe" },
-      { "from": "resources/mtk-mtp", "to": "mtk-mtp" }
+      { "from": "resources/mtk-mtp", "to": "mtk-mtp" },
+      { "from": "resources/mtk-disc", "to": "mtk-disc" }
     ],
     "win": {
       "target": [

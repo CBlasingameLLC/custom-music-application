@@ -16,7 +16,8 @@
      "bad": [{"from": 500, "to": 502}],               a read of these sectors always fails
      "cache": 512,                                    the drive remembers the last N sectors it read: reading them again gives the same data
                                                       (what a real drive's cache does, and the reason a re-read must first read elsewhere)
-     "change_after": 200}                             after this many reads the disc is reported as changed
+     "change_after": 200,                             after this many reads the disc is reported as changed
+     "strict_data": true}                             reading a data track as music is a plain failure, not "unsupported"
 Commands: drives, toc, read, flush, eject, ticks {n} (n progress events), hang (never answers), crash (exits), close.
 
 The audio is a pure function of (seed, sector) - `audio()` - so a test can work out exactly what a good read must give.
@@ -86,11 +87,17 @@ def set_control(root: Path, **control: object) -> None:
     (Path(root) / "control.json").write_text(json.dumps(control), encoding="utf-8")
 
 
+CD_EXTRA_GAP = 11400  # the end of the music session, the lead-in of the data session and its pre-gap: sectors that can be read as nothing
+
+
 def layout(disc: dict) -> tuple[list[dict], int]:
-    """The tracks with their start sectors, and the sector where the lead-out begins."""
+    """The tracks with their start sectors, and the sector where the lead-out begins. A data track after music (an Enhanced CD) starts a
+    session of its own, 11400 sectors after the music ends."""
     start = 0
     tracks = []
     for t in disc.get("tracks", []):
+        if not t["audio"] and tracks and tracks[-1]["audio"]:
+            start += CD_EXTRA_GAP
         tracks.append({"number": t["number"], "audio": bool(t["audio"]), "start": start, "sectors": t["sectors"]})
         start += t["sectors"]
     return tracks, start
@@ -147,7 +154,7 @@ class Fake:
         if track is None:
             raise Refusal("read_error", "That sector is outside the disc.")
         if not track["audio"]:
-            raise Refusal("unsupported", "That is a data track, not audio.")
+            raise Refusal("failed" if control.get("strict_data") else "unsupported", "That is a data track, not audio.")
         size = int(control.get("cache", 0))
         if size and number in self.cache:
             self.cache.move_to_end(number)

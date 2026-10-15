@@ -87,11 +87,15 @@ def test_the_data_track_of_a_cd_extra_cannot_be_read_as_audio(tmp_path: Path) ->
     root = tmp_path / "drives"
     add_drive(root, "G", disc=audio_disc(tracks=(10, 10), data_sectors=5))
     with start(root) as helper:
-        assert helper.call("toc", drive="G:")["tracks"][-1]["audio"] is False
+        contents = helper.call("toc", drive="G:")
+        assert contents["tracks"][-1]["audio"] is False and contents["tracks"][-1]["start"] == 20 + 11400, "the data session starts 11400 sectors on"
         assert len(read(helper, 5, 2, "G:")) == 2 * 2352
         with pytest.raises(DiscError) as caught:
+            helper.call("read", drive="G:", lba=contents["tracks"][-1]["start"] + 1, count=1)
+        assert caught.value.code == "unsupported"
+        with pytest.raises(DiscError) as between:
             helper.call("read", drive="G:", lba=21, count=1)
-    assert caught.value.code == "unsupported"
+        assert between.value.code == "read_error", "between the sessions there is nothing to read"
 
 
 def test_ejecting_takes_the_disc_out(world: Path) -> None:

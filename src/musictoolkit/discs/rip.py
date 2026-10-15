@@ -360,6 +360,7 @@ def _rip_one(
     cache_dir: Path, cover: bytes | None, handle: Any, label: str, before: int, overall: int, track_total: int,
 ):
     assert track.path is not None
+    music_end = toc.end_of(toc.audio_tracks()[-1])  # (a data track after the music, as on a CD-Extra, cannot be read as audio)
     raw_path = cache_dir / f"{batch_id}-{track.number:02d}.pcm"
     part = track.path.with_name(track.path.name + ".part")
 
@@ -370,7 +371,7 @@ def _rip_one(
         try:
             with open(raw_path, "w+b") as raw:
                 stats = read_track(
-                    source, track.start, track.sectors, raw, disc_sectors=toc.leadout, accuracy=request.accuracy,
+                    source, track.start, track.sectors, raw, disc_sectors=music_end, accuracy=request.accuracy,
                     on_progress=progress, check=handle.check,
                 )
                 part.parent.mkdir(parents=True, exist_ok=True)
