@@ -41,6 +41,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Radio** | Live internet radio through the app: your favorite stations, recently played ones, **Browse** the free Radio Browser directory (search by name, kind of music or country; sort by listeners, votes, name or sound quality) and **Add by address** (a stream, or the playlist file a station publishes). The song a station says is on shows in the player bar, the window title, the tray and the media-key overlay. A stream that drops is joined again; a station that cannot be played says why. Nothing is recorded or downloaded. See below |
 | **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
+| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo (experimental until it has met your drive). See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
@@ -98,6 +99,60 @@ What is different on a phone:
   helper is installed and what Windows reports, and the logs folder has the details.
 
 A small helper program (`mtk-mtp.exe`, installed next to the app) does the talking to Windows Portable Devices.
+
+### Discs (Discs in the sidebar)
+
+**Rip a CD** copies an audio disc into your library. It is labelled *experimental*: the parts that talk to the drive have been checked against a
+stand-in drive and against Windows' own interface (a mounted disc image), not yet against every real drive and every real disc. Start with one
+disc you know, and listen to it.
+
+Put a disc in and the page notices (it looks at the drives every few seconds while it is open; with several drives, pick one). Then:
+
+1. **Which album is it?** The disc itself says what it is: its table of contents (how long each song is) is turned into a disc ID and looked up on
+   MusicBrainz, which lists every album that disc belongs to. You choose between *this very disc* and *similar disc* matches, or *None of these* and
+   type it in. This needs the MusicBrainz contact email in Settings, Accounts and services (MusicBrainz asks every app to say who is asking);
+   without one the page says so, and typing the album in by hand always works.
+2. **Check it.** Album artist, album, year, genre and disc number are filled in and can be changed; so can every song's title (and, for a
+   compilation, artist), and a song can be left out.
+3. **How to rip it.** FLAC or MP3 (with a bit rate), *Verified* or *Fast* reading, which music folder it goes in, and the folder layout (the same
+   fields as Organize files, with a live example), whether to put the cover in, and whether to eject the disc when it is done.
+4. **Where the songs will go.** The page shows every song's path, how much room it needs, and what it will leave alone, and the **Rip** button waits
+   for that. A name that is already taken is never overwritten: that song is left out and the preview says so.
+5. **Rip.** Each song is a step with its own progress and status; **Cancel** stops after the block being read and keeps the songs that are done.
+   If the app is closed in the middle, the next start marks the rip *interrupted* and removes what was half written.
+
+What a rip puts in your library: `Artist/Album/01 - Title.flac` (or your own layout), tagged with title, artist, album artist, album, date, track and
+disc numbers and totals, genre, the MusicBrainz IDs of the recording, release, release group and artist, barcode and label; the cover picture
+embedded in each song and as `cover.jpg` in the folder (unless the folder already has one). Each song is written under a temporary name and renamed
+when it is complete, so no half-written song is ever where a player could find it, and it is added to the library at once. If Windows says a file
+is in use for a moment (a virus scanner or a sync program can hold a file just after it was written), the app waits and tries again a few times
+before it gives up on that one song and goes on with the next.
+
+**How a song is checked (*Verified*).** A drive can hand back wrong data without saying so, and it remembers what it read last, so asking again
+straight away may only repeat the mistake. The reader reads the song once, in blocks of 16 sectors, remembering a checksum of each; then it pushes
+the drive's memory out by reading somewhere else on the disc, reads the song again and compares. A block whose two readings differ is read again
+(each time after pushing the memory out) until some version has been seen twice. A block that never settles is kept as its likeliest version and
+**marked** (the song says *Done, with trouble*, and the history says where, as minutes and seconds into the song); a block the drive cannot read at
+all becomes silence and is marked; a song with too many such blocks is given up on and the next one is tried. Nothing is passed off as good. *Fast*
+reads once. This catches a drive that gives different answers; it cannot catch one that gives the same wrong answer every time (that is what
+AccurateRip, which this does not have, is for). A disc with trouble is left in the drive.
+
+**History and undo.** *History* lists every rip with what happened to every song. **Take back** sends the songs of a rip, and the cover it made, to
+the Recycle Bin and forgets them in the library; a song you have edited, retagged or replaced since is left alone, as is a cover picture that was in
+the folder before. The rip's own record stays, marked *Taken back*.
+
+**What is sent, what is kept.** The disc's table of contents goes to musicbrainz.org (the album lookup) and the album's cover is fetched from the
+Cover Art Archive (coverartarchive.org, through the same checks as every other address the app fetches, and re-drawn before it is kept). That
+happens when the Rip page shows a disc and the MusicBrainz contact is set, and when you press *Ask MusicBrainz again*; nothing else leaves the
+computer. Kept: the history (disc ID, album, and for every song where it went, its size and whether it was read cleanly) in the library database.
+The audio of the song being ripped is held in a temporary file under `cache/discs`, deleted when the song is finished or stopped.
+
+**What it does not do.** No AccurateRip, no drive read-offset correction and no C2 error pointers; no hidden tracks (the pre-gap before track 1) and
+no data tracks (the data session of an Enhanced CD is ignored); no CD-Text; a copy-protected disc may fail to read; discs are only noticed while the
+Discs page is open. It is Windows only: the page says so on another system. Burning is not part of this version.
+
+A small helper program (`mtk-disc.exe`, installed next to the app) does the talking to the drive, with Windows' own device controls: no drivers, no
+administrator rights. All the decisions (checking, retrying, encoding, tagging, naming) are made in the app, where they are tested without a drive.
 
 ### Radio and podcasts (Radio and Podcasts in the sidebar)
 
@@ -221,6 +276,7 @@ defaults to a dry run; pass `--apply` to execute.
 - `config.toml`: settings (edited from the app's Settings page)
 - `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
 - `cache/art/`, `cache/radio/`, `cache/podcasts/`: cached pictures (safe to delete)
+- `cache/discs/`: the temporary copy of the song being ripped (empty unless a rip is running or was cut short)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
 
 ## Security model
@@ -262,6 +318,15 @@ anywhere:
 ```bash
 dotnet build helpers/mtp/MtkMtp.csproj -c Release -o helpers/mtp/out        # Windows: the real helper
 python scripts/check_mtp_helper.py helpers/mtp/out/mtk-mtp.exe              # starts it and checks the protocol (Windows)
+```
+
+The helper for CDs and DVDs works the same way ([`helpers/disc`](helpers/disc)): the tests use a stand-in drive that keeps its discs in plain folders
+(`tests/fake_disc_helper.py`, with bad sectors, a drive cache that repeats itself, a disc taken out half way and so on), and a stand-in
+MusicBrainz and Cover Art Archive (`tests/fake_musicbrainz.py`).
+
+```bash
+dotnet build helpers/disc/MtkDisc.csproj -c Release -o helpers/disc/out    # Windows: the real helper
+python scripts/check_disc_helper.py helpers/disc/out/mtk-disc.exe          # protocol, refusals, stopping, and a mounted disc image (Windows)
 ```
 
 Fixtures under `tests/fixtures/` are tiny synthetic MP3s with known tags (plus a

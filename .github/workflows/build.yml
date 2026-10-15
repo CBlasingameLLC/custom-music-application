@@ -143,6 +143,7 @@ jobs:
           Copy-Item dist\mtk-backend.exe desktop\resources\mtk-backend.exe
           Copy-Item helpers\mtp\out desktop\resources\mtk-mtp -Recurse
           Copy-Item helpers\disc\out desktop\resources\mtk-disc -Recurse
+          Copy-Item THIRD-PARTY-NOTICES.md desktop\resources\THIRD-PARTY-NOTICES.md
 
       - name: Install Electron dependencies
         working-directory: desktop
