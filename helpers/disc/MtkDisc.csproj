@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- mtk-disc.exe: the small program that reads audio CDs, ejects discs and (later) burns them for Music Toolkit.
+  <!-- mtk-disc.exe: the small program that reads audio CDs, ejects discs, burns them and makes disc images for Music Toolkit.
        .NET Framework 4.8 is part of Windows 10 and 11, so nothing has to be installed alongside it. It has no libraries of its own:
        everything it does is Windows (device controls for reading, IMAPI for burning). -->
   <PropertyGroup>

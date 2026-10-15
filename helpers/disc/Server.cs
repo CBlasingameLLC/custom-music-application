@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -23,6 +24,12 @@ namespace MusicToolkit.Disc
                 this.server = server;
                 Id = id;
                 Number = number;
+            }
+
+            /// <summary>True once the person has asked to stop this request.</summary>
+            public bool Cancelled
+            {
+                get { return server.WasCancelled(Number); }
             }
 
             /// <summary>Throws a refusal with the code "cancelled" if the person asked to stop this request.</summary>
@@ -194,6 +201,21 @@ namespace MusicToolkit.Disc
                     return Flush(Text(request, "drive"), Whole(Get(request, "lba"), -1), (int)Whole(Get(request, "count"), 0), call);
                 case "eject":
                     return Eject(Text(request, "drive"));
+                case "media":
+                    return Ok(Imapi.Media(Text(request, "drive")));
+                case "burn_audio":
+                    return Ok(Imapi.BurnAudio(Text(request, "drive"), Tracks(request), (int)Whole(Get(request, "speed"), 0), call));
+                case "burn_data":
+                    return Ok(Imapi.BurnData(
+                        Text(request, "drive"), Text(request, "label"), Text(request, "label_iso"), Files(request), Strings(Get(request, "filesystems")),
+                        (int)Whole(Get(request, "speed"), 0), call));
+                case "build_iso":
+                    return Ok(Imapi.BuildIso(
+                        Text(request, "label"), Text(request, "label_iso"), Files(request), Strings(Get(request, "filesystems")), Text(request, "out"), call));
+                case "erase":
+                    return Ok(Imapi.Erase(Text(request, "drive"), Get(request, "full") is bool && (bool)Get(request, "full"), call));
+                case "imapi_probe" when testing:
+                    return Ok(Imapi.Probe());
                 case "ticks" when testing:
                     return Ticks((int)Whole(Get(request, "n"), 3), call);
                 case "wait" when testing:
@@ -222,10 +244,16 @@ namespace MusicToolkit.Disc
                     Console.Error.WriteLine("Looking at " + id + " failed: " + exception.Message);
                 }
 
-                found.Add(new Dictionary<string, object>
+                var entry = new Dictionary<string, object>
                 {
                     { "id", id }, { "name", Drives.HardwareName(id) ?? ("CD/DVD drive (" + id + ")") }, { "media", media }, { "label", label },
-                });
+                };
+                foreach (KeyValuePair<string, object> fact in Imapi.Describe(id))
+                {
+                    entry[fact.Key] = fact.Value; // whether it writes, and which kinds of disc
+                }
+
+                found.Add(entry);
             }
 
             return found;
@@ -359,6 +387,55 @@ namespace MusicToolkit.Disc
             }
 
             return Ok();
+        }
+
+        // ------------------------------------------------------------------------------------- reading what a request lists
+
+        private static IEnumerable<Dictionary<string, object>> Objects(object list)
+        {
+            var items = list as System.Collections.IEnumerable;
+            if (items == null || list is string)
+            {
+                yield break;
+            }
+
+            foreach (object item in items)
+            {
+                var one = item as Dictionary<string, object>;
+                if (one != null)
+                {
+                    yield return one;
+                }
+            }
+        }
+
+        private static List<string> Strings(object list)
+        {
+            var found = new List<string>();
+            var items = list as System.Collections.IEnumerable;
+            if (items != null && !(list is string))
+            {
+                foreach (object item in items)
+                {
+                    var text = item as string;
+                    if (text != null)
+                    {
+                        found.Add(text);
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        private static List<Imapi.TrackFile> Tracks(Dictionary<string, object> request)
+        {
+            return Objects(Get(request, "tracks")).Select(t => new Imapi.TrackFile { Path = Text(t, "path"), Sectors = Whole(Get(t, "sectors"), 0) }).ToList();
+        }
+
+        private static List<Imapi.FileItem> Files(Dictionary<string, object> request)
+        {
+            return Objects(Get(request, "files")).Select(f => new Imapi.FileItem { Source = Text(f, "src"), Dest = Text(f, "dest") }).ToList();
         }
 
         // ------------------------------------------------------------------------------------- for the checks (MTK_DISC_TEST=1)

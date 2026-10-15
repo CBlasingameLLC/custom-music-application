@@ -1,4 +1,4 @@
-// mtk-disc: reads audio CDs, ejects discs and (later) burns them on behalf of Music Toolkit.
+// mtk-disc: reads audio CDs, ejects discs, burns discs and makes disc images on behalf of Music Toolkit.
 //
 // Music Toolkit starts this program and speaks to it in JSON lines: one request per line on standard input, one reply per
 // line on standard output. The first line it prints is {"event":"ready","version":1}. The commands and what they answer are
