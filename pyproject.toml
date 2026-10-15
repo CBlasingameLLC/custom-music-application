@@ -18,6 +18,7 @@ dependencies = [
     "tomli-w",
     "send2trash",
     "defusedxml",
+    "soundfile>=0.13",
 ]
 
 [project.optional-dependencies]

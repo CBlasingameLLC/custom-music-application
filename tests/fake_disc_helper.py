@@ -12,6 +12,7 @@
      "noise": true,                                   stray output between replies
      "slow": 0.05,                                    seconds a read takes per sector (cancel can interrupt it)
      "flaky": [{"from": 100, "to": 120, "times": 1}], the first reads of these sectors from the disc come back with a flipped bit
+                                                      ("after": k leaves the first k reads alone; "varies": true flips a different bit each time)
      "bad": [{"from": 500, "to": 502}],               a read of these sectors always fails
      "cache": 512,                                    the drive remembers the last N sectors it read: reading them again gives the same data
                                                       (what a real drive's cache does, and the reason a re-read must first read elsewhere)
@@ -156,11 +157,13 @@ class Fake:
                 raise Refusal("read_error", f"The drive could not read sector {number}.")
         data = sector_audio(int(disc.get("seed", 0)), number)
         for index, flaky in enumerate(control.get("flaky", [])):
-            if flaky["from"] <= number <= flaky["to"] and self.flaky_used[(index, number)] < int(flaky.get("times", 1)):
+            if flaky["from"] <= number <= flaky["to"]:
                 self.flaky_used[(index, number)] += 1
-                broken = bytearray(data)
-                broken[1000] ^= 0x01
-                data = bytes(broken)
+                nth = self.flaky_used[(index, number)]  # this is the nth time the sector is read from the disc itself (not from the cache)
+                if int(flaky.get("after", 0)) < nth <= int(flaky.get("after", 0)) + int(flaky.get("times", 1)):
+                    broken = bytearray(data)
+                    broken[(1000 + (nth if flaky.get("varies") else 0)) % len(broken)] ^= 0x01
+                    data = bytes(broken)
         if size:
             self.cache[number] = data
             while len(self.cache) > size:
