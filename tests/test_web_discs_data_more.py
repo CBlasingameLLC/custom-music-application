@@ -566,10 +566,11 @@ def test_the_speed_chosen_on_the_page_reaches_the_recorder_and_the_history(rig, 
 @pytest.mark.parametrize("kind", ["data", "iso"])
 def test_a_write_does_not_wait_for_other_work_in_the_library_lane(rig, kind: str) -> None:
     release = threading.Event()
-    blocker = rig.ctx.jobs.submit("tags", "Writing tags", lambda _handle: (release.wait(30), {})[1])  # (the default lane: anything that writes the library)
+    blocker = rig.ctx.jobs.submit("tags", "Writing tags", lambda _handle: (release.wait(120), {})[1])  # (the default lane: anything that writes the library)
     try:
-        job, _, _ = finish(rig, kind)
-        assert job.status == "done", job.error
+        started = begin(rig, kind)
+        job = rig.ctx.jobs.wait(started["job"]["id"], timeout=15)
+        assert job.status == "done", (job.status, job.error)
     finally:
         release.set()
         rig.ctx.jobs.wait(blocker.id, timeout=30)
@@ -649,3 +650,104 @@ def test_a_song_is_placed_relative_to_the_library_folder_it_is_in_and_by_its_nam
     rig.ctx.config.library.roots = [str(rig.music)]  # (the folder the second song is in is not a library folder any more)
     shown = rig.client.post("/api/discs/data/preview", json=asked).json()
     assert [f["dest"] for f in shown["files"]] == ["Artist A/Album 1/01 One.mp3", "01 Four.mp3"]
+
+
+# ---------------------------------------------------------------------------------------- when something goes wrong in the middle
+
+
+def test_a_refusal_from_the_recorder_is_passed_on_with_its_code_and_with_what_became_of_the_disc(rig, recorder) -> None:
+    plan, request, burn_id = prepared(rig)
+
+    def refuse() -> None:
+        raise DiscError("busy", "The drive is busy with something else.")
+
+    recorder.when["burn_data"] = refuse
+    with pytest.raises(DiscError) as caught:
+        run(rig, plan, request, burn_id, Handle())
+    words = "The drive is busy with something else. Nothing had been written, so the disc is as it was."
+    assert (caught.value.code, str(caught.value)) == ("busy", words)
+    shown = history(rig, burn_id)
+    assert (shown["status"], shown["message"], shown["spoiled"]) == ("failed", words, 0)
+
+
+@pytest.mark.parametrize(
+    ("where", "tail"),
+    [("check_sources", "Nothing had been written, so the disc is as it was."), ("verify_files", "The files had been written, but they were not all checked.")],
+)
+def test_a_slip_in_the_code_is_said_as_it_is_with_what_became_of_the_disc_and_a_finished_disc_is_not_spoiled(rig, monkeypatch: pytest.MonkeyPatch, where: str, tail: str) -> None:
+    def slip(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(datajob if where == "check_sources" else datadisc, where, slip)
+    plan, request, burn_id = prepared(rig)
+    with pytest.raises(burnjob.BurnError) as caught:
+        run(rig, plan, request, burn_id, Handle())
+    words = f"RuntimeError: boom. {tail}"
+    assert str(caught.value) == words
+    shown = history(rig, burn_id)
+    assert (shown["status"], shown["message"], shown["spoiled"]) == ("failed", words, 0)
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_the_kind_of_erase_chosen_on_the_page_reaches_the_recorder(rig, recorder, full: bool) -> None:
+    a_written_disc(rig)
+    started = rig.client.post("/api/discs/erase", json={"drive": "E:", "full": full, "confirm": True})
+    assert started.status_code == 200, started.text
+    assert rig.ctx.jobs.wait(started.json()["job"]["id"], timeout=30).status == "done"
+    assert recorder.asked["erase"]["full"] is full
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_the_remembered_list_of_drives_is_dropped_after_a_data_burn_however_it_ends(rig, monkeypatch: pytest.MonkeyPatch, fails: bool) -> None:
+    dropped: list[str] = []
+    monkeypatch.setattr(disc_helper, "forget_listing", lambda: dropped.append("forgotten"))
+    if fails:
+        set_control(rig.world, write_protected=True)
+    plan, request, burn_id = prepared(rig)
+    if fails:
+        with pytest.raises(DiscError):
+            run(rig, plan, request, burn_id, Handle())
+    else:
+        run(rig, plan, request, burn_id, Handle())
+    assert dropped == ["forgotten"]
+
+
+def test_an_erase_does_not_wait_for_other_work_in_the_library_lane(rig) -> None:
+    a_written_disc(rig)
+    release = threading.Event()
+    blocker = rig.ctx.jobs.submit("tags", "Writing tags", lambda _handle: (release.wait(120), {})[1])
+    try:
+        started = rig.client.post("/api/discs/erase", json={"drive": "E:", "confirm": True})
+        assert started.status_code == 200, started.text
+        job = rig.ctx.jobs.wait(started.json()["job"]["id"], timeout=15)
+        assert job.status == "done", (job.status, job.error)
+    finally:
+        release.set()
+        rig.ctx.jobs.wait(blocker.id, timeout=30)
+
+
+def test_the_media_of_a_disc_that_has_been_written_says_why_files_cannot_go_on_it(rig) -> None:
+    a_written_disc(rig, "CD-R", rewritable=False)
+    got = media_of(rig)
+    assert got["data_problems"] == ["This CD-R is not blank, and a disc that has been written cannot be used again. Put in a blank disc."]
+    assert got["audio_problems"] and got["blank"] is False
+
+
+def test_a_stop_pressed_while_waiting_for_the_files_to_show_ends_the_wait_and_says_the_disc_had_been_written(rig, recorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(datajob, "MOUNT_WAIT", 3.0)
+    monkeypatch.setattr(datajob, "MOUNT_LOOK", 0.02)
+    set_control(rig.world, no_root=True)  # (the files never show)
+    plan, request, burn_id = prepared(rig)
+    handle = Handle()
+    looks: list[int] = []
+
+    def pressed_after_a_few_looks() -> None:
+        looks.append(1)
+        if len(looks) >= 3:  # (the first look is before the writing, the others are the wait)
+            handle.cancelled = True
+
+    recorder.when["media"] = pressed_after_a_few_looks
+    with pytest.raises(JobCancelled):
+        run(rig, plan, request, burn_id, handle)
+    shown = history(rig, burn_id)
+    assert (shown["status"], shown["spoiled"], shown["message"]) == ("cancelled", 0, "Stopped. The files had been written, but they were not all checked.")
