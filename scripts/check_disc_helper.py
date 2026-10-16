@@ -8,12 +8,18 @@ stop a request that is under way, and exits when asked. On Windows it then mount
 drive, and checks that the program finds it, reads its contents through the real device controls and puts the tray (the image) away. Whether
 reading music works on a given drive can only be checked with that drive and a music disc.
 
+Burning cannot be tried without a recorder and a blank disc, but the part of Windows' disc burning component (IMAPI) that makes an ISO image
+of files needs neither, so on Windows the check makes images, reads them back the way a disc reader would (ISO 9660, Joliet, UDF) and compares
+every file with the one it was made from: that proves the files reach IMAPI, that the folders and names come out right, and that a stop works.
+What is left for a real recorder is the writing itself.
+
 Run it with the Python that has Music Toolkit installed (it uses the app's own client for the helper).
 """
 
 from __future__ import annotations
 
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -166,6 +172,240 @@ def check_mounted_image(exe: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------------------- reading an image the way a disc reader does
+
+
+class ImageError(Exception):
+    pass
+
+
+def _directory(data: bytes, extent: int, size: int, joliet: bool, prefix: str = "") -> dict[str, tuple[int, int]]:
+    """Every file below this directory: {path: (first sector, size)}. A path is as the file system shows it: with Joliet the real names."""
+    found: dict[str, tuple[int, int]] = {}
+    position, end = extent * 2048, extent * 2048 + size
+    while position < end:
+        length = data[position]
+        if length == 0:  # the rest of this sector is padding
+            position = (position // 2048 + 1) * 2048
+            continue
+        first = struct.unpack_from("<I", data, position + 2)[0]
+        size_of = struct.unpack_from("<I", data, position + 10)[0]
+        flags = data[position + 25]
+        raw = data[position + 33 : position + 33 + data[position + 32]]
+        position += length
+        if raw in (b"\x00", b"\x01"):  # "." and ".."
+            continue
+        name = re.sub(r";\d+$", "", raw.decode("utf-16-be" if joliet else "ascii"))  # (the version number a name may end with: ";1")
+        if not joliet:
+            name = name.rstrip(".")
+        if flags & 2:
+            found.update(_directory(data, first, size_of, joliet, prefix + name + "/"))
+        else:
+            found[prefix + name] = (first, size_of)
+    return found
+
+
+def read_image(path: Path) -> dict:
+    """What an ISO image file says it holds: its volume names, which file systems it has and the files of the ISO 9660 and Joliet trees (with
+    their contents, so that they can be compared). Raises ImageError for an image no reader would accept."""
+    data = path.read_bytes()
+    if len(data) % 2048 or len(data) < 18 * 2048:
+        raise ImageError(f"the image is {len(data)} bytes, which is not a whole number of sectors (or too small)")
+    primary = joliet = None
+    sector = 16
+    while sector * 2048 < len(data):
+        block = data[sector * 2048 : (sector + 1) * 2048]
+        if block[1:6] != b"CD001":
+            break
+        if block[0] == 1 and primary is None:
+            primary = block
+        elif block[0] == 2 and block[88:91] in (b"%/@", b"%/C", b"%/E"):
+            joliet = block
+        elif block[0] == 255:
+            break
+        sector += 1
+    image: dict = {"sectors": len(data) // 2048, "iso9660": None, "joliet": None, "udf": False}
+    # UDF announces itself in the volume recognition sequence after the ISO descriptors (or on its own, when it is the only file system): "NSR02" or "NSR03"
+    image["udf"] = any(data[at * 2048 + 1 : at * 2048 + 6] in (b"NSR02", b"NSR03") for at in range(16, 40) if (at + 1) * 2048 <= len(data))
+    for key, volume, is_joliet in (("iso9660", primary, False), ("joliet", joliet, True)):
+        if volume is None:
+            continue
+        root = volume[156:190]
+        first, size = struct.unpack_from("<I", root, 2)[0], struct.unpack_from("<I", root, 10)[0]
+        name = volume[40:72]
+        label = name.decode("utf-16-be" if is_joliet else "ascii").strip()
+        tree = _directory(data, first, size, is_joliet)
+        image[key] = {"label": label, "files": {p: data[a * 2048 : a * 2048 + n] for p, (a, n) in tree.items()}}
+    return image
+
+
+def check_image_against(label: str, image: dict, expected: dict[str, bytes], systems: tuple[str, ...]) -> None:
+    for system in systems:
+        if system == "udf":
+            check(image["udf"], f"{label}: it has a UDF file system")
+            continue
+        found = image.get(system)
+        check(found is not None, f"{label}: it has an {system} file system")
+        if found is None:
+            continue
+        files = found["files"]
+        if system == "joliet":
+            check(files == expected, f"{label}: the Joliet tree holds exactly the files that were asked for, with their contents ({sorted(files)[:6]})")
+        else:
+            check(sorted(len(v) for v in files.values()) == sorted(len(v) for v in expected.values()) and sorted(files.values()) == sorted(expected.values()),
+                  f"{label}: the ISO 9660 tree holds the same contents ({len(files)} files)")
+
+
+def check_images(exe: str) -> None:
+    """Windows' disc burning component can make an image without a recorder: the one thing about burning a build machine can prove."""
+    from musictoolkit.discs.helper import DiscError, DiscHelper
+
+    folder = Path(tempfile.mkdtemp(prefix="mtk-iso-check-"))
+    try:
+        sources = folder / "sources"
+        sources.mkdir()
+        content = {
+            "Artist/Album/01 - First Song.mp3": os.urandom(5000),
+            "Artist/Album/02 - Second \u00e9\u00e8 Song.flac": os.urandom(2048 * 3 + 17),
+            "Artist/Other Album/01 - Third.ogg": os.urandom(1),
+            "Loose Song.mp3": os.urandom(70000),
+        }
+        files = []
+        for dest, data in content.items():
+            source = sources / dest.replace("/", "_")
+            source.write_bytes(data)
+            files.append({"src": str(source), "dest": dest})
+        with DiscHelper([exe]) as helper:
+            probe = helper.call("imapi_probe")
+            print(f"      {probe}", flush=True)
+            components = probe.get("components", {})
+            if not components or not all(v is True for v in components.values()):
+                note("Windows' disc burning component is not all here, so the image checks are skipped")
+                return
+            check(True, "every IMAPI component can be made")
+            out = folder / "check.iso"
+            reply = helper.call("build_iso", label="MTK Test", label_iso="MTK_TEST", filesystems=["iso9660", "joliet"], files=files, out=str(out))
+            check(out.is_file() and reply.get("bytes") == out.stat().st_size and out.stat().st_size % 2048 == 0, f"an image of files is made ({reply})")
+            check(not Path(str(out) + ".part").exists(), "and no half-written file is left beside it")
+            try:
+                image = read_image(out)
+                check_image_against("ISO 9660 + Joliet", image, {k: v for k, v in content.items()}, ("iso9660", "joliet"))
+                check(image["joliet"] is not None and image["joliet"]["label"] == "MTK Test", f"Joliet carries the name of the disc ({image['joliet'] and image['joliet']['label']!r})")
+                named = image["iso9660"] is not None and re.sub(r"[^A-Z0-9]", "_", image["iso9660"]["label"].upper()) == "MTK_TEST"  # (however the component spells the separator)
+                check(named, f"ISO 9660 carries the name of the disc ({image['iso9660'] and image['iso9660']['label']!r})")
+            except ImageError as error:
+                check(False, f"reading the image back: {error}")
+
+            before = out.read_bytes()
+            try:
+                helper.call("build_iso", label="MTK Test", label_iso="MTK_TEST", filesystems=["iso9660", "joliet"], files=files, out=str(out))
+                check(False, "an image never replaces a file that is there")
+            except DiscError as error:
+                check(error.code == "failed" and out.read_bytes() == before, f"an image never replaces a file that is there ({error.code}: {error})")
+
+            udf = folder / "udf.iso"
+            helper.call("build_iso", label="MTK UDF", label_iso="MTK_UDF", filesystems=["udf"], files=files, out=str(udf))
+            try:
+                check_image_against("UDF", read_image(udf), content, ("udf",))
+            except ImageError as error:
+                check(udf.is_file() and udf.stat().st_size % 2048 == 0, f"the UDF image is whole sectors ({error})")
+
+            for bad, why in ((folder / "no-extension", "a name that is not .iso"), (folder / "missing" / "x.iso", "a folder that is not there"),
+                             ("relative.iso", "a relative path"), ("\\\\.\\PhysicalDrive0\\x.iso", "a device path")):
+                try:
+                    helper.call("build_iso", label="X", label_iso="X", filesystems=["iso9660"], files=files, out=str(bad))
+                    check(False, f"an image is not written to {why}")
+                except DiscError as error:
+                    check(error.code == "failed", f"an image is not written to {why} ({error.code})")
+            for dest in ("../escape.mp3", "a/../b.mp3", "C:/x.mp3", "a\\b.mp3", "", "/"):
+                try:
+                    helper.call("build_iso", label="X", label_iso="X", filesystems=["iso9660"], files=[{"src": files[0]["src"], "dest": dest}], out=str(folder / "bad.iso"))
+                    check(False, f"a place on the disc like {dest!r} is refused")
+                except DiscError as error:
+                    check(error.code == "failed" and not (folder / "bad.iso").exists(), f"a place on the disc like {dest!r} is refused ({error.code})")
+            try:
+                helper.call("build_iso", label="X", label_iso="X", filesystems=["iso9660"], files=[{"src": str(folder / "gone.mp3"), "dest": "a.mp3"}], out=str(folder / "gone.iso"))
+                check(False, "a file that is not there is refused")
+            except DiscError as error:
+                check(error.code == "failed" and not (folder / "gone.iso").exists(), f"a file that is not there is refused ({error.code})")
+
+            big = folder / "big.bin"
+            with open(big, "wb") as handle:
+                handle.truncate(1024**3)  # a gigabyte of nothing: a stop that arrives as soon as the image is being written out has plenty of it left to stop
+
+            def build_big_and_stop(once_writing: bool) -> tuple[DiscError | None, float, float | None, int]:
+                """Asks for the image of the big file and sends a stop: as soon as the helper reports (it is writing the image out by then), or 0.4 s
+                after the request, wherever it is by then. Gives the refusal (None if the image was made), the seconds it took, the seconds from the
+                stop to the answer, and the number of reports heard."""
+                reports: list[dict] = []
+                writing = threading.Event()  # set by the first report, and again when the request is over
+                over = threading.Event()
+                sent: list[float] = []
+
+                def heard(event: dict) -> None:
+                    reports.append(event)
+                    writing.set()
+
+                def stop() -> None:
+                    if once_writing:
+                        writing.wait(60)  # (an image that never reports is stopped after a minute)
+                    else:
+                        time.sleep(0.4)
+                    if not over.is_set():  # (a stop must never reach a request that came after this one)
+                        sent.append(time.monotonic())
+                        helper.cancel()
+
+                began = time.monotonic()
+                threading.Thread(target=stop, daemon=True).start()
+                refusal = None
+                try:
+                    helper.call("build_iso", label="BIG", label_iso="BIG", filesystems=["iso9660", "joliet", "udf"], files=[{"src": str(big), "dest": "big.bin"}],
+                                out=str(folder / "big.iso"), on_event=heard)
+                except DiscError as error:
+                    refusal = error
+                finally:
+                    over.set()
+                    writing.set()
+                ended = time.monotonic()
+                return refusal, ended - began, (ended - sent[0]) if sent else None, len(reports)
+
+            def trouble(refusal: DiscError | None, reports: int) -> str:
+                said = " | ".join(getattr(helper, "_stderr", ()))[-700:]  # what the helper printed itself: a slip in it shows here, with its stack
+                what = f"{refusal.code}: {refusal}" if refusal else "the image was made"
+                return f"{what}; {reports} reports; the helper said: {said or 'nothing'}"
+
+            # a stop that arrives while the image is being written out
+            refusal, took, late, reports = build_big_and_stop(True)
+            stopped = refusal is not None and refusal.code == "cancelled"
+            check(stopped, f"an image that is told to stop while it is being written stops ({'cancelled' if stopped else trouble(refusal, reports)}; {took:.1f} s, "
+                           f"{'-' if late is None else f'{late:.1f}'} s after the stop)")
+            check(not (folder / "big.iso").exists() and not (folder / "big.iso.part").exists(), "a stopped image leaves no file behind")
+            for leftover in (folder / "big.iso", folder / "big.iso.part"):
+                leftover.unlink(missing_ok=True)
+
+            # a stop that arrives 0.4 s in is wherever the helper is by then (taking the files in, laying the image out, writing it out). It stops
+            # wherever it can; a failure here is reported, and what it said is kept in the log, but is not held against the build until it is understood
+            refusal, took, late, reports = build_big_and_stop(False)
+            if refusal is not None and refusal.code == "cancelled":
+                check(True, f"an image that is told to stop 0.4 s in stops ({took:.1f} s)")
+            else:
+                note(f"an image that is told to stop 0.4 s in did not stop ({trouble(refusal, reports)}; {took:.1f} s)")
+            check(not (folder / "big.iso.part").exists(), "and leaves no half-written file behind")
+            check(helper.call("drives") is not None, "and the helper still answers")
+    except DiscError as error:
+        check(False, f"making images: {error.code}: {error}")
+    finally:
+        for leftover in sorted(folder.rglob("*"), reverse=True):
+            try:
+                leftover.unlink() if leftover.is_file() else leftover.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------------------- the checks
 
 
@@ -252,10 +492,14 @@ def main() -> None:
                 for d in drives
             )
             check(shaped, f"every drive it lists has a letter, a name, a state and a label ({drives})")
+            check(
+                all(isinstance(d.get("writer"), bool) and isinstance(d.get("writes"), list) and (d["writer"] or d["writes"] == []) for d in drives),
+                f"and says whether it writes discs, and which kinds ({[(d['id'], d.get('writer'), d.get('writes')) for d in drives]})",
+            )
 
             # Whatever the request says, only the letter of an optical drive may ever lead to a device being opened.
             hostile = ["", "C", "C:\\", "C:\\Windows", "\\\\.\\C:", "\\\\.\\PhysicalDrive0", "\\\\?\\GLOBALROOT\\Device\\CdRom0", "../..", "E:\u0000", "CD:", "1:", "::", "E: "]
-            for cmd in ("toc", "read", "flush", "eject"):
+            for cmd in ("toc", "read", "flush", "eject", "media"):
                 refused = []
                 for name in hostile:
                     try:
@@ -291,6 +535,24 @@ def main() -> None:
                         check(False, f"{absent} does not exist and is refused")
                     except DiscError as error:
                         check(error.code == "not_found", f"{absent} does not exist and is refused as such ({error.code})")
+
+            writing = [name for name in hostile if name.strip() != "E:"]  # (never a real drive's letter: these would write to it)
+            for cmd, args in (("burn_audio", {"tracks": []}), ("burn_data", {"files": [], "label": "X"}), ("erase", {"full": False})):
+                refused = []
+                for name in writing:
+                    try:
+                        helper.call(cmd, drive=name, **args)
+                        refused.append("ACCEPTED")
+                    except DiscError as error:
+                        refused.append(error.code)
+                check("ACCEPTED" not in refused, f"{cmd}: nothing but a drive letter is accepted ({sorted(set(refused))})")
+            for name in ("C", "\\\\.\\PhysicalDrive0", "../..", "::"):
+                for cmd in ("burn_audio", "burn_data", "erase"):
+                    try:
+                        helper.call(cmd, drive=name, tracks=[], files=[], label="X")
+                    except DiscError as error:
+                        if cmd != "burn_audio" and cmd != "burn_data":
+                            check(error.code == "not_found", f"{cmd}: {name!r} is refused as not a drive letter ({error.code})")
 
             for cmd, args in (("nonsense", {}), ("read", {"drive": "E:", "lba": -1, "count": 1}), ("read", {"drive": "E:", "lba": 0, "count": 99}),
                               ("read", {"drive": "E:", "lba": 0, "count": 0}), ("flush", {"drive": "E:", "lba": 0, "count": 100000})):
@@ -350,6 +612,7 @@ def main() -> None:
 
     if sys.platform == "win32":
         check_mounted_image(exe)
+        check_images(exe)
 
     if failures:
         sys.exit(f"\n{len(failures)} check(s) failed")

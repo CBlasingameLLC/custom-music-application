@@ -54,6 +54,22 @@ namespace MusicToolkit.Disc
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         public static extern uint GetDriveType(string rootPathName);
 
+        // Streams over files, for IMAPI: a stream the system itself provides, so that nothing of ours has to cross into IMAPI as a COM object
+        public const uint StgmRead = 0;
+        public const uint StgmShareDenyWrite = 0x20;
+        public const uint FileAttributeNormal = 0x80;
+
+        [DllImport("shlwapi.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        public static extern void SHCreateStreamOnFileEx(
+            string path, uint mode, uint attributes, [MarshalAs(UnmanagedType.Bool)] bool create, IntPtr template, out System.Runtime.InteropServices.ComTypes.IStream stream);
+
+        // Keeps Windows from sleeping while a disc is written (a computer that suspends in the middle of a burn spoils the disc)
+        public const uint EsContinuous = 0x80000000;
+        public const uint EsSystemRequired = 0x00000001;
+
+        [DllImport("kernel32.dll")]
+        public static extern uint SetThreadExecutionState(uint flags);
+
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
         public static extern int mciSendString(string command, System.Text.StringBuilder returnString, int returnLength, IntPtr callback);
     }

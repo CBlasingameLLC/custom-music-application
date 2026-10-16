@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from playwright.sync_api import expect
@@ -15,7 +15,12 @@ expect.set_options(timeout=15_000)
 
 A, B, C = ("aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002", "cccccccc-0000-4000-8000-000000000003")
 ARTIST = "a74b1b7f-71a5-4011-9441-d0b5e4122711"
-TODAY = date.today()
+
+
+def today() -> date:
+    """The day the page thinks it is (the browser in these tests is set to UTC). Asked when a test begins, not when the file is read: the browser
+    tests take a quarter of an hour, and a run that crosses midnight must not find its idea of "12 days from now" a day out."""
+    return datetime.now(timezone.utc).date()
 
 
 def entry(mbid, artist, title, day, kind="Album"):
@@ -25,10 +30,12 @@ def entry(mbid, artist, title, day, kind="Album"):
 
 @pytest.fixture
 def listenbrainz(monkeypatch):
-    releases = [entry(A, "Tycho", "Infinite Mile", TODAY - timedelta(days=3)), entry(B, "Bonobo", "Fragments", TODAY - timedelta(days=40), kind="EP"),
-                entry(C, "Emancipator", "Koda", TODAY + timedelta(days=12), kind="Single")]
+    now = today()
+    releases = [entry(A, "Tycho", "Infinite Mile", now - timedelta(days=3)), entry(B, "Bonobo", "Fragments", now - timedelta(days=40), kind="EP"),
+                entry(C, "Emancipator", "Koda", now + timedelta(days=12), kind="Single")]
     with serve({"/user/cayl/fresh_releases": (200, {"payload": {"releases": releases}})}) as service:
         monkeypatch.setattr(listenbrainz_client, "_BASE_URL", service.url)
+        service.today = now  # (the day the releases were made relative to: what a test works its expectations out from)
         yield service
 
 
@@ -37,8 +44,8 @@ def open_releases(page) -> None:
     expect(page.get_by_role("tab", name="New releases")).to_have_attribute("aria-selected", "true")
 
 
-def named(day: date) -> str:
-    return f"{day:%b} {day.day}" + ("" if day.year == TODAY.year else f", {day.year}")
+def named(day: date, now: date) -> str:
+    return f"{day:%b} {day.day}" + ("" if day.year == now.year else f", {day.year}")
 
 
 def test_without_anywhere_to_look_it_says_what_to_add_and_leads_to_settings(page, live):
@@ -61,9 +68,9 @@ def test_a_look_fills_the_list_and_says_when_each_one_comes_out(page, live, list
     expect(cards).to_have_count(3)
     expect(cards.nth(0)).to_contain_text("Emancipator - Koda")
     expect(cards.nth(0)).to_contain_text("Coming soon")
-    expect(cards.nth(0)).to_contain_text(f"Out in 12 days ({named(TODAY + timedelta(days=12))})")
+    expect(cards.nth(0)).to_contain_text(f"Out in 12 days ({named(listenbrainz.today + timedelta(days=12), listenbrainz.today)})")
     expect(cards.nth(1)).to_contain_text("Released 3 days ago")
-    expect(cards.nth(2)).to_contain_text(f"Released {named(TODAY - timedelta(days=40))}")
+    expect(cards.nth(2)).to_contain_text(f"Released {named(listenbrainz.today - timedelta(days=40), listenbrainz.today)}")
     expect(cards.nth(2).locator(".badge.kind")).to_have_text("EP")
     expect(page.get_by_role("tab", name="New releases")).to_contain_text("3")
     expect(page.get_by_text("Last checked just now (ListenBrainz)")).to_be_visible()

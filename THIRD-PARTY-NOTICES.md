@@ -21,6 +21,14 @@ libsndfile, LAME and mpg123 are used as a library file (`libsndfile_x86_64.dll`,
 compiled into Music Toolkit's own code. Music Toolkit's source is public (this repository), and the program can be built again with another build
 of these libraries: see *Development* in the README and `packaging/mtk_backend.spec`. MP3 patents have expired; nothing here needs a licence fee.
 
+## Audio: changing the sample rate for a music CD (from version 0.8.1)
+
+A music CD holds 44.1 kHz sound. A song at another rate (48 kHz, say) is converted when it is burned, by
+[python-soxr](https://github.com/dofuuz/python-soxr) (LGPL 2.1 or later), which contains the
+[SoX Resampler library](https://sourceforge.net/projects/soxr/) (libsoxr, LGPL 2.1 or later). Like the libraries above, it is a library file
+in the program's package (an extension module of python-soxr), not compiled into Music Toolkit's own code, and the program can be built again
+with another build of it.
+
 ## Other software the program is made of
 
 | Package | Used for | Licence |

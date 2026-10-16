@@ -28,6 +28,10 @@ namespace MusicToolkit.Disc
         public const string Unsupported = "unsupported";
         public const string Cancelled = "cancelled";
         public const string Failed = "failed";
+        public const string NotBlank = "not_blank";
+        public const string WriteProtected = "write_protected";
+        public const string NoSpace = "no_space";
+        public const string Underrun = "underrun";
 
         /// <summary>What a Windows error means depends on what was being asked: "incorrect function" on a read means the drive or the track
         /// cannot do that, on a table-of-contents request it means much the same, and a bad sector is only a bad sector when reading.</summary>
@@ -122,6 +126,18 @@ namespace MusicToolkit.Disc
             if (failure != null)
             {
                 return failure;
+            }
+
+            Exception inner = exception;
+            while (inner is System.Reflection.TargetInvocationException && inner.InnerException != null)
+            {
+                inner = inner.InnerException;
+            }
+
+            var windows = inner as System.Runtime.InteropServices.COMException;
+            if (windows != null)
+            {
+                return Imapi.Fail(windows);
             }
 
             string text = (exception.Message ?? exception.GetType().Name).Trim();

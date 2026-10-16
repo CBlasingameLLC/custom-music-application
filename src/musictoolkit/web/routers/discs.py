@@ -1,5 +1,5 @@
 """CDs and DVDs: the drives, the disc in one, finding out which album it is, ripping it into the library (preview first), the history of rips,
-and taking a rip back.
+taking a rip back, and writing music onto a disc (preview first, and a history, because a burn cannot be taken back).
 
 Nothing is written until a preview of the same request has been made, and the request names a drive only by its letter: the letter must be
 one the helper itself lists, so the page can never make anything open a device of its choosing."""
@@ -14,8 +14,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from musictoolkit.discs import coverart, encode, lookup, rip, store
+from musictoolkit.discs import burn, burnjob, coverart, datadisc, datajob, encode, lookup, rip, store
 from musictoolkit.discs import helper as disc_helper
+from musictoolkit.discs.burn import SongInput
 from musictoolkit.discs.helper import LISTING_TIMEOUT, DiscError, DiscHelper, DiscUnavailable, valid_drive
 from musictoolkit.discs.toc import BadToc, Toc
 from musictoolkit.integrations import musicbrainz_client
@@ -64,8 +65,49 @@ class DriveBody(BaseModel):
     drive: str
 
 
+class BurnBody(BaseModel):
+    drive: str
+    track_ids: list[int] = Field(min_length=1, max_length=500)  # library songs, in the order they go on the disc
+    speed: int | None = Field(None, ge=1)  # one of the speeds the recorder lists for the disc; None lets it choose
+    eject: bool = True
+    title: str = Field("", max_length=200)
+
+
+class DataBody(BaseModel):
+    drive: str
+    track_ids: list[int] = Field(min_length=1, max_length=500)  # library songs, in the order they go on the disc
+    layout: str = "library"  # library: the folders they are in | flat: one folder, numbered in this order
+    label: str = Field("", max_length=100)
+    speed: int | None = Field(None, ge=1)
+    eject: bool = True
+    verify: bool = True
+    title: str = Field("", max_length=200)
+
+
+class IsoBody(BaseModel):
+    track_ids: list[int] = Field(min_length=1, max_length=500)
+    layout: str = "library"
+    label: str = Field("", max_length=100)
+    folder: str = Field("", max_length=1000)  # where the image file goes; empty: the Downloads folder
+    title: str = Field("", max_length=200)
+
+
+class EraseBody(BaseModel):
+    drive: str
+    full: bool = False
+    confirm: bool = False  # erasing deletes everything on the disc: the request has to say that this is meant
+
+
 def _cache_dir(ctx: AppContext) -> Path:
     return ctx.data_dir / "cache" / "discs"
+
+
+DISC_JOBS = (("rip", "ripped"), ("burn", "burned"), ("erase", "erased"), ("iso", "made into an image"))
+
+
+def _busy_with(ctx: AppContext) -> str | None:
+    """What the drives are being used for right now ("ripped", "burned", "erased"), or None."""
+    return next((word for kind, word in DISC_JOBS if ctx.jobs.is_busy(kind)), None)
 
 
 def _problem(error: Exception) -> HTTPException:
@@ -85,8 +127,8 @@ def _toc_of(drive: str) -> Toc:
 
 
 def _read_toc(ctx: AppContext, drive: str) -> Toc:
-    if ctx.jobs.is_busy("rip"):
-        raise HTTPException(status_code=409, detail="A disc is being ripped right now. Wait for it to finish, or stop it.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now. Wait for it to finish, or stop it.")
     try:
         toc = _toc_of(drive)
     except (DiscError, DiscUnavailable, BadToc) as error:
@@ -149,13 +191,15 @@ def options(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
             "format": fmt, "quality": cfg.disc.rip_mp3_quality if fmt == "mp3" else encode.DEFAULT_QUALITY["flac"], "mp3_quality": cfg.disc.rip_mp3_quality,
             "accuracy": cfg.disc.rip_accuracy, "root": root, "cover": cfg.disc.rip_cover, "eject": cfg.disc.eject_after_rip,
         },
+        "burn": {"eject": cfg.disc.eject_after_burn, "verify": cfg.disc.burn_verify},
+        "iso_folder": str(_default_iso_folder()),
     }
 
 
 @router.get("/drives")
 def drives(fresh: bool = False, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
     """The CD and DVD drives and what is in them: {available, reason, error, drives, busy}. Never an error: `reason` says why there are none."""
-    return {**disc_helper.list_drives(fresh=fresh), "busy": ctx.jobs.is_busy("rip")}
+    return {**disc_helper.list_drives(fresh=fresh), "busy": _busy_with(ctx) is not None}
 
 
 @router.get("/drives/{drive}/disc")
@@ -179,8 +223,8 @@ def find_album(body: DriveBody, ctx: AppContext = Depends(get_ctx)) -> dict[str,
             detail="MusicBrainz asks every app to send a contact email with its requests. Add yours in Settings, Accounts, or type the album in by hand.",
         )
     drive = valid_drive_or_404(body.drive)
-    if ctx.jobs.is_busy("rip"):
-        raise HTTPException(status_code=409, detail="A disc is being ripped right now.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now.")
 
     def run(handle: JobHandle) -> dict[str, Any]:
         handle.update(message="Reading the disc")
@@ -218,8 +262,8 @@ def start(body: RipBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
     held = ctx.previews.get("rip")
     if not held or held["key"] != _key(body):
         raise HTTPException(status_code=409, detail="Look at where the songs will go first. Nothing is written until you have seen it.")
-    if ctx.jobs.is_busy("rip"):
-        raise HTTPException(status_code=409, detail="A disc is being ripped already.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} already.")
     if ctx.previews.pop("rip", None) is not held:  # what was shown is used up; if another request took it in the same instant, this one stops
         raise HTTPException(status_code=409, detail="A disc is being ripped already.")
     request = _request(body)
@@ -288,11 +332,265 @@ def undo(rip_id: int, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
     return {"job": ctx.jobs.submit("rip-undo", f"Taking back {found['album']}", run).to_dict(), "songs": songs}
 
 
+# ---------------------------------------------------------------------------------------- burning music onto a disc
+
+
+def _media_of(drive: str) -> dict[str, Any]:
+    """What is in a recorder, as far as writing goes. A helper is started for the moment. The drive must be one the helper lists itself."""
+    drive = valid_drive(drive)
+    with DiscHelper() as helper:
+        if drive not in {str(d.get("id", "")).upper() for d in helper.call("drives", timeout=LISTING_TIMEOUT)["drives"]}:
+            raise DiscError("not_found")
+        return helper.call("media", drive=drive)
+
+
+def _public_media(media: dict[str, Any]) -> dict[str, Any]:
+    """What the page is told about the disc (where a data disc's files can be read stays here)."""
+    return {k: v for k, v in media.items() if k not in ("ok", "root")}
+
+
+def _media(drive: str) -> dict[str, Any]:
+    try:
+        return _media_of(drive)
+    except (DiscError, DiscUnavailable) as error:
+        raise _problem(error) from None
+
+
+def _songs_for(ctx: AppContext, ids: list[int]) -> list[SongInput]:
+    """The library songs with these ids, in this order (a song may be listed twice)."""
+    wanted = sorted(set(ids))
+    with ctx.db() as conn:
+        rows = {r["id"]: r for r in conn.execute(f"SELECT id, file_path, title, artist FROM tracks WHERE id IN ({','.join('?' * len(wanted))})", wanted)}
+    if any(i not in rows for i in ids):
+        raise HTTPException(status_code=422, detail="Some of those songs are not in your library any more.")
+    return [SongInput(path=rows[i]["file_path"], title=rows[i]["title"] or "", artist=rows[i]["artist"] or "", track_id=i) for i in ids]
+
+
+def _body_key(body: BaseModel) -> str:
+    return json.dumps(body.model_dump(), sort_keys=True)
+
+
+def _check_speed(media_found: dict[str, Any], speed: int | None) -> None:
+    if speed is not None and speed not in {s.get("speed") for s in media_found.get("speeds") or []}:
+        raise HTTPException(status_code=422, detail="This drive cannot write at that speed.")
+
+
+def _burn_plan(ctx: AppContext, body: BurnBody) -> tuple[burn.AudioPlan, dict[str, Any]]:
+    drive = valid_drive_or_404(body.drive)
+    songs = _songs_for(ctx, body.track_ids)
+    media = _media(drive)
+    _check_speed(media, body.speed)
+    try:
+        return burn.plan_audio(songs, media, _cache_dir(ctx) / "burn"), media
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+
+
+@router.get("/media/{drive}")
+def media(drive: str, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """The disc in a recorder: what kind it is, whether it is blank, how much room it has, the speeds it can be written at, and why a music
+    CD cannot be made on it (if it cannot). Asks the drive only."""
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now. Wait for it to finish, or stop it.")
+    found = _media(valid_drive_or_404(drive))
+    return {**_public_media(found), "audio_problems": burn.media_problems(found), "data_problems": datadisc.media_problems(found)}
+
+
+@router.post("/burn/preview")
+def burn_preview(body: BurnBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """Which of the songs can go on a music CD, how much of the disc they take, and whether the burn can start. Touches nothing."""
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now. Wait for it to finish, or stop it.")
+    plan, media_found = _burn_plan(ctx, body)
+    ctx.previews["burn"] = {"key": _body_key(body)}
+    return {**plan.to_dict(), "media": _public_media(media_found)}
+
+
+@router.post("/burn/start")
+def burn_start(body: BurnBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    held = ctx.previews.get("burn")
+    if not held or held["key"] != _body_key(body):
+        raise HTTPException(status_code=409, detail="Look at the list of songs first. Nothing is written until you have seen it.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} already.")
+    if ctx.previews.pop("burn", None) is not held:  # what was shown is used up; if another request took it in the same instant, this one stops
+        raise HTTPException(status_code=409, detail="A disc is being burned already.")
+    plan, media_found = _burn_plan(ctx, body)  # plan again: the disc or the songs may have changed since the preview
+    if plan.problems:
+        raise HTTPException(status_code=409, detail=plan.problems[0])
+    request = burnjob.AudioRequest(drive=valid_drive_or_404(body.drive), speed=body.speed, eject=body.eject, title=body.title)
+    batch_id = rip.new_batch_id()
+    with ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, batch_id, media_found)
+    scratch = _cache_dir(ctx) / "burn"
+
+    def run(handle: JobHandle) -> dict[str, Any]:
+        return burnjob.run_audio(db=ctx.db, plan=plan, request=request, batch_id=batch_id, burn_id=burn_id, scratch=scratch, handle=handle)
+
+    return {"job": ctx.jobs.submit("burn", burnjob.title_of(request, plan), run, lane="disc").to_dict(), "burn_id": burn_id}
+
+
+# ---------------------------------------------------------------------------------------- burning files: a data disc, an image file
+
+
+def _default_iso_folder() -> Path:
+    downloads = Path.home() / "Downloads"
+    return downloads if downloads.is_dir() else Path.home()
+
+
+def _iso_folder(raw: str) -> Path:
+    """Where the image file goes: a folder that is there (the Downloads folder if none was named)."""
+    text = raw.strip()
+    folder = Path(text) if text else _default_iso_folder()
+    if not folder.is_absolute() or text.startswith(("\\\\.\\", "\\\\?\\")):
+        raise HTTPException(status_code=422, detail="Give the full path of a folder, like C:\\Users\\you\\Downloads.")
+    if not folder.is_dir():
+        raise HTTPException(status_code=422, detail="That folder is not there.")
+    return folder
+
+
+def _inside(path: str, root: str) -> bool:
+    try:
+        Path(path).relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _data_plan(ctx: AppContext, ids: list[int], layout: str, label: str, media_found: dict[str, Any] | None) -> datadisc.DataPlan:
+    roots = list(ctx.config.library.roots)
+    songs = [
+        datadisc.DataSong(path=s.path, title=s.title, artist=s.artist, track_id=s.track_id, root=next((r for r in roots if _inside(s.path, r)), ""))
+        for s in _songs_for(ctx, ids)
+    ]
+    try:
+        return datadisc.plan_data(songs, layout=layout, label=label, media=media_found)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+
+
+def _start_allowed(ctx: AppContext, name: str, body: BaseModel) -> None:
+    """A write starts only from a preview of the very same request, and only when nothing else is using the drives."""
+    held = ctx.previews.get(name)
+    if not held or held["key"] != _body_key(body):
+        raise HTTPException(status_code=409, detail="Look at the list first. Nothing is written until you have seen it.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} already.")
+    if ctx.previews.pop(name, None) is not held:  # what was shown is used up; if another request took it in the same instant, this one stops
+        raise HTTPException(status_code=409, detail="A disc is being written already.")
+
+
+@router.post("/data/preview")
+def data_preview(body: DataBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """Where every song would go on the disc, and whether the files fit. Touches nothing."""
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now. Wait for it to finish, or stop it.")
+    drive = valid_drive_or_404(body.drive)
+    media_found = _media(drive)
+    _check_speed(media_found, body.speed)
+    plan = _data_plan(ctx, body.track_ids, body.layout, body.label, media_found)
+    ctx.previews["data"] = {"key": _body_key(body)}
+    return {**plan.to_dict(), "media": _public_media(media_found)}
+
+
+@router.post("/data/start")
+def data_start(body: DataBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    _start_allowed(ctx, "data", body)
+    drive = valid_drive_or_404(body.drive)
+    media_found = _media(drive)
+    _check_speed(media_found, body.speed)
+    plan = _data_plan(ctx, body.track_ids, body.layout, body.label, media_found)  # plan again: the disc or the files may have changed since
+    if plan.problems:
+        raise HTTPException(status_code=409, detail=plan.problems[0])
+    request = datajob.DataRequest(drive=drive, speed=body.speed, eject=body.eject, verify=body.verify, title=body.title)
+    batch_id = rip.new_batch_id()
+    with ctx.db() as conn:
+        burn_id = datajob.begin_data(conn, plan, request, batch_id, media_found)
+
+    def run(handle: JobHandle) -> dict[str, Any]:
+        return datajob.run_data(db=ctx.db, plan=plan, request=request, batch_id=batch_id, burn_id=burn_id, handle=handle)
+
+    return {"job": ctx.jobs.submit("burn", datajob.title_of(request, plan), run, lane="disc").to_dict(), "burn_id": burn_id}
+
+
+@router.post("/iso/preview")
+def iso_preview(body: IsoBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """Where every song would go in the image, and what the image file would be called. Touches nothing."""
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now. Wait for it to finish, or stop it.")
+    folder = _iso_folder(body.folder)
+    plan = _data_plan(ctx, body.track_ids, body.layout, body.label, None)
+    ctx.previews["iso"] = {"key": _body_key(body)}
+    return {**plan.to_dict(), "folder": str(folder), "output": str(datadisc.iso_target(folder, plan.label))}
+
+
+@router.post("/iso/start")
+def iso_start(body: IsoBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    _start_allowed(ctx, "iso", body)
+    folder = _iso_folder(body.folder)
+    plan = _data_plan(ctx, body.track_ids, body.layout, body.label, None)
+    if plan.problems:
+        raise HTTPException(status_code=409, detail=plan.problems[0])
+    output = datadisc.iso_target(folder, plan.label)  # (never a name that is taken: one that appeared since the preview gets another)
+    request = datajob.IsoRequest(title=body.title)
+    batch_id = rip.new_batch_id()
+    with ctx.db() as conn:
+        burn_id = datajob.begin_iso(conn, plan, request, batch_id)
+
+    def run(handle: JobHandle) -> dict[str, Any]:
+        return datajob.run_iso(db=ctx.db, plan=plan, request=request, batch_id=batch_id, burn_id=burn_id, output=output, handle=handle)
+
+    return {"job": ctx.jobs.submit("iso", datajob.title_of(request, plan), run, lane="disc").to_dict(), "burn_id": burn_id, "output": str(output)}
+
+
+@router.post("/erase")
+def erase(body: EraseBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """Erase a rewritable disc. Deletes everything on it, so the request must say `confirm`."""
+    if not body.confirm:
+        raise HTTPException(status_code=409, detail="Erasing deletes everything on the disc. Say that this is what you want.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} already.")
+    drive = valid_drive_or_404(body.drive)
+    media_found = _media(drive)
+    if not media_found.get("writer"):
+        raise HTTPException(status_code=409, detail="This drive cannot write discs.")
+    if media_found.get("state") == "none":
+        raise HTTPException(status_code=409, detail="There is no disc in the drive.")
+    if media_found.get("blank"):
+        raise HTTPException(status_code=409, detail="The disc is blank already: there is nothing to erase.")
+    if not media_found.get("rewritable"):
+        raise HTTPException(status_code=409, detail=f"This {media_found.get('type') or 'disc'} cannot be erased: only rewritable discs (CD-RW, DVD-RW) can.")
+    request = datajob.EraseRequest(drive=drive, full=body.full)
+    batch_id = rip.new_batch_id()
+    with ctx.db() as conn:
+        burn_id = datajob.begin_erase(conn, request, batch_id, media_found)
+
+    def run(handle: JobHandle) -> dict[str, Any]:
+        return datajob.run_erase(db=ctx.db, request=request, batch_id=batch_id, burn_id=burn_id, handle=handle)
+
+    return {"job": ctx.jobs.submit("erase", f"Erasing the {media_found.get('type') or 'disc'}", run, lane="disc").to_dict(), "burn_id": burn_id}
+
+
+@router.get("/burns")
+def burns(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    with ctx.db() as conn:
+        return {"burns": store.list_burns(conn)}
+
+
+@router.get("/burns/{burn_id}")
+def burn_detail(burn_id: int, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    with ctx.db() as conn:
+        found = store.get_burn(conn, burn_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="There is no such burn.")
+    return found
+
+
 @router.post("/eject")
 def eject(body: DriveBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
     drive = valid_drive_or_404(body.drive)
-    if ctx.jobs.is_busy("rip"):
-        raise HTTPException(status_code=409, detail="A disc is being ripped right now.")
+    if (busy := _busy_with(ctx)):
+        raise HTTPException(status_code=409, detail=f"A disc is being {busy} right now.")
     try:
         with DiscHelper() as helper:
             if drive not in {str(d.get("id", "")).upper() for d in helper.call("drives", timeout=LISTING_TIMEOUT)["drives"]}:
