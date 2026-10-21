@@ -112,7 +112,6 @@ namespace MusicToolkit.Disc
                 case 0xC0AA0203u: // E_IMAPI_RECORDER_MEDIA_INCOMPATIBLE
                 case 0xC0AA0406u: // E_IMAPI_DF2DATA_MEDIA_IS_NOT_SUPPORTED
                 case 0xC0AA0507u: // E_IMAPI_DF2TAO_MEDIA_IS_NOT_SUPPORTED
-                case 0xC0AA0607u: // E_IMAPI_DF2RAW_MEDIA_IS_NOT_SUPPORTED
                     return new DiscFailure(Failures.Unsupported, "This drive cannot write to this kind of disc.");
                 case 0xC0AA060Eu: // E_IMAPI_DF2RAW_DATA_BLOCK_TYPE_NOT_SUPPORTED
                 case 0xC0AA060Fu: // E_IMAPI_DF2RAW_STREAM_LEADIN_TOO_SHORT
@@ -137,8 +136,10 @@ namespace MusicToolkit.Disc
                 case 0xC0AA0300u: // E_IMAPI_LOSS_OF_STREAMING
                     return new DiscFailure(Failures.Underrun, "The drive ran out of data while writing (a buffer underrun).");
                 case 0xC0AA0506u: // E_IMAPI_DF2TAO_MEDIA_IS_NOT_BLANK
-                case 0xC0AA0606u: // E_IMAPI_DF2RAW_MEDIA_IS_NOT_BLANK
                     return new DiscFailure(Failures.NotBlank, "This disc is not blank.");
+                case 0xC0AA0606u: // E_IMAPI_DF2RAW_MEDIA_IS_NOT_BLANK / _NOT_SUPPORTED (the documentation gives these two numbers the other way round on its two pages)
+                case 0xC0AA0607u:
+                    return new DiscFailure(Failures.NotBlank, "This disc cannot take a music CD: it is not blank, or it is not a kind of disc that only a blank CD-R or CD-RW is.");
                 case 0xC0AA0508u: // E_IMAPI_DF2TAO_TRACK_LIMIT_REACHED
                     return new DiscFailure(Failures.Failed, "A music CD holds at most 99 songs.");
                 case 0xC0AA0509u: // E_IMAPI_DF2TAO_NOT_ENOUGH_SPACE
@@ -492,7 +493,10 @@ namespace MusicToolkit.Disc
                 try
                 {
                     dynamic raw = Create("IMAPI2.MsftDiscFormat2RawCD");
-                    reply["gapless"] = (bool)raw.IsRecorderSupported(recorder.Com) && (bool)raw.IsCurrentMediaSupported(recorder.Com);
+                    raw.Recorder = recorder.Com;
+                    List<int> types = OfferedSectorTypes((object)raw); // (null: the recorder will not say before the media is locked; then only the two questions decide)
+                    reply["gapless"] = (bool)raw.IsRecorderSupported(recorder.Com) && (bool)raw.IsCurrentMediaSupported(recorder.Com)
+                        && (types == null || types.Contains(RawPqOnly) || types.Contains(RawRaw) || types.Contains(RawCooked));
                 }
                 catch (Exception)
                 {
@@ -1033,6 +1037,20 @@ namespace MusicToolkit.Disc
             return image;
         }
 
+        /// <summary>The data sector types the recorder lists for disc-at-once writing, or null if it will not say (yet).</summary>
+        private static List<int> OfferedSectorTypes(object raw)
+        {
+            try
+            {
+                dynamic recorder = raw;
+                return Items((object)recorder.SupportedSectorTypes).Select(t => Convert.ToInt32(t)).ToList();
+            }
+            catch (COMException)
+            {
+                return null;
+            }
+        }
+
         private static int ChooseSectorType(ICollection<int> offered)
         {
             foreach (int type in new[] { RawPqOnly, RawRaw, RawCooked })
@@ -1069,11 +1087,12 @@ namespace MusicToolkit.Disc
             }
 
             call.Check();
+            List<int> offered = OfferedSectorTypes((object)raw); // (before the media is locked; some recorders only say once it is)
             raw.PrepareMedia();
             bool stoppedEarly = true;
             try
             {
-                int type = ChooseSectorType(Items((object)raw.SupportedSectorTypes).Select(t => Convert.ToInt32(t)).ToList());
+                int type = ChooseSectorType(offered ?? OfferedSectorTypes((object)raw) ?? new List<int>());
                 raw.RequestedSectorType = type;
                 using (RawImage image = SeamlessImage(tracks, type))
                 {
