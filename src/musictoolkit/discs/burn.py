@@ -4,11 +4,15 @@ much of the disc that takes.
 An audio CD holds raw 44.1 kHz, 16-bit, stereo sound, 75 sectors of 2352 bytes to the second. A song is decoded to exactly that in a temporary
 file before the drive is touched, so a song that cannot be read stops the burn while the disc is still blank. Songs that already are 16-bit
 44.1 kHz PCM (a CD rip kept as FLAC or WAV, for example) pass through bit for bit; anything else is converted, and said so.
+
+M4A, AAC and WMA songs are decoded by Windows itself (the disc helper asks Media Foundation) into a temporary WAV file, which is then converted
+like any other song.
 """
 
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -17,7 +21,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from musictoolkit.discs.helper import SECTOR_BYTES
+from musictoolkit.discs.helper import SECTOR_BYTES, DiscError, DiscHelper, DiscUnavailable
 from musictoolkit.discs.toc import MAX_TRACKS, SECTORS_PER_SECOND
 
 SAMPLE_RATE = 44100
@@ -33,9 +37,11 @@ SCRATCH_MARGIN = 50 * 1024 * 1024
 DITHER_SEED = 0x4D544B  # the same song is always decoded to the same bytes
 RESAMPLE_QUALITY = "VHQ"
 
+# Songs the audio library cannot read but Windows can decode (when this Windows has the decoder), by file extension.
+WINDOWS_DECODES = {"m4a": "M4A", "mp4": "MP4", "aac": "AAC", "wma": "WMA"}
 # What a person might expect to work and does not, by file extension, named for the message.
 NOT_YET = {
-    "m4a": "M4A", "mp4": "MP4", "aac": "AAC", "alac": "ALAC", "wma": "WMA", "ape": "APE", "wv": "WavPack", "mpc": "Musepack",
+    "m4p": "Copy-protected M4P", "alac": "ALAC", "ape": "APE", "wv": "WavPack", "mpc": "Musepack",
     "ac3": "AC-3", "dts": "DTS", "tta": "TTA", "dsf": "DSD", "dff": "DSD",
 }
 BITS = {"PCM_S8": 8, "PCM_U8": 8, "PCM_24": 24, "PCM_32": 32, "FLOAT": 32, "DOUBLE": 64}
@@ -100,7 +106,7 @@ class SongCheck:
     """What was found out about one song file."""
 
     path: str
-    verdict: str  # ok | converted (needs changing on the way: rate, channels, depth) | cannot
+    verdict: str  # ok | converted (needs changing on the way: rate, channels, depth) | cannot | pending (Windows has still to say)
     notes: list[str] = field(default_factory=list)
     seconds: float = 0.0
     sectors: int = 0  # on the disc, with the four-second minimum; 0 when the song cannot be burned
@@ -108,6 +114,12 @@ class SongCheck:
     channels: int = 0
     format: str = ""
     subtype: str = ""
+    via: str = ""  # "windows": decoded by Windows (the disc helper) first; "" for what the audio library reads itself
+
+    @property
+    def pending(self) -> bool:
+        """Windows has still to be asked what this song is like (see `windows_song`)."""
+        return self.via == "windows" and self.verdict == "pending"
 
     @property
     def exact(self) -> bool:
@@ -128,9 +140,11 @@ def inspect_song(path: str | Path) -> SongCheck:
     try:
         info = _library().info(str(path))
     except (OSError, RuntimeError, ValueError) as exc:
+        if extension in WINDOWS_DECODES:
+            return SongCheck(str(path), "pending", via="windows", format=WINDOWS_DECODES[extension])
         name = NOT_YET.get(extension)
         if name:
-            return _cannot(path, f"{name} songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg and Opus can.")
+            return _cannot(path, f"{name} songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg, Opus, M4A, AAC and WMA can.")
         return _cannot(path, f"The song cannot be read ({str(exc).strip() or type(exc).__name__}).")
     found = {"rate": int(info.samplerate), "channels": int(info.channels), "format": info.format, "subtype": info.subtype}
     if info.channels > CHANNELS:
@@ -154,6 +168,48 @@ def inspect_song(path: str | Path) -> SongCheck:
     return SongCheck(
         str(path), "converted" if converted else "ok", notes, seconds=out_frames / SAMPLE_RATE, sectors=sectors_for_frames(out_frames), **found,
     )
+
+
+def windows_song(path: str | Path, info: dict[str, Any] | None) -> SongCheck:
+    """The check for a song that only Windows can decode, from what the disc helper said about it (`info`; None if it said nothing)."""
+    path = Path(path)
+    if not info or not info.get("ok"):
+        return _cannot(path, str((info or {}).get("error") or "Windows could not say what is in this song."), via="windows")
+    rate, channels, seconds = int(info.get("rate") or 0), int(info.get("channels") or 0), float(info.get("seconds") or 0)
+    kind = str(info.get("codec") or WINDOWS_DECODES.get(path.suffix.lower().lstrip(".")) or "")
+    found: dict[str, Any] = {"rate": rate, "channels": channels, "format": kind, "subtype": "WINDOWS", "via": "windows"}
+    if channels > CHANNELS:
+        return _cannot(path, f"This song has {channels} channels; a music CD holds two (stereo).", **found)
+    if rate <= 0 or channels <= 0:
+        return _cannot(path, "Windows could not say what the sound in this song is like.", **found)
+    if seconds <= 0:
+        return _cannot(path, "Windows could not say how long this song is.", **found)
+    out_frames = math.ceil(seconds * SAMPLE_RATE)
+    notes = [f"Decoded by Windows{f' ({kind})' if kind else ''} and made into CD sound."]
+    if rate != SAMPLE_RATE:
+        notes.append(f"Converted from {rate / 1000:g} kHz to 44.1 kHz.")
+    if channels == 1:
+        notes.append("Mono: both speakers get the same sound.")
+    if out_frames < MIN_SECTORS * FRAMES_PER_SECTOR:
+        notes.append("Shorter than four seconds: silence is added to make four, as a music CD needs.")
+    return SongCheck(str(path), "converted", notes, seconds=out_frames / SAMPLE_RATE, sectors=sectors_for_frames(out_frames), **found)
+
+
+def check_with_windows(paths: list[str]) -> dict[str, SongCheck]:
+    """Ask Windows (the disc helper) about songs only it can decode: {path: check}. If the helper cannot be started or asked, each of the songs is
+    one that cannot be burned, with the reason in words."""
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return {}
+    answers: dict[str, dict[str, Any]] = {}
+    try:
+        with DiscHelper() as helper:
+            for first in range(0, len(paths), 50):
+                for entry in helper.call("inspect", paths=paths[first : first + 50]).get("songs") or []:
+                    answers[str(entry.get("path"))] = entry
+    except (DiscError, DiscUnavailable) as error:
+        return {p: _cannot(Path(p), f"Windows could not be asked to decode this song ({str(error).rstrip('.')}).", via="windows") for p in paths}
+    return {p: windows_song(p, answers.get(p)) for p in paths}
 
 
 # ---------------------------------------------------------------------------------------- turning a song into CD audio
@@ -183,6 +239,8 @@ def decode_to_pcm(
     song = inspect_song(source)
     if song.verdict == "cannot":
         raise BurnError(f"{Path(source).name}: {song.notes[0]}")
+    if song.pending:
+        raise BurnError(f"{Path(source).name}: this song has to be decoded by Windows first.")
     target = Path(target)
     written = 0
     try:
@@ -386,9 +444,9 @@ def _scratch_free(folder: Path) -> int | None:
 
 
 def forget_scratch(folder: Path, batch_id: str) -> None:
-    """Remove a burn's temporary songs (and any a burn that was cut short left behind). Never raises."""
+    """Remove a burn's temporary songs and decoded copies (and any a burn that was cut short left behind). Never raises."""
     with contextlib.suppress(OSError):
-        for leftover in Path(folder).glob(f"{batch_id}-*.pcm"):
+        for leftover in Path(folder).glob(f"{batch_id}-*"):
             with contextlib.suppress(OSError):
                 leftover.unlink()
     with contextlib.suppress(OSError):

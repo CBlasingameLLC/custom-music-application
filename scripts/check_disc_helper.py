@@ -592,13 +592,16 @@ def check_decoding(exe: str) -> None:
         garbage.write_bytes(os.urandom(5000))
         mono_wav = folder / "mono.wav"
         sf.write(str(mono_wav), 0.5 * np.sin(2 * np.pi * 440 * np.arange(22050 * 2) / 22050), 22050, subtype="PCM_16")
-        # name, path, rate, channels, frequencies heard in the left (and right) channel, whether this Windows has to decode it
+        # name, path, the shapes the sound may come out in (rate, channels), the frequency heard in each channel, how loud (the tone files were made
+        # a quarter as loud as full scale by a generator whose own level is an eighth), and whether this Windows has to decode it. The AAC decoder
+        # assumes at first that a stream of 24 kHz or less carries HE-AAC's extra band (twice the rate, two channels for one), so for such a song
+        # either shape is right: what matters is that the file says what it holds.
         songs = [
-            ("a plain WAV", plain, 44100, 2, (440, 660), False),
-            ("a mono WAV at 22.05 kHz", mono_wav, 22050, 1, (440,), False),
-            ("an AAC song in an M4A file", fixtures / "tones_aac.m4a", 44100, 2, (440, 660), True),
-            ("a WMA song", fixtures / "tones_wma.wma", 44100, 2, (440, 660), True),
-            ("a mono AAC song at 22.05 kHz", fixtures / "tone_mono_22k.m4a", 22050, 1, (440,), True),
+            ("a plain WAV", plain, [(44100, 2)], (440, 660), 0.5, False),
+            ("a mono WAV at 22.05 kHz", mono_wav, [(22050, 1)], (440,), 0.5, False),
+            ("an AAC song in an M4A file", fixtures / "tones_aac.m4a", [(44100, 2)], (440, 660), 0.0625, True),
+            ("a WMA song", fixtures / "tones_wma.wma", [(44100, 2)], (440, 660), 0.0625, True),
+            ("a mono AAC song at 22.05 kHz", fixtures / "tone_mono_22k.m4a", [(22050, 1), (44100, 2)], (440,), 0.0625, True),
         ]
         with DiscHelper([exe]) as helper:
             listed = helper.call("inspect", paths=[str(p) for _, p, *_ in songs] + [str(garbage), str(folder / "gone.m4a"), "relative.m4a", ""])["songs"]
@@ -606,7 +609,7 @@ def check_decoding(exe: str) -> None:
                 print(f"      {entry}", flush=True)
             check(len(listed) == len(songs) + 4, "every song asked about is answered, one by one")
             found = {entry["path"]: entry for entry in listed}
-            for name, path, want_rate, want_channels, tones, needs_codec in songs:
+            for name, path, shapes, tones, level, needs_codec in songs:
                 entry = found.get(str(path), {})
                 if not entry.get("ok") and needs_codec and entry.get("code") == "unsupported":
                     note(f"{name}: this Windows cannot decode it ({entry.get('error')}), so it is not checked here")
@@ -614,22 +617,26 @@ def check_decoding(exe: str) -> None:
                 check(entry.get("ok") is True, f"{name}: Windows says it can decode it ({entry.get('error', entry.get('codec'))})")
                 if entry.get("ok") is not True:
                     continue
-                check((entry.get("rate"), entry.get("channels")) == (want_rate, want_channels), f"{name}: and says what it is like ({entry.get('codec')}, {entry.get('rate')} Hz, {entry.get('channels')} channels, {entry.get('seconds')} s)")
+                check((entry.get("rate"), entry.get("channels")) in shapes, f"{name}: and says what it is like ({entry.get('codec')}, {entry.get('rate')} Hz, {entry.get('channels')} channels, {entry.get('seconds')} s)")
                 check(abs(float(entry.get("seconds", 0)) - 2.0) < 0.15, f"{name}: and how long it is ({entry.get('seconds')} s)")
                 out = folder / f"{path.stem}-decoded.wav"
                 seen: list[dict] = []
-                done = helper.call("decode", src=str(path), out=str(out), on_event=seen.append)
+                try:
+                    done = helper.call("decode", src=str(path), out=str(out), on_event=seen.append)
+                except DiscError as error:
+                    check(False, f"{name}: it is decoded ({error.code}: {error})")
+                    continue
                 check(out.is_file() and not Path(str(out) + ".part").exists(), f"{name}: it is decoded to a WAV file, and no half-written file is left beside it ({done})")
                 if not out.is_file():
                     continue
                 samples, got_rate = sf.read(str(out), dtype="float32", always_2d=True)
-                check((got_rate, samples.shape[1], done.get("rate"), done.get("channels")) == (want_rate, want_channels, want_rate, want_channels),
+                check((got_rate, samples.shape[1]) in shapes and (got_rate, samples.shape[1]) == (done.get("rate"), done.get("channels")),
                       f"{name}: the file has the rate and channels the helper said ({got_rate} Hz, {samples.shape[1]} channels)")
                 check(abs(len(samples) / got_rate - 2.0) < 0.15 and done.get("frames") == len(samples), f"{name}: and the length of the song ({len(samples) / got_rate:.3f} s)")
-                heard = tuple(round(peak_hertz(samples[:, c], got_rate)) for c in range(samples.shape[1]))
+                heard = tuple(round(peak_hertz(samples[:, c], got_rate)) for c in range(min(samples.shape[1], len(tones))))
                 check(all(abs(h - w) <= 5 for h, w in zip(heard, tones)), f"{name}: and each channel has its own pitch ({heard} Hz, {tones} expected)")
                 loudness = [float(np.abs(samples[len(samples) // 4 : 3 * len(samples) // 4, c]).max()) for c in range(samples.shape[1])]
-                check(all(0.4 < v < 0.6 for v in loudness), f"{name}: and is as loud as it was ({[round(v, 3) for v in loudness]})")
+                check(all(0.75 * level < v < 1.25 * level for v in loudness), f"{name}: and is as loud as it was ({[round(v, 4) for v in loudness]}, about {level} expected)")
                 if name.startswith("a plain WAV"):
                     exact = sf.read(str(plain), dtype="int16", always_2d=True)[0]
                     check(done.get("bits") == 16 and np.array_equal(sf.read(str(out), dtype="int16", always_2d=True)[0], exact), "a plain WAV comes out as the very same samples")

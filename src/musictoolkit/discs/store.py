@@ -187,7 +187,7 @@ def recover_burns(conn: sqlite3.Connection, cache_dir: Path | None = None) -> in
             words += " Writing had begun, so the disc cannot be trusted. A rewritable disc can be erased and used again."
         finish_burn(conn, burn["id"], "interrupted", words)
         if cache_dir is not None and cache_dir.is_dir():
-            for leftover in cache_dir.glob(f"{burn['batch_id']}-*.pcm"):
+            for leftover in cache_dir.glob(f"{burn['batch_id']}-*"):
                 try:
                     leftover.unlink()
                 except OSError:

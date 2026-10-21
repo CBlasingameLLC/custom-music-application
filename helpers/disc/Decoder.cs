@@ -480,10 +480,6 @@ namespace MusicToolkit.Disc
                 int rate = Number(type, Rate);
                 int bits = Number(type, Bits);
                 bool floating = Kind(type, Subtype) == FormatFloat;
-                if (channels < 1 || rate < 1 || bits < 8)
-                {
-                    throw new DiscFailure(Failures.Failed, "Windows did not say what the sound in " + name + " is like.");
-                }
 
                 long length = DurationOf(reader);
                 long bytes = 0;
@@ -507,13 +503,28 @@ namespace MusicToolkit.Disc
 
                         if ((flags & ReaderCurrentTypeChanged) != 0)
                         {
+                            // The AAC decoder starts out by assuming that a stream of 24 kHz or less carries the extra band of HE-AAC (and so gives twice the
+                            // rate, and two channels for one) and says so again, with the sound as it really is, when the first sample shows that it does not.
+                            // So a change before any sound has been taken is the decoder settling; after that it is a song that changes in the middle.
                             IMFMediaType now;
                             reader.GetCurrentMediaType(FirstAudioStream, out now);
                             try
                             {
-                                if (Number(now, Channels) != channels || Number(now, Rate) != rate || Number(now, Bits) != bits)
+                                int nowChannels = Number(now, Channels);
+                                int nowRate = Number(now, Rate);
+                                int nowBits = Number(now, Bits);
+                                bool nowFloating = Kind(now, Subtype) == FormatFloat;
+                                if (nowChannels != channels || nowRate != rate || nowBits != bits || nowFloating != floating)
                                 {
-                                    throw new DiscFailure(Failures.Failed, "The sound in " + name + " changes in the middle (its rate or channels), which a music CD cannot follow.");
+                                    if (bytes > 0)
+                                    {
+                                        throw new DiscFailure(Failures.Failed, "The sound in " + name + " changes in the middle (its rate or channels), which a music CD cannot follow.");
+                                    }
+
+                                    channels = nowChannels;
+                                    rate = nowRate;
+                                    bits = nowBits;
+                                    floating = nowFloating;
                                 }
                             }
                             finally
@@ -577,6 +588,11 @@ namespace MusicToolkit.Disc
                     if (bytes == 0)
                     {
                         throw new DiscFailure(Failures.Failed, "There is no sound in " + name + ".");
+                    }
+
+                    if (channels < 1 || rate < 1 || bits < 8)
+                    {
+                        throw new DiscFailure(Failures.Failed, "Windows did not say what the sound in " + name + " is like.");
                     }
 
                     file.Seek(0, SeekOrigin.Begin);
