@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.8.1)
+## What it does (v0.8.2)
 
 | Area | Features |
 |---|---|
@@ -41,7 +41,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Radio** | Live internet radio through the app: your favorite stations, recently played ones, **Browse** the free Radio Browser directory (search by name, kind of music or country; sort by listeners, votes, name or sound quality) and **Add by address** (a stream, or the playlist file a station publishes). The song a station says is on shows in the player bar, the window title, the tray and the media-key overlay. A stream that drops is joined again; a station that cannot be played says why. Nothing is recorded or downloaded. See below |
 | **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
-| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD, a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
+| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD (with no gap between the songs if you like, and M4A, AAC and WMA songs too), a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
