@@ -914,7 +914,6 @@ namespace MusicToolkit.Disc
             public long LeadOut;
             public long Length;                     // the sectors of the songs, added up
             public bool Seamless;                   // the songs follow one another with nothing between them
-            public string TableOfContents = string.Empty;
 
             public void Dispose()
             {
@@ -1004,15 +1003,6 @@ namespace MusicToolkit.Disc
                 // With nothing between the songs the disc, from the first song to the lead-out, is as long as the songs added up; two seconds between
                 // each pair would make it 150 sectors longer for every pair.
                 image.Seamless = image.LeadOut - image.Starts[0] == image.Length;
-                try
-                {
-                    image.TableOfContents = string.Join(" ", Items((object)creator.ExpectedTableOfContents).Select(b => Convert.ToInt32(b).ToString("X2")));
-                }
-                catch (Exception)
-                {
-                    // the table of contents is only for the checks to look at
-                }
-
                 if (makeImage)
                 {
                     image.Stream = creator.CreateResultImage();
@@ -1027,35 +1017,20 @@ namespace MusicToolkit.Disc
             }
         }
 
-        /// <summary>The songs as one disc image in which they run on from one another. The documentation says that setting DisableGaplessAudio to true
-        /// is what does that, and the name of the property says the opposite, so the layout IMAPI makes is looked at (how long the whole is) and the
-        /// other setting is tried if it is not the one wanted. If neither gives a disc without gaps, nothing is written.</summary>
+        /// <summary>The songs as one disc image in which they run on from one another. DisableGaplessAudio is left false, which is what makes them run
+        /// on (its documentation says the opposite; the check on a build machine lays songs out both ways and finds the whole 150 sectors longer for
+        /// every pair with true). The layout is looked at all the same, and if it is not seamless nothing is written.</summary>
         private static RawImage SeamlessImage(IList<TrackFile> tracks, int sectorType)
         {
-            var seen = new List<string>();
-            foreach (bool property in new[] { true, false })
+            RawImage image = LayOut(tracks, sectorType, false, true);
+            if (!image.Seamless)
             {
-                RawImage image = LayOut(tracks, sectorType, property, false);
-                if (image.Seamless)
-                {
-                    try
-                    {
-                        image.Stream = ((dynamic)image.Creator).CreateResultImage();
-                    }
-                    catch (Exception)
-                    {
-                        image.Dispose();
-                        throw;
-                    }
-
-                    return image;
-                }
-
-                seen.Add("with " + (property ? "true" : "false") + " the disc is " + (image.LeadOut - image.Starts[0]) + " sectors long and the songs " + image.Length);
+                string how = (image.LeadOut - image.Starts[0]) + " sectors for songs that add up to " + image.Length;
                 image.Dispose();
+                throw new DiscFailure(Failures.Unsupported, "Windows' disc burning component would not lay the songs out without gaps (" + how + "). Choose two seconds between songs instead.");
             }
 
-            throw new DiscFailure(Failures.Unsupported, "Windows' disc burning component would not lay the songs out without gaps (" + string.Join("; ", seen) + "). Choose two seconds between songs instead.");
+            return image;
         }
 
         private static int ChooseSectorType(ICollection<int> offered)
@@ -1181,7 +1156,7 @@ namespace MusicToolkit.Disc
                 var facts = new Dictionary<string, object>
                 {
                     { "type", sectorType }, { "property", property }, { "seamless", image.Seamless }, { "starts", image.Starts.Cast<object>().ToList() },
-                    { "counts", image.Counts.Cast<object>().ToList() }, { "leadout", image.LeadOut }, { "length", image.Length }, { "toc", image.TableOfContents },
+                    { "counts", image.Counts.Cast<object>().ToList() }, { "leadout", image.LeadOut }, { "length", image.Length },
                 };
                 ComStream stream = (ComStream)image.Stream;
                 try

@@ -481,12 +481,14 @@ def look_in_image(image: bytes, songs: list[bytes]) -> dict:
 
 def check_raw_images(exe: str) -> None:
     """Windows' disc burning component can lay songs out as the image of a whole disc without a recorder. That is the part of a burn without gaps
-    that a build machine can prove: that the songs reach IMAPI, that they come out in the image word for word, and that nothing lies between them."""
+    that a build machine can prove: that the songs reach IMAPI, that they come out in the image word for word, and that nothing lies between them
+    (and that the setting whose documentation says the opposite of its name does what the burn relies on)."""
     from musictoolkit.discs.helper import DiscError, DiscHelper
 
     folder = Path(tempfile.mkdtemp(prefix="mtk-raw-check-"))
     try:
         lengths = (320, 400, 310)
+        total, pairs = sum(lengths), len(lengths) - 1
         songs = [raw_song(number, sectors) for number, sectors in enumerate(lengths, start=1)]
         tracks = []
         for number, data in enumerate(songs, start=1):
@@ -494,57 +496,52 @@ def check_raw_images(exe: str) -> None:
             path.write_bytes(data)
             tracks.append({"path": str(path), "sectors": len(data) // 2352})
         with DiscHelper([exe]) as helper:
-            probe = helper.call("imapi_probe")
-            raws = probe.get("raw_components", {})
+            raws = helper.call("imapi_probe").get("raw_components", {})
             print(f"      {raws}", flush=True)
             if not raws or not all(v is True for v in raws.values()):
                 note("the components that write a disc in one go are not all here, so the checks of a music CD without gaps are skipped")
                 return
             check(True, "the components that write a disc in one go can be made")
-            laid = {}
-            for sector_type in (1, 2, 3):
-                for prop in (True, False):
-                    try:
-                        facts = helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, timeout=300)
-                        laid[(sector_type, prop)] = facts
-                        print(f"      type {sector_type}, property {prop}: {facts}", flush=True)
-                    except DiscError as error:
-                        print(f"      type {sector_type}, property {prop}: {error.code}: {error}", flush=True)
-            check(bool(laid), f"songs can be laid out as the image of a disc ({len(laid)} of 6 ways)")
-            if not laid:
-                return
-            seamless = [(k, v) for k, v in laid.items() if v.get("seamless")]
-            check(bool(seamless), f"and one of the settings lays them out without gaps ({[(k, v.get('leadout')) for k, v in laid.items()]})")
-            for sector_type in (1, 2, 3):
-                pair = [laid.get((sector_type, True)), laid.get((sector_type, False))]
-                if all(pair):
-                    short = [p["leadout"] - p["starts"][0] for p in pair]
-                    note(f"type {sector_type}: the disc is {short[0]} sectors long with true and {short[1]} with false (the songs add up to {sum(lengths)})")
-            if not seamless:
-                return
-            (sector_type, prop), facts = seamless[0]
-            out = folder / "seamless.bin"
-            made = helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, out=str(out), timeout=300)
-            image = out.read_bytes()
-            check(len(image) == made.get("written"), f"the image is read out whole ({len(image)} bytes)")
-            if made.get("bytes") is not None:
-                check(made["bytes"] == len(image), f"and is as long as the stream says ({made['bytes']})")
-            seen = look_in_image(image, songs)
-            print(f"      {seen}", flush=True)
-            check(seen.get("found") is True, "the first song is in the image")
-            if seen.get("found"):
-                check(bool(seen.get("stride")) and seen["stride"] >= 2352, f"and the image counts its sectors in {seen.get('stride')} bytes")
-                check(seen.get("intact") is True, "every sector of every song is in the image, word for word")
-                check(seen.get("between") == [0, 0], f"and the songs run on from one another: nothing lies between them ({seen.get('between')})")
-            out.unlink(missing_ok=True)
+            out = folder / "image.bin"
 
-            other = laid.get((sector_type, not prop))
-            if other:
-                again = helper.call("raw_image", tracks=tracks, type=sector_type, property=not prop, out=str(out), timeout=300)
-                seen = look_in_image(out.read_bytes(), songs)
-                note(f"the other setting: {seen}")
+            def lay_out(sector_type: int, prop: bool, write: bool = False) -> dict | None:
+                try:
+                    return helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, timeout=300, **({"out": str(out)} if write else {}))
+                except DiscError as error:
+                    check(False, f"songs are laid out as a disc (type {sector_type}, DisableGaplessAudio {prop}): {error.code}: {error}")
+                    return None
+
+            for sector_type in (1, 2, 3):
+                label = f"sector type {sector_type}"
+                ran_on = lay_out(sector_type, False, write=True)  # DisableGaplessAudio false: the default, and what the burn uses
+                if ran_on is None:
+                    continue
+                print(f"      {label}, DisableGaplessAudio false: {ran_on}", flush=True)
+                check(ran_on["seamless"] is True and ran_on["leadout"] - ran_on["starts"][0] == total,
+                      f"{label}: with DisableGaplessAudio false the disc is as long as the songs ({ran_on['leadout'] - ran_on['starts'][0]} sectors for {total})")
+                image = out.read_bytes()
                 out.unlink(missing_ok=True)
-                check(again.get("seamless") is False, "the other setting leaves the usual two seconds between the songs")
+                check(len(image) == ran_on.get("written") == ran_on.get("bytes"), f"{label}: the image is read out whole ({len(image)} bytes)")
+                seen = look_in_image(image, songs)
+                print(f"      {seen}", flush=True)
+                check(seen.get("found") is True, f"{label}: the first song is in the image")
+                if seen.get("found"):
+                    check(bool(seen.get("stride")) and seen["stride"] >= 2352, f"{label}: and the image counts its sectors in {seen.get('stride')} bytes")
+                    check(seen.get("intact") is True, f"{label}: every sector of every song is in the image, word for word")
+                    check(seen.get("between") == [0] * pairs, f"{label}: and the songs run on from one another: nothing lies between them ({seen.get('between')})")
+                    check(seen.get("starts") == ran_on["starts"], f"{label}: and each song starts where IMAPI says it does ({ran_on['starts']})")
+                    if sector_type == 3:
+                        note(f"what the sub-channel of the sectors around the start of song 2 says: {seen.get('q_channel')}")
+
+                gaps = lay_out(sector_type, True, write=sector_type == 1)  # true: what its documentation says makes the songs run on
+                if gaps is None:
+                    continue
+                check(gaps["seamless"] is False and gaps["leadout"] - gaps["starts"][0] == total + 150 * pairs,
+                      f"{label}: with DisableGaplessAudio true two seconds lie between the songs ({gaps['leadout'] - gaps['starts'][0]} sectors for {total})")
+                if sector_type == 1:
+                    seen = look_in_image(out.read_bytes(), songs)
+                    out.unlink(missing_ok=True)
+                    check(seen.get("intact") is True and seen.get("between") == [150] * pairs, f"{label}: and there they are in the image ({seen.get('between')})")
     except DiscError as error:
         check(False, f"laying songs out as a disc: {error.code}: {error}")
     finally:
