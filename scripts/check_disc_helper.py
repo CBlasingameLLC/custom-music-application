@@ -406,6 +406,159 @@ def check_images(exe: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------------------- a music CD without gaps: the image of the whole disc
+
+
+def raw_song(seed: int, sectors: int) -> bytes:
+    """Sectors of CD audio no two of which are alike, so that each can be found in an image by its bytes."""
+    import random
+
+    return random.Random(seed).randbytes(2352 * sectors)
+
+
+def crc16(data: bytes) -> int:
+    """The check value the Q sub-channel ends with (CCITT, stored inverted)."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc ^ 0xFFFF
+
+
+def q_channel(sub: bytes) -> dict | None:
+    """The Q sub-channel out of 96 bytes of sub-code (P is bit 7 of each byte, Q bit 6): where on the disc this sector says it is."""
+    if len(sub) < 96:
+        return None
+    bits = [(b >> 6) & 1 for b in sub[:96]]
+    q = bytes(sum(bit << (7 - k) for k, bit in enumerate(bits[8 * i : 8 * i + 8])) for i in range(12))
+
+    def bcd(x: int) -> int:
+        return (x >> 4) * 10 + (x & 15)
+
+    return {"track": bcd(q[1]), "index": bcd(q[2]), "relative": (bcd(q[3]), bcd(q[4]), bcd(q[5])), "absolute": (bcd(q[7]), bcd(q[8]), bcd(q[9])),
+            "crc": crc16(q[:10]) == (q[10] << 8 | q[11])}
+
+
+def look_in_image(image: bytes, songs: list[bytes]) -> dict:
+    """Where the songs are in an image of a disc: the size of a sector of the image (the distance between two sectors of the first song), the
+    sector of the image each song begins at, whether every sector of every song is there word for word, and the distance between the end of one
+    song and the start of the next in sectors."""
+    first = image.find(songs[0][:2352])
+    if first < 0:
+        return {"found": False}
+    second = image.find(songs[0][2352:4704], first)
+    stride = second - first if second > first else 0
+    found: dict = {"found": True, "stride": stride, "first_offset": first, "image_sectors": len(image) / stride if stride else None}
+    if not stride:
+        return found
+    starts = []
+    intact = True
+    for number, song in enumerate(songs):
+        at = image.find(song[:2352], first if number == 0 else starts[-1] * stride + first)
+        starts.append((at - first) // stride if at >= 0 and (at - first) % stride == 0 else -1)
+        if starts[-1] < 0:
+            intact = False
+            continue
+        for sector in range(len(song) // 2352):
+            offset = first + (starts[-1] + sector) * stride
+            if image[offset : offset + 2352] != song[sector * 2352 : (sector + 1) * 2352]:
+                intact = False
+                found["first_difference"] = (number + 1, sector)
+                break
+    found["starts"] = starts
+    found["intact"] = intact
+    found["between"] = [starts[i + 1] - starts[i] - len(songs[i]) // 2352 for i in range(len(songs) - 1)] if all(x >= 0 for x in starts) else None
+    if stride >= 2352 + 96:
+        around = []
+        if all(x >= 0 for x in starts):
+            for label, sector in (("last sector of song 1", starts[1] - 1), ("first sector of song 2", starts[1]), ("150 sectors before song 2", starts[1] - 150)):
+                at = first + sector * stride + 2352
+                around.append((label, q_channel(image[at : at + 96])))
+        found["q_channel"] = around
+    return found
+
+
+def check_raw_images(exe: str) -> None:
+    """Windows' disc burning component can lay songs out as the image of a whole disc without a recorder. That is the part of a burn without gaps
+    that a build machine can prove: that the songs reach IMAPI, that they come out in the image word for word, and that nothing lies between them."""
+    from musictoolkit.discs.helper import DiscError, DiscHelper
+
+    folder = Path(tempfile.mkdtemp(prefix="mtk-raw-check-"))
+    try:
+        lengths = (320, 400, 310)
+        songs = [raw_song(number, sectors) for number, sectors in enumerate(lengths, start=1)]
+        tracks = []
+        for number, data in enumerate(songs, start=1):
+            path = folder / f"song{number}.pcm"
+            path.write_bytes(data)
+            tracks.append({"path": str(path), "sectors": len(data) // 2352})
+        with DiscHelper([exe]) as helper:
+            probe = helper.call("imapi_probe")
+            raws = probe.get("raw_components", {})
+            print(f"      {raws}", flush=True)
+            if not raws or not all(v is True for v in raws.values()):
+                note("the components that write a disc in one go are not all here, so the checks of a music CD without gaps are skipped")
+                return
+            check(True, "the components that write a disc in one go can be made")
+            laid = {}
+            for sector_type in (1, 2, 3):
+                for prop in (True, False):
+                    try:
+                        facts = helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, timeout=300)
+                        laid[(sector_type, prop)] = facts
+                        print(f"      type {sector_type}, property {prop}: {facts}", flush=True)
+                    except DiscError as error:
+                        print(f"      type {sector_type}, property {prop}: {error.code}: {error}", flush=True)
+            check(bool(laid), f"songs can be laid out as the image of a disc ({len(laid)} of 6 ways)")
+            if not laid:
+                return
+            seamless = [(k, v) for k, v in laid.items() if v.get("seamless")]
+            check(bool(seamless), f"and one of the settings lays them out without gaps ({[(k, v.get('leadout')) for k, v in laid.items()]})")
+            for sector_type in (1, 2, 3):
+                pair = [laid.get((sector_type, True)), laid.get((sector_type, False))]
+                if all(pair):
+                    short = [p["leadout"] - p["starts"][0] for p in pair]
+                    note(f"type {sector_type}: the disc is {short[0]} sectors long with true and {short[1]} with false (the songs add up to {sum(lengths)})")
+            if not seamless:
+                return
+            (sector_type, prop), facts = seamless[0]
+            out = folder / "seamless.bin"
+            made = helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, out=str(out), timeout=300)
+            image = out.read_bytes()
+            check(len(image) == made.get("written"), f"the image is read out whole ({len(image)} bytes)")
+            if made.get("bytes") is not None:
+                check(made["bytes"] == len(image), f"and is as long as the stream says ({made['bytes']})")
+            seen = look_in_image(image, songs)
+            print(f"      {seen}", flush=True)
+            check(seen.get("found") is True, "the first song is in the image")
+            if seen.get("found"):
+                check(bool(seen.get("stride")) and seen["stride"] >= 2352, f"and the image counts its sectors in {seen.get('stride')} bytes")
+                check(seen.get("intact") is True, "every sector of every song is in the image, word for word")
+                check(seen.get("between") == [0, 0], f"and the songs run on from one another: nothing lies between them ({seen.get('between')})")
+            out.unlink(missing_ok=True)
+
+            other = laid.get((sector_type, not prop))
+            if other:
+                again = helper.call("raw_image", tracks=tracks, type=sector_type, property=not prop, out=str(out), timeout=300)
+                seen = look_in_image(out.read_bytes(), songs)
+                note(f"the other setting: {seen}")
+                out.unlink(missing_ok=True)
+                check(again.get("seamless") is False, "the other setting leaves the usual two seconds between the songs")
+    except DiscError as error:
+        check(False, f"laying songs out as a disc: {error.code}: {error}")
+    finally:
+        for leftover in sorted(folder.rglob("*"), reverse=True):
+            try:
+                leftover.unlink() if leftover.is_file() else leftover.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------------------- the checks
 
 
@@ -613,6 +766,7 @@ def main() -> None:
     if sys.platform == "win32":
         check_mounted_image(exe)
         check_images(exe)
+        check_raw_images(exe)
 
     if failures:
         sys.exit(f"\n{len(failures)} check(s) failed")

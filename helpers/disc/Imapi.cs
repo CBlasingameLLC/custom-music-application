@@ -26,6 +26,14 @@ namespace MusicToolkit.Disc
         private const int MinimumAudioSectors = 300;
         private const int MaxAudioTracks = 99;
 
+        // IMAPI_CD_SECTOR_TYPE and IMAPI_FORMAT2_RAW_CD_DATA_SECTOR_TYPE (what the sub-channel part of the image holds)
+        private const int CdSectorAudio = 0;
+        private const int RawPqOnly = 1;
+        private const int RawCooked = 2;
+        private const int RawRaw = 3;
+        private const string RawCreatorProgId = "IMAPI2.MsftRawCDImageCreator";
+        private const string RawCreatorClassId = "25983561-9D65-49CE-B335-40630D901227";
+
         // IMAPI_MEDIA_PHYSICAL_TYPE
         private static readonly Dictionary<int, string> Kinds = new Dictionary<int, string>
         {
@@ -104,7 +112,11 @@ namespace MusicToolkit.Disc
                 case 0xC0AA0203u: // E_IMAPI_RECORDER_MEDIA_INCOMPATIBLE
                 case 0xC0AA0406u: // E_IMAPI_DF2DATA_MEDIA_IS_NOT_SUPPORTED
                 case 0xC0AA0507u: // E_IMAPI_DF2TAO_MEDIA_IS_NOT_SUPPORTED
+                case 0xC0AA0607u: // E_IMAPI_DF2RAW_MEDIA_IS_NOT_SUPPORTED
                     return new DiscFailure(Failures.Unsupported, "This drive cannot write to this kind of disc.");
+                case 0xC0AA060Eu: // E_IMAPI_DF2RAW_DATA_BLOCK_TYPE_NOT_SUPPORTED
+                case 0xC0AA060Fu: // E_IMAPI_DF2RAW_STREAM_LEADIN_TOO_SHORT
+                    return new DiscFailure(Failures.Unsupported, NoGapsExplained);
                 case 0xC0AA0204u: // E_IMAPI_RECORDER_MEDIA_UPSIDE_DOWN
                     return new DiscFailure(Failures.Unsupported, "The disc is in upside down.");
                 case 0xC0AA0205u: // E_IMAPI_RECORDER_MEDIA_BECOMING_READY
@@ -113,6 +125,7 @@ namespace MusicToolkit.Disc
                 case 0xC0AA0207u: // E_IMAPI_RECORDER_MEDIA_BUSY
                 case 0xC0AA0210u: // E_IMAPI_RECORDER_LOCKED
                 case 0xC0AA0500u: // E_IMAPI_DF2TAO_WRITE_IN_PROGRESS
+                case 0xC0AA0600u: // E_IMAPI_DF2RAW_WRITE_IN_PROGRESS
                 case 0xC0AA0400u: // E_IMAPI_DF2DATA_WRITE_IN_PROGRESS
                     return new DiscFailure(Failures.Busy, "The drive is busy with something else. Wait for it to finish, or close the other program that is using it.");
                 case 0xC0AA0209u: // E_IMAPI_RECORDER_MEDIA_WRITE_PROTECTED
@@ -124,10 +137,12 @@ namespace MusicToolkit.Disc
                 case 0xC0AA0300u: // E_IMAPI_LOSS_OF_STREAMING
                     return new DiscFailure(Failures.Underrun, "The drive ran out of data while writing (a buffer underrun).");
                 case 0xC0AA0506u: // E_IMAPI_DF2TAO_MEDIA_IS_NOT_BLANK
+                case 0xC0AA0606u: // E_IMAPI_DF2RAW_MEDIA_IS_NOT_BLANK
                     return new DiscFailure(Failures.NotBlank, "This disc is not blank.");
                 case 0xC0AA0508u: // E_IMAPI_DF2TAO_TRACK_LIMIT_REACHED
                     return new DiscFailure(Failures.Failed, "A music CD holds at most 99 songs.");
                 case 0xC0AA0509u: // E_IMAPI_DF2TAO_NOT_ENOUGH_SPACE
+                case 0xC0AA0609u: // E_IMAPI_DF2RAW_NOT_ENOUGH_SPACE
                 case 0xC0AAB121u: // IMAPI_E_IMAGE_TOO_BIG
                     return new DiscFailure(Failures.NoSpace, "That does not fit on this disc.");
                 case 0xC0AA0909u: // E_IMAPI_ERASE_MEDIA_IS_NOT_SUPPORTED
@@ -383,7 +398,7 @@ namespace MusicToolkit.Disc
             {
                 { "writer", recorder.Writer }, { "writes", recorder.Writes.Cast<object>().ToList() }, { "speeds", new List<object>() },
                 { "state", "none" }, { "type", string.Empty }, { "rewritable", false }, { "blank", false }, { "protected", false },
-                { "capacity_sectors", 0L }, { "free_sectors", 0L }, { "can_audio", false },
+                { "capacity_sectors", 0L }, { "free_sectors", 0L }, { "can_audio", false }, { "gapless", false },
             };
             if (!recorder.Writer)
             {
@@ -472,6 +487,16 @@ namespace MusicToolkit.Disc
                 catch (Exception)
                 {
                     reply["can_audio"] = false;
+                }
+
+                try
+                {
+                    dynamic raw = Create("IMAPI2.MsftDiscFormat2RawCD");
+                    reply["gapless"] = (bool)raw.IsRecorderSupported(recorder.Com) && (bool)raw.IsCurrentMediaSupported(recorder.Com);
+                }
+                catch (Exception)
+                {
+                    reply["gapless"] = false;
                 }
             }
 
@@ -732,7 +757,9 @@ namespace MusicToolkit.Disc
 
         // ------------------------------------------------------------------------------------- a music CD
 
-        internal static Dictionary<string, object> BurnAudio(string drive, IList<TrackFile> tracks, int speed, Server.Call call)
+        /// <summary>Writes a music CD. Song by song (track at once) the recorder leaves two seconds of silence between the songs; with `gapless` the
+        /// whole disc is laid out first and written in one go (disc at once), and the songs run on from one another.</summary>
+        internal static Dictionary<string, object> BurnAudio(string drive, IList<TrackFile> tracks, int speed, bool gapless, Server.Call call)
         {
             drive = Drives.Require(drive); // first of all: nothing but the letter of an optical drive leads anywhere
             if (tracks.Count < 1 || tracks.Count > MaxAudioTracks)
@@ -741,6 +768,7 @@ namespace MusicToolkit.Disc
             }
 
             long need = 0;
+            long between = gapless ? 0 : AudioGapSectors;
             var offsets = new List<long>();
             foreach (TrackFile track in tracks)
             {
@@ -752,10 +780,10 @@ namespace MusicToolkit.Disc
                 }
 
                 offsets.Add(need);
-                need += track.Sectors + AudioGapSectors;
+                need += track.Sectors + between;
             }
 
-            need -= AudioGapSectors;
+            need -= between;
             Recorder recorder = RequireWriter(drive);
             dynamic tao = Create("IMAPI2.MsftDiscFormat2TrackAtOnce");
             tao.Recorder = recorder.Com;
@@ -798,6 +826,11 @@ namespace MusicToolkit.Disc
             }
 
             call.Check();
+            if (gapless)
+            {
+                return BurnSeamless(recorder, tracks, need, speed, call);
+            }
+
             if (speed > 0)
             {
                 tao.SetWriteSpeed(speed, false);
@@ -862,6 +895,342 @@ namespace MusicToolkit.Disc
             }
 
             return new Dictionary<string, object> { { "tracks", tracks.Count }, { "sectors", need } };
+        }
+
+        // ------------------------------------------------------------------------------------- a music CD without gaps (disc at once)
+
+        private const string NoGapsExplained = "This drive cannot write a music CD without gaps between the songs. Choose two seconds between songs instead.";
+
+        /// <summary>The songs laid out as the image of a whole disc, and what IMAPI says about the layout it made. It holds on to the objects the
+        /// image is read from (and so to the song files) until it is disposed.</summary>
+        internal sealed class RawImage : IDisposable
+        {
+            public object Creator;                  // the IRawCDImageCreator
+            public object Stream;                   // the image of the disc (an IStream), once it has been made
+            public int SectorType;
+            public bool Property;                   // what DisableGaplessAudio was set to
+            public long[] Starts = new long[0];     // the first sector of each song, as IMAPI laid them out
+            public long[] Counts = new long[0];
+            public long LeadOut;
+            public long Length;                     // the sectors of the songs, added up
+            public bool Seamless;                   // the songs follow one another with nothing between them
+            public string TableOfContents = string.Empty;
+
+            public void Dispose()
+            {
+                foreach (object com in new[] { Stream, Creator })
+                {
+                    try
+                    {
+                        if (com != null && Marshal.IsComObject(com))
+                        {
+                            Marshal.FinalReleaseComObject(com);
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // tidying up must never hide why the burn stopped
+                    }
+                }
+
+                Stream = null;
+                Creator = null;
+            }
+        }
+
+        private static object CreateRawImageCreator()
+        {
+            try
+            {
+                return Create(RawCreatorProgId);
+            }
+            catch (DiscFailure)
+            {
+                Type type;
+                try
+                {
+                    type = Type.GetTypeFromCLSID(new Guid(RawCreatorClassId), false);
+                }
+                catch (Exception)
+                {
+                    type = null;
+                }
+
+                if (type == null)
+                {
+                    throw;
+                }
+
+                return Activator.CreateInstance(type);
+            }
+        }
+
+        /// <summary>Gives IMAPI the songs to lay out as one disc. `property` is what DisableGaplessAudio is set to. Nothing is written anywhere.</summary>
+        private static RawImage LayOut(IList<TrackFile> tracks, int sectorType, bool property, bool makeImage)
+        {
+            var image = new RawImage { SectorType = sectorType, Property = property };
+            try
+            {
+                dynamic creator = CreateRawImageCreator();
+                image.Creator = creator;
+                creator.ResultingImageType = sectorType;
+                creator.DisableGaplessAudio = property;
+                foreach (TrackFile track in tracks)
+                {
+                    ComStream stream = OpenStream(track.Path);
+                    try
+                    {
+                        creator.AddTrack(CdSectorAudio, stream);
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(stream); // (the image keeps its own hold on it until it has been written)
+                    }
+
+                    image.Length += track.Sectors;
+                }
+
+                image.Starts = new long[tracks.Count];
+                image.Counts = new long[tracks.Count];
+                for (int i = 0; i < tracks.Count; i++)
+                {
+                    object info = ((object)creator).GetType().InvokeMember("TrackInfo", System.Reflection.BindingFlags.GetProperty, null, (object)creator, new object[] { i + 1 });
+                    dynamic one = info;
+                    image.Starts[i] = Convert.ToInt64(one.StartingLba);
+                    image.Counts[i] = Convert.ToInt64(one.SectorCount);
+                }
+
+                image.LeadOut = Convert.ToInt64(creator.StartOfLeadout);
+                // With nothing between the songs the disc, from the first song to the lead-out, is as long as the songs added up; two seconds between
+                // each pair would make it 150 sectors longer for every pair.
+                image.Seamless = image.LeadOut - image.Starts[0] == image.Length;
+                try
+                {
+                    image.TableOfContents = string.Join(" ", Items((object)creator.ExpectedTableOfContents).Select(b => Convert.ToInt32(b).ToString("X2")));
+                }
+                catch (Exception)
+                {
+                    // the table of contents is only for the checks to look at
+                }
+
+                if (makeImage)
+                {
+                    image.Stream = creator.CreateResultImage();
+                }
+
+                return image;
+            }
+            catch (Exception)
+            {
+                image.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>The songs as one disc image in which they run on from one another. The documentation says that setting DisableGaplessAudio to true
+        /// is what does that, and the name of the property says the opposite, so the layout IMAPI makes is looked at (how long the whole is) and the
+        /// other setting is tried if it is not the one wanted. If neither gives a disc without gaps, nothing is written.</summary>
+        private static RawImage SeamlessImage(IList<TrackFile> tracks, int sectorType)
+        {
+            var seen = new List<string>();
+            foreach (bool property in new[] { true, false })
+            {
+                RawImage image = LayOut(tracks, sectorType, property, false);
+                if (image.Seamless)
+                {
+                    try
+                    {
+                        image.Stream = ((dynamic)image.Creator).CreateResultImage();
+                    }
+                    catch (Exception)
+                    {
+                        image.Dispose();
+                        throw;
+                    }
+
+                    return image;
+                }
+
+                seen.Add("with " + (property ? "true" : "false") + " the disc is " + (image.LeadOut - image.Starts[0]) + " sectors long and the songs " + image.Length);
+                image.Dispose();
+            }
+
+            throw new DiscFailure(Failures.Unsupported, "Windows' disc burning component would not lay the songs out without gaps (" + string.Join("; ", seen) + "). Choose two seconds between songs instead.");
+        }
+
+        private static int ChooseSectorType(ICollection<int> offered)
+        {
+            foreach (int type in new[] { RawPqOnly, RawRaw, RawCooked })
+            {
+                if (offered.Contains(type))
+                {
+                    return type;
+                }
+            }
+
+            throw new DiscFailure(Failures.Unsupported, NoGapsExplained);
+        }
+
+        /// <summary>Writes the songs as one disc, without gaps: the whole disc is laid out first (by IMAPI's raw image maker, from the same song files)
+        /// and written in one go (disc at once). Everything that can be refused is refused before the disc is touched.</summary>
+        private static Dictionary<string, object> BurnSeamless(Recorder recorder, IList<TrackFile> tracks, long need, int speed, Server.Call call)
+        {
+            dynamic raw = Create("IMAPI2.MsftDiscFormat2RawCD");
+            raw.Recorder = recorder.Com;
+            raw.ClientName = Client;
+            bool supported;
+            try
+            {
+                supported = (bool)raw.IsRecorderSupported(recorder.Com) && (bool)raw.IsCurrentMediaSupported(recorder.Com);
+            }
+            catch (COMException error) when (Is(error, 0xC0AA0202u))
+            {
+                throw new DiscFailure(Failures.NoMedia, "There is no disc in the drive.");
+            }
+
+            if (!supported)
+            {
+                throw new DiscFailure(Failures.Unsupported, NoGapsExplained);
+            }
+
+            call.Check();
+            raw.PrepareMedia();
+            bool stoppedEarly = true;
+            try
+            {
+                int type = ChooseSectorType(Items((object)raw.SupportedSectorTypes).Select(t => Convert.ToInt32(t)).ToList());
+                raw.RequestedSectorType = type;
+                using (RawImage image = SeamlessImage(tracks, type))
+                {
+                    call.Check(); // (a last chance to stop with the disc untouched)
+                    if (speed > 0)
+                    {
+                        raw.SetWriteSpeed(speed, false);
+                    }
+
+                    Native.SetThreadExecutionState(Native.EsContinuous | Native.EsSystemRequired);
+                    try
+                    {
+                        using (var reporter = new Reporter(call, need, "Preparing the disc"))
+                        using (Listen((object)raw, args =>
+                        {
+                            dynamic progress = args;
+                            long start = Convert.ToInt64(progress.StartLba);
+                            long last = Convert.ToInt64(progress.LastWrittenLba);
+                            long count = Convert.ToInt64(progress.SectorCount);
+                            string words = "Writing the disc";
+                            try
+                            {
+                                int action = progress.CurrentAction;
+                                words = action == 3 ? "Finishing the disc" : action == 1 ? "Preparing the disc" : "Writing the disc";
+                            }
+                            catch (Exception)
+                            {
+                                // the words are a courtesy
+                            }
+
+                            reporter.Set(count > 0 ? need * Math.Max(0, Math.Min(last - start, count)) / count : 0, need, words);
+                        }))
+                        using (new Watcher(call, () => raw.CancelWrite()))
+                        {
+                            raw.WriteMedia(image.Stream);
+                            reporter.Set(need, need, "Finishing the disc");
+                        }
+                    }
+                    finally
+                    {
+                        Native.SetThreadExecutionState(Native.EsContinuous);
+                    }
+                }
+
+                stoppedEarly = false;
+            }
+            finally
+            {
+                try
+                {
+                    raw.ReleaseMedia();
+                }
+                catch (Exception) when (stoppedEarly)
+                {
+                    // the reason the writing stopped is what the person is told; that the session could not be closed after it is only a consequence
+                }
+            }
+
+            return new Dictionary<string, object> { { "tracks", tracks.Count }, { "sectors", need }, { "gapless", true } };
+        }
+
+        /// <summary>For the checks (MTK_DISC_TEST=1): lays songs out as the image of a disc the way a burn without gaps would, and says what IMAPI made
+        /// of them. With `output` the image itself is written there (under a name that is not taken), so that a check can look inside it. Needs no
+        /// drive and writes nothing to one.</summary>
+        internal static Dictionary<string, object> RawProbe(IList<TrackFile> tracks, int sectorType, bool property, string output, Server.Call call)
+        {
+            foreach (TrackFile track in tracks)
+            {
+                LocalFile(track.Path, "A song");
+            }
+
+            if (!string.IsNullOrEmpty(output)
+                && (!Path.IsPathRooted(output) || output.StartsWith(@"\\", StringComparison.Ordinal) || File.Exists(output) || !Directory.Exists(Path.GetDirectoryName(output) ?? string.Empty)))
+            {
+                throw new DiscFailure(Failures.Failed, "That is not a place the image can be written.");
+            }
+
+            using (RawImage image = LayOut(tracks, sectorType, property, true))
+            {
+                var facts = new Dictionary<string, object>
+                {
+                    { "type", sectorType }, { "property", property }, { "seamless", image.Seamless }, { "starts", image.Starts.Cast<object>().ToList() },
+                    { "counts", image.Counts.Cast<object>().ToList() }, { "leadout", image.LeadOut }, { "length", image.Length }, { "toc", image.TableOfContents },
+                };
+                ComStream stream = (ComStream)image.Stream;
+                try
+                {
+                    System.Runtime.InteropServices.ComTypes.STATSTG stat;
+                    stream.Stat(out stat, 1);
+                    facts["bytes"] = stat.cbSize;
+                }
+                catch (Exception exception)
+                {
+                    facts["bytes_error"] = exception.Message.Trim();
+                }
+
+                if (!string.IsNullOrEmpty(output))
+                {
+                    var buffer = new byte[1 << 20];
+                    IntPtr read = Marshal.AllocCoTaskMem(sizeof(int));
+                    long written = 0;
+                    try
+                    {
+                        using (var file = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20))
+                        {
+                            while (true)
+                            {
+                                call.Check();
+                                stream.Read(buffer, buffer.Length, read);
+                                int n = Marshal.ReadInt32(read);
+                                if (n <= 0)
+                                {
+                                    break;
+                                }
+
+                                file.Write(buffer, 0, n);
+                                written += n;
+                                call.Progress(written, 0, "Reading the image");
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeCoTaskMem(read);
+                    }
+
+                    facts["written"] = written;
+                    facts["out"] = output;
+                }
+
+                return facts;
+            }
         }
 
         // ------------------------------------------------------------------------------------- an image of files
@@ -1247,6 +1616,33 @@ namespace MusicToolkit.Disc
             }
 
             var reply = new Dictionary<string, object> { { "components", made } };
+            var raws = new Dictionary<string, object>();
+            foreach (string id in new[] { "IMAPI2.MsftDiscFormat2RawCD", RawCreatorProgId })
+            {
+                try
+                {
+                    object instance = Create(id);
+                    raws[id] = instance != null;
+                    Marshal.ReleaseComObject(instance);
+                }
+                catch (Exception exception)
+                {
+                    raws[id] = Failures.Of(exception).Message;
+                }
+            }
+
+            try
+            {
+                object instance = CreateRawImageCreator();
+                raws["image maker, by program id or class id"] = instance != null;
+                Marshal.ReleaseComObject(instance);
+            }
+            catch (Exception exception)
+            {
+                raws["image maker, by program id or class id"] = Failures.Of(exception).Message;
+            }
+
+            reply["raw_components"] = raws;
             try
             {
                 dynamic master = Create("IMAPI2.MsftDiscMaster2");
