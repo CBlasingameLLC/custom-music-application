@@ -26,6 +26,7 @@
      "unlisted": ["G"],                               the listing leaves the drive out, but it still answers (a careless helper)
      "burn_fail_at": 120,                             a burn fails (an underrun) when it has written this many sectors, and ruins the disc
      "write_protected": true,                         every burn and erase is refused as a write-protected disc
+     "no_gapless": true,                              the recorder cannot write a music CD without gaps (a drive.json with "gapless": false says the same for one drive)
      "corrupt_burn": true,                            a data disc is written with its first file changed in its last byte (a bad burn that looked fine)
      "no_root": true,                                 a disc with files does not say where they can be read (Windows has not shown them yet)
      "burn_slow": 0.002}                              seconds a burn takes per sector (cancel can interrupt it)
@@ -257,12 +258,15 @@ class Fake:
         try:
             disc = json.loads((folder / "disc.json").read_text())
         except FileNotFoundError:
-            return {**reply, "state": "none", "type": "", "rewritable": False, "blank": False, "capacity_sectors": 0, "free_sectors": 0, "can_audio": False}
+            return {**reply, "state": "none", "type": "", "rewritable": False, "blank": False, "capacity_sectors": 0, "free_sectors": 0, "can_audio": False,
+                    "gapless": False}
         blank = disc.get("kind") == "blank"
         kind = disc.get("type", "CD-ROM")
         capacity = int(disc.get("capacity", 0))
+        audio_ok = bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", []))
         reply.update(state="blank" if blank else "written", type=kind, rewritable=bool(disc.get("rewritable")), blank=blank, capacity_sectors=capacity,
-                     free_sectors=capacity if blank else 0, can_audio=bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", [])))
+                     free_sectors=capacity if blank else 0, can_audio=audio_ok,
+                     gapless=audio_ok and info.get("gapless", True) is not False and not self.control().get("no_gapless"))
         if disc.get("kind") == "data" and not self.control().get("no_root"):
             reply["root"] = str(folder / "files")  # where the files of the disc can be read (Windows gives the drive letter)
         return reply
@@ -283,13 +287,17 @@ class Fake:
         tracks = request.get("tracks") or []
         if not 1 <= len(tracks) <= 99:
             raise Refusal("failed", "A music CD holds 1 to 99 songs.")
+        gapless = bool(request.get("gapless"))
+        if gapless and (info.get("gapless", True) is False or self.control().get("no_gapless")):
+            raise Refusal("unsupported", "This drive cannot write a music CD without gaps between the songs. Choose two seconds between songs instead.")
+        between = 0 if gapless else 150  # two seconds of silence between songs, unless they run on
         lengths = []
         for item in tracks:
             path = Path(str(item.get("path", "")))
             if not path.is_file() or not path.stat().st_size or path.stat().st_size % SECTOR_BYTES:
                 raise Refusal("failed", f"{path.name} is not audio the drive can write.")
             lengths.append(max(path.stat().st_size // SECTOR_BYTES, 4 * 75))  # (a track is at least four seconds long)
-        need = sum(lengths) + 150 * (len(lengths) - 1)  # two seconds of silence between songs
+        need = sum(lengths) + between * (len(lengths) - 1)
         capacity = int(disc.get("capacity", 0))
         if need > capacity:
             raise Refusal("no_space", f"The songs need {need} sectors and the disc holds {capacity}.")
@@ -298,9 +306,9 @@ class Fake:
         try:
             with (folder / "disc.pcm").open("wb") as out:
                 for index, (item, sectors) in enumerate(zip(tracks, lengths), start=1):
-                    if index > 1:
-                        out.write(b"\0" * (150 * SECTOR_BYTES))
-                        written += 150
+                    if index > 1 and between:
+                        out.write(b"\0" * (between * SECTOR_BYTES))
+                        written += between
                     starts.append(written)
                     data = Path(item["path"]).read_bytes()
                     data += b"\0" * (sectors * SECTOR_BYTES - len(data))
@@ -324,7 +332,7 @@ class Fake:
         self.cache.clear()
         if request.get("eject"):
             self.eject(request.get("drive", ""))
-        return {"ok": True, "tracks": len(tracks), "sectors": written}
+        return {"ok": True, "tracks": len(tracks), "sectors": written, "gapless": gapless}
 
     @staticmethod
     def parts(dest: object) -> list[str]:

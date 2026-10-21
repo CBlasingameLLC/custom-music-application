@@ -25,7 +25,8 @@ CHANNELS = 2
 FRAME_BYTES = 4  # one stereo frame of 16 bits
 FRAMES_PER_SECTOR = SECTOR_BYTES // FRAME_BYTES  # 588
 MIN_SECTORS = 4 * SECTORS_PER_SECOND  # a track on a CD-R written song by song is at least four seconds long
-GAP_SECTORS = 2 * SECTORS_PER_SECOND  # and the recorder leaves two seconds of silence before each song after the first
+GAP_SECTORS = 2 * SECTORS_PER_SECOND  # and, written song by song, the recorder leaves two seconds of silence before each song after the first
+NO_GAPLESS = "This recorder cannot write a music CD without gaps between the songs. Choose two seconds between songs instead."
 RESERVE_SECTORS = 4 * SECTORS_PER_SECOND  # kept back when judging whether the songs fit: the recorder's own count of free sectors is not exact about the lead-in
 CHUNK_FRAMES = SAMPLE_RATE * 5  # decoded five seconds at a time
 SCRATCH_MARGIN = 50 * 1024 * 1024
@@ -269,6 +270,7 @@ class AudioPlan:
     free_sectors: int | None  # on the disc in the drive; None when no usable disc was named
     scratch_free: int | None  # bytes free where the temporary copies go
     problems: list[str]  # reasons the burn cannot start at all
+    gapless: bool = False  # the songs run on from one another (disc at once); otherwise two seconds of silence lie between them (song by song)
 
     @property
     def burnable(self) -> list[PlannedSong]:
@@ -280,9 +282,10 @@ class AudioPlan:
 
     @property
     def disc_sectors(self) -> int:
-        """What the songs take on the disc: their sectors, and two seconds of silence between one song and the next."""
+        """What the songs take on the disc: their sectors, and (unless they run on from one another) two seconds of silence between one song and
+        the next."""
         n = len(self.burnable)
-        return self.song_sectors + GAP_SECTORS * max(n - 1, 0)
+        return self.song_sectors + (0 if self.gapless else GAP_SECTORS * max(n - 1, 0))
 
     @property
     def scratch_bytes(self) -> int:
@@ -300,7 +303,7 @@ class AudioPlan:
             "counts": {verdict: sum(1 for s in self.songs if s.check.verdict == verdict) for verdict in ("ok", "converted", "cannot")},
             "disc_sectors": self.disc_sectors, "disc_seconds": round(self.disc_sectors / SECTORS_PER_SECOND, 1),
             "free_sectors": self.free_sectors, "free_seconds": None if self.free_sectors is None else round(self.free_sectors / SECTORS_PER_SECOND, 1),
-            "scratch_bytes": self.scratch_bytes, "problems": self.problems, "ok": not self.problems,
+            "scratch_bytes": self.scratch_bytes, "problems": self.problems, "ok": not self.problems, "gapless": self.gapless,
         }
 
 
@@ -338,16 +341,20 @@ def fit_problem(disc_sectors: int, free_sectors: int) -> str | None:
     )
 
 
-def plan_audio(songs: list[SongInput], media: dict[str, Any] | None, scratch: Path, *, inspector: Callable[[str], SongCheck] = inspect_song) -> AudioPlan:
+def plan_audio(
+    songs: list[SongInput], media: dict[str, Any] | None, scratch: Path, *, gapless: bool = False, inspector: Callable[[str], SongCheck] = inspect_song,
+) -> AudioPlan:
     """Which of these songs can go on a music CD, how much of the disc they take, and whether the burn can start. Touches nothing.
     Raises ValueError for a request that makes no sense (the message is fit for the person)."""
     if not songs:
         raise ValueError("Choose some songs first.")
     planned = [PlannedSong(position, song, inspector(song.path)) for position, song in enumerate(songs, start=1)]
     free = _scratch_free(scratch)
-    plan = AudioPlan(songs=planned, free_sectors=None, scratch_free=free, problems=[])
+    plan = AudioPlan(songs=planned, free_sectors=None, scratch_free=free, problems=[], gapless=gapless)
     problems = plan.problems
     problems.extend(media_problems(media))
+    if gapless and media and not problems and not media.get("gapless"):
+        problems.append(NO_GAPLESS)
     if media and not problems:
         plan.free_sectors = int(media.get("free_sectors") or 0)
     count = len(plan.burnable)

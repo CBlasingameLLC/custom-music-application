@@ -103,6 +103,62 @@ def test_a_burned_music_disc_reads_back_exactly_what_was_written_with_two_second
     assert seen and seen[-1]["done"] == seen[-1]["total"] == 1050 and seen[0]["message"] == "Song 1 of 2"
 
 
+def test_songs_burned_without_gaps_follow_one_another_and_take_no_room_for_them(world: Path, tmp_path: Path) -> None:
+    first, second = pcm(tmp_path, "one.pcm", 400, seed=5), pcm(tmp_path, "two.pcm", 500, seed=6)
+    tracks = [{"path": str(first), "sectors": 400}, {"path": str(second), "sectors": 500}]
+    seen: list[dict] = []
+    with start(world) as helper:
+        done = helper.call("burn_audio", drive="E:", tracks=tracks, gapless=True, on_event=seen.append)
+        assert done["tracks"] == 2 and done["sectors"] == 900 and done["gapless"] is True
+        toc = helper.call("toc", drive="E:")
+        assert [(t["number"], t["start"]) for t in toc["tracks"]] == [(1, 0), (2, 400)] and toc["leadout"] == 900
+        edge = first.read_bytes()[-8 * SECTOR_BYTES:] + second.read_bytes()[: 8 * SECTOR_BYTES]
+        assert read(helper, 392, 16) == edge, "the end of one song is followed at once by the start of the next"
+    assert seen and seen[-1]["done"] == seen[-1]["total"] == 900
+
+
+def test_a_recorder_is_asked_for_gaps_unless_the_songs_are_to_run_on(world: Path, tmp_path: Path) -> None:
+    song = pcm(tmp_path, "one.pcm", 300)
+    with start(world) as helper:
+        assert helper.call("burn_audio", drive="E:", tracks=[{"path": str(song), "sectors": 300}] * 2)["gapless"] is False
+        assert helper.call("toc", drive="E:")["leadout"] == 750
+
+
+def test_whether_a_recorder_can_write_without_gaps_is_in_what_it_says_about_the_disc(world: Path) -> None:
+    add_drive(world, "G", writer=True, disc=blank_disc(type="CD-RW"))
+    add_drive(world, "H", writer=True, disc=blank_disc(type="DVD-R", capacity=2_295_104))
+    add_drive(world, "I", writer=True)
+    with start(world) as helper:
+        said = {d: helper.call("media", drive=d)["gapless"] for d in ("E:", "F:", "G:", "H:", "I:")}
+        set_control(world, no_gapless=True)
+        refused = {d: helper.call("media", drive=d)["gapless"] for d in ("E:", "G:")}
+    assert said == {"E:": True, "F:": False, "G:": True, "H:": False, "I:": False}  # (a recorder that writes, with a blank CD in it; not a DVD, not an empty tray)
+    assert refused == {"E:": False, "G:": False}
+
+
+def test_a_recorder_that_cannot_write_without_gaps_refuses_before_it_touches_the_disc(world: Path, tmp_path: Path) -> None:
+    song = pcm(tmp_path, "one.pcm", 300)
+    tracks = [{"path": str(song), "sectors": 300}] * 2
+    set_control(world, no_gapless=True)
+    with start(world) as helper:
+        with pytest.raises(DiscError) as refused:
+            helper.call("burn_audio", drive="E:", tracks=tracks, gapless=True)
+        assert refused.value.code == "unsupported" and "without gaps" in str(refused.value)
+        assert helper.call("media", drive="E:")["blank"] is True, "the disc is still blank"
+        assert helper.call("burn_audio", drive="E:", tracks=tracks)["tracks"] == 2, "and two seconds between songs is still possible"
+
+
+def test_without_gaps_the_songs_need_less_room_than_with_them(world: Path, tmp_path: Path) -> None:
+    add_drive(world, "G", writer=True, disc=blank_disc(type="CD-R", capacity=900))
+    add_drive(world, "H", writer=True, disc=blank_disc(type="CD-R", capacity=900))
+    songs = [{"path": str(pcm(tmp_path, f"{n}.pcm", 450)), "sectors": 450} for n in range(2)]  # 900 sectors, 1050 with the two seconds
+    with start(world) as helper:
+        with pytest.raises(DiscError) as refused:
+            helper.call("burn_audio", drive="G:", tracks=songs)
+        assert refused.value.code == "no_space"
+        assert helper.call("burn_audio", drive="H:", tracks=songs, gapless=True)["sectors"] == 900
+
+
 def test_a_song_shorter_than_four_seconds_is_made_four_seconds_long(world: Path, tmp_path: Path) -> None:
     short = pcm(tmp_path, "short.pcm", 100)
     with start(world) as helper:

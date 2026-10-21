@@ -38,6 +38,7 @@ class AudioRequest:
     speed: int | None = None  # one of the speeds the recorder listed; None lets it choose
     eject: bool = True
     title: str = ""  # what the history calls this
+    gapless: bool = False  # the songs run on from one another (the whole disc is written in one go); otherwise the recorder leaves two seconds
 
 
 def title_of(request: AudioRequest, plan: AudioPlan) -> str:
@@ -57,7 +58,7 @@ def begin_audio(conn: Any, plan: AudioPlan, request: AudioRequest, batch_id: str
     ]
     return store.create_burn(
         conn, batch_id=batch_id, kind="audio", title=title_of(request, plan), drive=request.drive, disc_type=str(media.get("type") or "") or None,
-        speed=request.speed, sectors=plan.disc_sectors, items=items,
+        speed=request.speed, sectors=plan.disc_sectors, items=items, gaps="none" if request.gapless else "2s",
     )
 
 
@@ -113,8 +114,10 @@ def run_audio(
         with in_use(), DiscHelper() as helper:
             media = helper.call("media", drive=request.drive)
             state.rewritable = bool(media.get("rewritable"))
-            actual = sum(sectors for _, sectors in files) + burn.GAP_SECTORS * (len(files) - 1)
+            actual = sum(sectors for _, sectors in files) + (0 if request.gapless else burn.GAP_SECTORS * (len(files) - 1))
             trouble = burn.media_problems(media)
+            if not trouble and request.gapless and not media.get("gapless"):
+                trouble = [burn.NO_GAPLESS]
             if not trouble:
                 tight = burn.fit_problem(actual, int(media.get("free_sectors") or 0))
                 trouble = [tight] if tight else []
@@ -141,7 +144,7 @@ def run_audio(
             try:
                 helper.call(
                     "burn_audio", drive=request.drive, tracks=[{"path": str(path), "sectors": sectors} for path, sectors in files],
-                    **({"speed": request.speed} if request.speed else {}), timeout=BURN_TIMEOUT, on_event=tell,
+                    **({"speed": request.speed} if request.speed else {}), **({"gapless": True} if request.gapless else {}), timeout=BURN_TIMEOUT, on_event=tell,
                 )
             finally:
                 stop_watching.set()

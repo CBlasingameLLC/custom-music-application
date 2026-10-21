@@ -248,6 +248,7 @@ function DiscsCard({ settings }) {
     <${Switch} checked=${d.eject_after_rip} onChange=${(v) => set({ eject_after_rip: v })}>Eject the disc when it is done, unless a part of it could not be read perfectly<//>
     <${Switch} checked=${d.eject_after_burn} onChange=${(v) => set({ eject_after_burn: v })}>Eject a burned disc when it is done<//>
     <${Switch} checked=${d.burn_verify} onChange=${(v) => set({ burn_verify: v })}>After burning a data disc, read every file back and compare it<//>
+    <${Switch} checked=${d.burn_gapless} onChange=${(v) => set({ burn_gapless: v })}>Burn music CDs without gaps between the songs, where the recorder can<//>
     <p class="note"><${Icon} name="info" size=${14} /><span>Finding the album sends the disc's table of contents (how long each song is) to musicbrainz.org, once the contact email under Accounts and services is set, and fetches the cover from the Cover Art Archive. Nothing else leaves this computer.</span></p>
     <div class="row-actions"><${Button} icon="cd" onClick=${() => go('/discs')}>Open Discs<//></div>
   <//>`;
