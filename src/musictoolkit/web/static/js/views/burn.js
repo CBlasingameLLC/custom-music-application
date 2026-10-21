@@ -8,7 +8,7 @@ import { burnList, clearBurnList, desktop, jobs, moveInBurnList, notifyError, re
 import { useDrives, when } from './discparts.js';
 
 const KINDS = [
-  { id: 'audio', label: 'Music CD', hint: 'Plays in any CD player or car stereo. The songs are converted to CD audio, with two seconds of silence between them. Needs a blank CD-R or CD-RW.' },
+  { id: 'audio', label: 'Music CD', hint: 'Plays in any CD player or car stereo. The songs are converted to CD audio (Windows decodes M4A, AAC and WMA songs first). Needs a blank CD-R or CD-RW.' },
   { id: 'data', label: 'Data disc', hint: 'Keeps the song files as they are, for a computer, an MP3 player or a car stereo that reads files. On a CD, a DVD or a Blu-ray disc. Every file is read back afterwards and checked.' },
   { id: 'iso', label: 'Disc image (ISO file)', hint: 'The same as a data disc, as one file to burn later or to keep. No disc is needed.' },
 ];
@@ -21,6 +21,7 @@ const CHIP = { ok: 'new', converted: 'missing', cannot: 'damaged', done: 'new', 
 const BURN_STATUS = { running: 'Burning', done: 'Done', cancelled: 'Stopped', failed: 'Failed', interrupted: 'Interrupted' };
 const ITEM_STATUS = { waiting: 'Waiting', done: 'Written', skipped: 'Left out', failed: 'Not written' };
 const ENDPOINTS = { audio: 'burn', data: 'data', iso: 'iso' };
+const GAPS = { none: 'no gaps', '2s': '2-second gaps' };
 
 /** How much of a disc, in the units that kind of disc is measured in: minutes for music, bytes for files. */
 const room = (sectors, kind) => (kind === 'audio' ? fmt.duration((sectors || 0) / 75) : fmt.bytes((sectors || 0) * 2048));
@@ -199,7 +200,7 @@ export function BurnTab({ active }) {
   // The defaults from Settings, once.
   useEffect(() => {
     if (!info || choices) return;
-    setChoices({ speed: null, eject: info.burn.eject, verify: info.burn.verify, layout: 'library', label: '', folder: info.iso_folder || '' });
+    setChoices({ speed: null, eject: info.burn.eject, verify: info.burn.verify, gapless: info.burn.gapless, layout: 'library', label: '', folder: info.iso_folder || '' });
   }, [info]);
 
   // A burn that is still going (the page was left and came back, or reloaded) is picked up again.
@@ -230,11 +231,12 @@ export function BurnTab({ active }) {
 
   // What would be asked of the server: the same for the check and for the burn.
   const ids = items.map((i) => i.id);
+  const gapless = Boolean(choices?.gapless && media?.data?.gapless); // (what was asked for, as far as this recorder and disc can)
   const body = (() => {
     if (!choices || !ids.length) return null;
     if (kind === 'iso') return { track_ids: ids, layout: choices.layout, label: choices.label.trim(), folder: choices.folder.trim() };
     if (!drive) return null;
-    if (kind === 'audio') return { drive: drive.id, track_ids: ids, speed: choices.speed, eject: choices.eject };
+    if (kind === 'audio') return { drive: drive.id, track_ids: ids, speed: choices.speed, eject: choices.eject, gapless };
     return { drive: drive.id, track_ids: ids, layout: choices.layout, label: choices.label.trim(), speed: choices.speed, eject: choices.eject, verify: choices.verify };
   })();
   const mediaSig = media?.data ? `${media.data.state}|${media.data.type}|${media.data.free_sectors}` : '';
@@ -268,7 +270,7 @@ export function BurnTab({ active }) {
 
   async function start() {
     const detail = kind === 'audio'
-      ? `This writes ${fmt.plural(count, 'song')} (${fmt.duration(shown.disc_seconds)}) to the ${m.type} in drive ${drive.id}. It cannot be undone. If it is stopped or fails once it has begun writing, ${m.rewritable ? 'the disc is unusable until you erase it' : 'a CD-R is spoiled for good'}. A music CD is not read back afterwards, so listen to it once.`
+      ? `This writes ${fmt.plural(count, 'song')} (${fmt.duration(shown.disc_seconds)}) to the ${m.type} in drive ${drive.id}, ${gapless ? 'with no gap between the songs' : 'with two seconds of silence between the songs'}. It cannot be undone. If it is stopped or fails once it has begun writing, ${m.rewritable ? 'the disc is unusable until you erase it' : 'a CD-R is spoiled for good'}. A music CD is not read back afterwards, so listen to it once.`
       : kind === 'data'
         ? `This writes ${fmt.plural(count, 'file')} (${fmt.bytes(shown.bytes)}) to the ${m.type} in drive ${drive.id}, and closes the disc. It cannot be undone. If it is stopped or fails once it has begun writing, ${m.rewritable ? 'the disc is unusable until you erase it' : 'the disc is spoiled for good'}. ${choices.verify ? 'Afterwards every file is read back and compared.' : ''}`
         : `This makes a file of ${fmt.bytes(shown.bytes)}: ${shown.output}. Nothing that is there already is replaced.`;
@@ -356,6 +358,11 @@ export function BurnTab({ active }) {
             <option value="">Automatic (the drive chooses)</option>
             ${m.speeds.map((s) => html`<option value=${s.speed} key=${s.speed}>${s.label}${s.speed === m.speeds[0].speed ? ': slowest, gentlest' : ''}</option>`)}
           </select></label>`}
+        ${kind === 'audio' && html`<label class="field"><span>Between songs</span>
+          <select aria-label="Between songs" value=${gapless ? 'none' : '2s'} onChange=${(e) => setChoices({ ...choices, gapless: e.target.value === 'none' })}>
+            <option value="none" disabled=${Boolean(m) && !m.gapless}>No gap: the songs run on from one another${m && !m.gapless ? ' (this recorder cannot)' : ''}</option>
+            <option value="2s">Two seconds of silence between the songs</option>
+          </select></label>`}
         ${kind !== 'audio' && html`<label class="field"><span>Layout on the disc</span>
           <select aria-label="Layout on the disc" value=${choices.layout} onChange=${(e) => setChoices({ ...choices, layout: e.target.value })}>
             ${LAYOUTS.map(([id, label]) => html`<option value=${id} key=${id}>${label}</option>`)}
@@ -402,7 +409,7 @@ function BurnRow({ burn }) {
         <${Icon} name=${open ? 'chevron-down' : 'chevron-right'} size=${14} /> ${open ? 'Hide' : 'Details'}
       </button>
       <span class="batch-when">${when(burn.started_at)}</span>
-      <span class="rip-what"><strong>${burn.title}</strong> <span class="subtle">${[burn.disc_type, burn.drive, burn.kind !== 'erase' ? fmt.plural(burn.items, burn.kind === 'audio' ? 'song' : 'file') : ''].filter(Boolean).join(' · ')}</span></span>
+      <span class="rip-what"><strong>${burn.title}</strong> <span class="subtle">${[burn.disc_type, burn.drive, burn.kind !== 'erase' ? fmt.plural(burn.items, burn.kind === 'audio' ? 'song' : 'file') : '', burn.kind === 'audio' ? GAPS[burn.gaps] : ''].filter(Boolean).join(' · ')}</span></span>
       <span class="reason ${good ? 'new' : burn.status === 'running' ? '' : 'missing'}">${BURN_STATUS[burn.status] || burn.status}${burn.spoiled && burn.status !== 'done' ? ' · disc spoiled' : ''}${burn.verified === 1 ? ' · checked' : ''}</span>
     </div>
     ${open && html`<div id=${`burn-detail-${burn.id}`} class="rip-detail">

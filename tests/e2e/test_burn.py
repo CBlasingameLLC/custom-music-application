@@ -4,9 +4,11 @@ checks it, asks before anything is written, shows the burn, says what became of 
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import sys
+import wave
 from pathlib import Path
 
 import pytest
@@ -14,7 +16,7 @@ from playwright.sync_api import expect
 
 from musictoolkit.discs import helper as disc_helper
 from tests.e2e.conftest import add_library, api, row, wait_until
-from tests.fake_disc_helper import add_drive, audio_disc, blank_disc, set_control
+from tests.fake_disc_helper import add_drive, audio, audio_disc, blank_disc, fake_song, set_control
 
 expect.set_options(timeout=15_000)
 
@@ -168,6 +170,85 @@ def test_a_music_cd_is_checked_confirmed_burned_and_remembered(page, live, world
     expect(row_).to_contain_text("Done")
     row_.get_by_role("button", name="Details").click()
     expect(row_.locator(".rip-tracks li")).to_have_text([f"{n}{title}Written" for n, title in enumerate(ALBUM, start=1)])
+
+
+def test_a_music_cd_can_be_burned_with_no_gap_between_the_songs_or_with_two_seconds(page, live, world) -> None:
+    add_library(page, live)
+    put_on_list(page, *ALBUM)
+    open_burn(page)
+    between = page.get_by_label("Between songs")
+    expect(between).to_have_value("none")  # (what Settings starts from, and this recorder can)
+    eject_box(page).uncheck()
+    start_button(page).click()
+    dialog = page.get_by_role("dialog", name="Burn this music CD?")
+    expect(dialog).to_contain_text("with no gap between the songs")
+    dialog.get_by_role("button", name="Burn the disc").click()
+    expect(page.locator(".callout", has_text="The music CD is ready: 3 songs")).to_be_visible(timeout=60_000)
+    tracks = disc_of(world)["tracks"]
+    assert [t["start"] for t in tracks] == [0, tracks[0]["sectors"], tracks[0]["sectors"] + tracks[1]["sectors"]], "the songs run on from one another"
+
+    add_drive(world, "E", name="Stand-in recorder", writer=True, disc=blank_disc(type="CD-R"))  # another blank disc
+    page.get_by_role("button", name="Burn something else").click()
+    between = page.get_by_label("Between songs")
+    expect(between).to_have_value("none")
+    between.select_option("2s")
+    expect(start_button(page)).to_be_enabled()
+    start_button(page).click()
+    dialog = page.get_by_role("dialog", name="Burn this music CD?")
+    expect(dialog).to_contain_text("with two seconds of silence between the songs")
+    dialog.get_by_role("button", name="Burn the disc").click()
+    expect(page.locator(".callout", has_text="The music CD is ready: 3 songs")).to_be_visible(timeout=60_000)
+    tracks = disc_of(world)["tracks"]
+    assert [t["start"] for t in tracks] == [0, tracks[0]["sectors"] + 150, tracks[0]["sectors"] + tracks[1]["sectors"] + 300], "two seconds lie between them"
+
+    page.get_by_role("tab", name="History").click()
+    expect(page.locator(".rip-row")).to_have_count(2)
+    expect(page.locator(".rip-row").nth(0)).to_contain_text("CD-R · E: · 3 songs · 2-second gaps")
+    expect(page.locator(".rip-row").nth(1)).to_contain_text("CD-R · E: · 3 songs · no gaps")
+
+
+def test_a_recorder_that_cannot_write_without_gaps_offers_only_two_seconds(page, live, world) -> None:
+    set_control(world, no_gapless=True)
+    add_library(page, live)
+    put_on_list(page, *ALBUM)
+    open_burn(page)
+    between = page.get_by_label("Between songs")
+    expect(between).to_have_value("2s")
+    expect(between.locator("option[value=none]")).to_have_attribute("disabled", "")  # (an option is not "disabled" to every version of the browser driver, but it has the attribute)
+    expect(between.locator("option[value=none]")).to_contain_text("this recorder cannot")
+    expect(start_button(page)).to_be_enabled()
+    eject_box(page).uncheck()
+    start_button(page).click()
+    confirm(page, "Burn this music CD?", "Burn the disc")
+    expect(page.locator(".callout", has_text="The music CD is ready: 3 songs")).to_be_visible(timeout=60_000)
+    tracks = disc_of(world)["tracks"]
+    assert tracks[1]["start"] == tracks[0]["sectors"] + 150
+
+
+def test_songs_only_windows_can_decode_are_burned_like_the_others(page, live, world) -> None:
+    add_library(page, live)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as sound:
+        sound.setnchannels(2)
+        sound.setsampwidth(2)
+        sound.setframerate(44100)
+        sound.writeframes(audio(7, 0, 400))
+    lost = fake_song(live.library / "Archive" / "Lost Tape.m4a", buffer.getvalue())
+    with live.ctx.db() as conn:
+        conn.execute("INSERT INTO tracks (file_path, title, artist) VALUES (?, 'Lost Tape', 'Archive')", (str(lost),))
+        conn.commit()
+    put_on_list(page, ALBUM[0], "Lost Tape", ALBUM[1])
+    open_burn(page)
+    item = page.locator(".burn-songs li", has_text="Lost Tape")
+    expect(item.locator(".burn-note")).to_have_text("Decoded by Windows (AAC) and made into CD sound.")
+    expect(item.locator(".reason")).to_have_text("Will be converted")
+    expect(start_button(page)).to_be_enabled()
+    eject_box(page).uncheck()
+    start_button(page).click()
+    confirm(page, "Burn this music CD?", "Burn the disc")
+    expect(page.locator(".callout", has_text="The music CD is ready: 3 songs")).to_be_visible(timeout=60_000)
+    assert [t["sectors"] for t in disc_of(world)["tracks"]][1] == 400
+    assert not list((live.ctx.data_dir / "cache" / "discs").rglob("*.wav")), "the copy Windows made is gone"
 
 
 def test_a_burn_can_pick_its_speed_and_eject_the_disc_when_it_is_done(page, live, world) -> None:
@@ -444,9 +525,16 @@ def test_the_settings_card_sets_what_burning_starts_from(page, live, world) -> N
     wait_until(page, "fetch('/api/settings').then(r => r.json()).then(s => s.disc.burn_verify === false)")
     assert (live.ctx.config.disc.eject_after_burn, live.ctx.config.disc.burn_verify) == (False, False)
 
+    gaps = card.get_by_role("checkbox", name=re.compile("^Burn music CDs without gaps"))
+    expect(gaps).to_be_checked()
+    gaps.uncheck()
+    wait_until(page, "fetch('/api/settings').then(r => r.json()).then(s => s.disc.burn_gapless === false)")
+    assert live.ctx.config.disc.burn_gapless is False
+
     put_on_list(page, *ALBUM)
     open_burn(page)
     expect(eject_box(page)).not_to_be_checked()
+    expect(page.get_by_label("Between songs")).to_have_value("2s")
     kind(page, "Data disc")
     expect(page.get_by_role("checkbox", name=re.compile("^Read every file back"))).not_to_be_checked()
 

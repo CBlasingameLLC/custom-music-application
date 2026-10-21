@@ -310,7 +310,7 @@ def test_the_history_counts_only_the_songs_that_will_be_written_and_a_song_left_
     assert shown["items"] == 2
     assert [(t["title"], t["status"]) for t in shown["tracks"]] == [("One", "failed"), ("Four", "skipped"), ("Two", "failed")]
     assert shown["tracks"][0]["message"] == "Not written."
-    assert shown["tracks"][1]["message"].startswith("WMA songs cannot be burned"), "the reason a song was left out is not overwritten"
+    assert shown["tracks"][1]["message"] == "Windows cannot read this kind of file (Four.wma).", "the reason a song was left out is not overwritten"
 
 
 def test_burns_are_listed_newest_first(rig) -> None:
