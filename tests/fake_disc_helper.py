@@ -190,6 +190,8 @@ class Fake:
         while time.monotonic() < end:
             if self.current in self.cancelled:
                 self.cancelled.discard(self.current)
+                with (self.root / "cancelled.log").open("a", encoding="utf-8") as log:  # (so that a test can tell that a press of Stop reached the helper)
+                    log.write("cancelled\n")
                 raise Refusal("cancelled", "Stopped.")
             time.sleep(0.01)
 

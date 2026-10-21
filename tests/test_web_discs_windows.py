@@ -78,6 +78,7 @@ def test_a_song_windows_decodes_is_shown_as_what_windows_said_and_goes_on_the_di
     assert shown["ok"] is True and shown["counts"] == {"ok": 1, "converted": 1, "cannot": 0} and shown["disc_sectors"] == 375 + 400 + 150
     job, history = burn_it(rig, "One", "Four")
     assert job.status == "done", job.error
+    assert disc_helper._in_use == 0, "the job let go of its helper"
     assert [(t["position"], t["title"], t["status"], t["sectors"]) for t in history["tracks"]] == [(1, "One", "done", 375), (2, "Four", "done", 400)]
     first, second = rip_back(rig, 2)
     assert np.array_equal(first[: 375 * 588], original(11, 375)) and np.array_equal(second[: 400 * 588], original(14, 400))  # (bit for bit: Windows gave CD sound)
@@ -228,6 +229,30 @@ def test_stopping_while_windows_decodes_a_song_leaves_the_disc_as_it_was(rig) ->
     assert job.status == "cancelled" and (shown["status"], shown["spoiled"]) == ("cancelled", 0)
     assert shown["message"] == "Stopped. Nothing had been written, so the disc is as it was." and not scratch(rig).exists()
     assert media(rig)["blank"] is True
+    assert (rig.world / "cancelled.log").exists(), "the press of Stop reached the helper that was decoding, not only the job"
+    assert disc_helper._in_use == 0, "and the job let go of its helper"
+
+
+def test_while_windows_decodes_a_song_nothing_else_starts_a_second_helper_to_look_at_the_drives(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_song(rig, "Four", 14, 400)
+    rig.client.get("/api/discs/drives")  # (the screen has looked once)
+    set_control(rig.world, decode_slow=0.3)
+    started = begin(rig, "Four")
+    job_id = started["job"]["id"]
+    deadline = time.monotonic() + 30
+    while "%" not in str(rig.ctx.jobs.get(job_id).message or ""):
+        assert time.monotonic() < deadline, rig.ctx.jobs.get(job_id).to_dict()
+        time.sleep(0.02)
+    starts: list[int] = []
+    real = disc_helper.DiscHelper.start
+    monkeypatch.setattr(disc_helper.DiscHelper, "start", lambda self: (starts.append(1), real(self))[1])
+    try:
+        for _ in range(3):
+            assert rig.client.get("/api/discs/drives?fresh=true").status_code == 200
+        assert starts == []
+    finally:
+        rig.client.post(f"/api/jobs/{job_id}/cancel")
+        rig.ctx.jobs.wait(job_id, timeout=30)
 
 
 def test_a_song_windows_cannot_decode_after_all_stops_the_burn_with_the_disc_untouched(rig, monkeypatch: pytest.MonkeyPatch) -> None:
