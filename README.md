@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.8.1)
+## What it does (v0.8.2)
 
 | Area | Features |
 |---|---|
@@ -41,7 +41,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Radio** | Live internet radio through the app: your favorite stations, recently played ones, **Browse** the free Radio Browser directory (search by name, kind of music or country; sort by listeners, votes, name or sound quality) and **Add by address** (a stream, or the playlist file a station publishes). The song a station says is on shows in the player bar, the window title, the tray and the media-key overlay. A stream that drops is joined again; a station that cannot be played says why. Nothing is recorded or downloaded. See below |
 | **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
-| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD, a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
+| **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD (with no gap between the songs if you like, and M4A, AAC and WMA songs too), a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
@@ -153,17 +153,22 @@ Discs page is open. It is Windows only: the page says so on another system. Burn
 
 **Burn a disc** (the second tab) puts songs from your library on a disc, or into a disc image file. It is labelled *experimental*, more so than
 ripping: no test of ours has a real recorder. The tests use a stand-in recorder that keeps its discs in plain folders, and Windows' own image
-builder is checked on a real Windows machine as far as one without a burner allows. **Try a CD-RW first** (it can be erased and used again).
+builders are checked on a real Windows machine as far as one without a burner allows (for a music CD without gaps, the image of the whole disc is
+built and read back: every song is in it word for word, and nothing lies between the songs). **Try a CD-RW first** (it can be erased and used again).
 A burn cannot be undone, and one that is stopped or fails once it has begun writing spoils a CD-R for good; the question before every burn says so.
 
 1. **Make a list.** *Add to burn list* is in the menu of a song, on an album and on a playlist. The list is kept while the app is open, can be
    reordered and trimmed, and is burned in the order shown.
 2. **Choose what to make.**
-   - *Music CD*: plays in any CD player or car stereo. MP3, FLAC, WAV, Ogg and Opus songs can be burned. A song at another sample rate is
-     converted to 44.1 kHz (with a high-quality resampler), a mono song plays on both speakers, a song with more than two channels is refused, and
-     a 24-bit or floating-point song is reduced to 16 bits (with dither). Any other song (M4A/AAC, WMA) is listed as *Cannot be burned* rather than
-     skipped silently. There are two seconds of silence between songs (that is how Windows' track-at-once burning works), at most 99 songs, and
-     about 80 minutes on a CD-R. Only a blank CD-R or CD-RW can take a music CD. It is **not** read back afterwards: listen to it once.
+   - *Music CD*: plays in any CD player or car stereo. MP3, FLAC, WAV, Ogg, Opus, M4A, AAC and WMA songs can be burned. Windows decodes the last
+     three itself (through Media Foundation, into a temporary file that is removed at once); a copy-protected song, or a Windows without the
+     decoders (an "N" edition needs Microsoft's Media Feature Pack), is listed as *Cannot be burned* in the words Windows gave. A song at another
+     sample rate is converted to 44.1 kHz (with a high-quality resampler), a mono song plays on both speakers, a song with more than two channels is
+     refused, and a 24-bit or floating-point song is reduced to 16 bits (with dither). Any other song (Apple Lossless, APE ...) is listed as
+     *Cannot be burned* rather than skipped silently. **Between songs** you choose *no gap* (the whole disc is written in one go, so each song
+     begins where the one before ends: right for live albums and mixes; it is the default, switchable in Settings, and offered only where the
+     recorder can do it) or *two seconds of silence* (the songs written one by one, the way Windows' track-at-once burning does). At most 99 songs,
+     and about 80 minutes on a CD-R. Only a blank CD-R or CD-RW can take a music CD. It is **not** read back afterwards: listen to it once.
    - *Data disc*: the song files as they are, for a computer, an MP3 player or a car stereo that reads files, on a CD, DVD or Blu-ray disc. The
      layout is the folders of your library, or one numbered folder (best for car stereos). File and folder names are made safe for every disc
      format (ISO 9660, Joliet, and UDF on discs bigger than a CD), and two files that would end up with the same name are told apart. The disc is
@@ -181,8 +186,7 @@ A burn cannot be undone, and one that is stopped or fails once it has begun writ
 6. **Erase.** A CD-RW or DVD-RW with something on it can be erased (quickly, or fully, which takes many minutes). An erase cannot be stopped once it
    has begun. The question says that everything on the disc is deleted.
 
-**What it does not do.** No gapless music CDs (two seconds of silence between songs), no CD-Text, no M4A/AAC/WMA songs on music CDs yet, no read-back
-check of a music CD, no adding to a disc that has been written (every burn closes the disc), no disc copying, no DVD-Video. Burning is Windows only,
+**What it does not do.** No CD-Text (the titles a car stereo may show), no read-back check of a music CD, no adding to a disc that has been written (every burn closes the disc), no disc copying, no DVD-Video. Burning is Windows only,
 through Windows' own disc burning service (IMAPI): no drivers and no administrator rights. A recorder that Windows cannot burn with, or a disc it
 does not support, is reported in words, not guessed at.
 

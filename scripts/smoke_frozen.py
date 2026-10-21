@@ -378,8 +378,23 @@ def burning(client: Client, scratch: Path, music: Path) -> None:
     peak = max(abs(v) for v in samples)
     check(10_000 <= peak <= 14_000, f"the converted song kept its level: the resampler ran ({peak})")
     _, burns = client.json("/api/discs/burns")
-    check([(b["kind"], b["status"], b["spoiled"]) for b in burns["burns"]] == [("audio", "done", 0)], f"the history has the burn ({burns})")
+    check([(b["kind"], b["status"], b["spoiled"], b["gaps"]) for b in burns["burns"]] == [("audio", "done", 0, "2s")], f"the history has the burn, with its two seconds ({burns})")
     check(not list(profile_cache.rglob("*.pcm")), f"the temporary copies of the songs are gone ({list(profile_cache.rglob('*'))})")
+
+    # the same songs on a fresh blank disc, this time running on from one another: the second song begins where the first ends, and is what it was
+    recorder()
+    asked = {"drive": "G:", "track_ids": [one, two], "eject": False, "gapless": True}
+    status, plan = client.json("/api/discs/burn/preview", "POST", asked)
+    check(status == 200 and plan["ok"] and plan["gapless"] is True and plan["disc_sectors"] == sum(s["sectors"] for s in plan["songs"]), f"the burn without gaps is previewed ({plan})")
+    status, begun = client.json("/api/discs/burn/start", "POST", asked)
+    finished = wait_job(client, begun["job"]["id"], tries=600)
+    check(status == 200 and finished["status"] == "done", f"the music CD without gaps is burned ({finished.get('result') or finished.get('error')})")
+    if finished["status"] == "done":
+        again = (world / "G" / "disc.pcm").read_bytes()
+        check(again[:len(heard)] == heard and again[first_end:] == converted and len(again) == first_end + len(converted),
+              f"without gaps the second song begins where the first ends, and is the same as before ({len(again)} bytes)")
+        _, burns = client.json("/api/discs/burns")
+        check([(b["status"], b["gaps"]) for b in burns["burns"]] == [("done", "none"), ("done", "2s")], f"the history says which way each disc was written ({burns})")
 
     # a data disc, read back and checked, on a rewritable disc; then erased
     recorder(type="CD-RW")

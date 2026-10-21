@@ -406,6 +406,304 @@ def check_images(exe: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------------------- a music CD without gaps: the image of the whole disc
+
+
+def raw_song(seed: int, sectors: int) -> bytes:
+    """Sectors of CD audio no two of which are alike, so that each can be found in an image by its bytes."""
+    import random
+
+    return random.Random(seed).randbytes(2352 * sectors)
+
+
+def crc16(data: bytes) -> int:
+    """The check value the Q sub-channel ends with (CCITT, stored inverted)."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc ^ 0xFFFF
+
+
+def q_channel(sub: bytes) -> dict | None:
+    """The Q sub-channel out of 96 bytes of sub-code (P is bit 7 of each byte, Q bit 6): where on the disc this sector says it is."""
+    if len(sub) < 96:
+        return None
+    bits = [(b >> 6) & 1 for b in sub[:96]]
+    q = bytes(sum(bit << (7 - k) for k, bit in enumerate(bits[8 * i : 8 * i + 8])) for i in range(12))
+
+    def bcd(x: int) -> int:
+        return (x >> 4) * 10 + (x & 15)
+
+    return {"track": bcd(q[1]), "index": bcd(q[2]), "relative": (bcd(q[3]), bcd(q[4]), bcd(q[5])), "absolute": (bcd(q[7]), bcd(q[8]), bcd(q[9])),
+            "crc": crc16(q[:10]) == (q[10] << 8 | q[11])}
+
+
+def look_in_image(image: bytes, songs: list[bytes]) -> dict:
+    """Where the songs are in an image of a disc: the size of a sector of the image (the distance between two sectors of the first song), the
+    sector of the image each song begins at, whether every sector of every song is there word for word, and the distance between the end of one
+    song and the start of the next in sectors."""
+    first = image.find(songs[0][:2352])
+    if first < 0:
+        return {"found": False}
+    second = image.find(songs[0][2352:4704], first)
+    stride = second - first if second > first else 0
+    found: dict = {"found": True, "stride": stride, "first_offset": first, "image_sectors": len(image) / stride if stride else None}
+    if not stride:
+        return found
+    starts = []
+    intact = True
+    for number, song in enumerate(songs):
+        at = image.find(song[:2352], first if number == 0 else starts[-1] * stride + first)
+        starts.append((at - first) // stride if at >= 0 and (at - first) % stride == 0 else -1)
+        if starts[-1] < 0:
+            intact = False
+            continue
+        for sector in range(len(song) // 2352):
+            offset = first + (starts[-1] + sector) * stride
+            if image[offset : offset + 2352] != song[sector * 2352 : (sector + 1) * 2352]:
+                intact = False
+                found["first_difference"] = (number + 1, sector)
+                break
+    found["starts"] = starts
+    found["intact"] = intact
+    found["between"] = [starts[i + 1] - starts[i] - len(songs[i]) // 2352 for i in range(len(songs) - 1)] if all(x >= 0 for x in starts) else None
+    if stride >= 2352 + 96:
+        around = []
+        if all(x >= 0 for x in starts):
+            for label, sector in (("last sector of song 1", starts[1] - 1), ("first sector of song 2", starts[1]), ("150 sectors before song 2", starts[1] - 150)):
+                at = first + sector * stride + 2352
+                around.append((label, q_channel(image[at : at + 96])))
+        found["q_channel"] = around
+    return found
+
+
+def check_raw_images(exe: str) -> None:
+    """Windows' disc burning component can lay songs out as the image of a whole disc without a recorder. That is the part of a burn without gaps
+    that a build machine can prove: that the songs reach IMAPI, that they come out in the image word for word, and that nothing lies between them
+    (and that the setting whose documentation says the opposite of its name does what the burn relies on)."""
+    from musictoolkit.discs.helper import DiscError, DiscHelper
+
+    folder = Path(tempfile.mkdtemp(prefix="mtk-raw-check-"))
+    try:
+        lengths = (320, 400, 310)
+        total, pairs = sum(lengths), len(lengths) - 1
+        songs = [raw_song(number, sectors) for number, sectors in enumerate(lengths, start=1)]
+        tracks = []
+        for number, data in enumerate(songs, start=1):
+            path = folder / f"song{number}.pcm"
+            path.write_bytes(data)
+            tracks.append({"path": str(path), "sectors": len(data) // 2352})
+        with DiscHelper([exe]) as helper:
+            raws = helper.call("imapi_probe").get("raw_components", {})
+            print(f"      {raws}", flush=True)
+            if not raws or not all(v is True for v in raws.values()):
+                note("the components that write a disc in one go are not all here, so the checks of a music CD without gaps are skipped")
+                return
+            check(True, "the components that write a disc in one go can be made")
+            out = folder / "image.bin"
+
+            def lay_out(sector_type: int, prop: bool, write: bool = False) -> dict | None:
+                try:
+                    return helper.call("raw_image", tracks=tracks, type=sector_type, property=prop, timeout=300, **({"out": str(out)} if write else {}))
+                except DiscError as error:
+                    check(False, f"songs are laid out as a disc (type {sector_type}, DisableGaplessAudio {prop}): {error.code}: {error}")
+                    return None
+
+            for sector_type in (1, 2, 3):
+                label = f"sector type {sector_type}"
+                ran_on = lay_out(sector_type, False, write=True)  # DisableGaplessAudio false: the default, and what the burn uses
+                if ran_on is None:
+                    continue
+                print(f"      {label}, DisableGaplessAudio false: {ran_on}", flush=True)
+                check(ran_on["seamless"] is True and ran_on["leadout"] - ran_on["starts"][0] == total,
+                      f"{label}: with DisableGaplessAudio false the disc is as long as the songs ({ran_on['leadout'] - ran_on['starts'][0]} sectors for {total})")
+                image = out.read_bytes()
+                out.unlink(missing_ok=True)
+                check(len(image) == ran_on.get("written") == ran_on.get("bytes"), f"{label}: the image is read out whole ({len(image)} bytes)")
+                seen = look_in_image(image, songs)
+                print(f"      {seen}", flush=True)
+                check(seen.get("found") is True, f"{label}: the first song is in the image")
+                if seen.get("found"):
+                    check(bool(seen.get("stride")) and seen["stride"] >= 2352, f"{label}: and the image counts its sectors in {seen.get('stride')} bytes")
+                    check(seen.get("intact") is True, f"{label}: every sector of every song is in the image, word for word")
+                    check(seen.get("between") == [0] * pairs, f"{label}: and the songs run on from one another: nothing lies between them ({seen.get('between')})")
+                    check(seen.get("starts") == ran_on["starts"], f"{label}: and each song starts where IMAPI says it does ({ran_on['starts']})")
+                    if sector_type == 3:
+                        note(f"what the sub-channel of the sectors around the start of song 2 says: {seen.get('q_channel')}")
+
+                gaps = lay_out(sector_type, True, write=sector_type == 1)  # true: what its documentation says makes the songs run on
+                if gaps is None:
+                    continue
+                check(gaps["seamless"] is False and gaps["leadout"] - gaps["starts"][0] == total + 150 * pairs,
+                      f"{label}: with DisableGaplessAudio true two seconds lie between the songs ({gaps['leadout'] - gaps['starts'][0]} sectors for {total})")
+                if sector_type == 1:
+                    seen = look_in_image(out.read_bytes(), songs)
+                    out.unlink(missing_ok=True)
+                    check(seen.get("intact") is True and seen.get("between") == [150] * pairs, f"{label}: and there they are in the image ({seen.get('between')})")
+    except DiscError as error:
+        check(False, f"laying songs out as a disc: {error.code}: {error}")
+    finally:
+        for leftover in sorted(folder.rglob("*"), reverse=True):
+            try:
+                leftover.unlink() if leftover.is_file() else leftover.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------------------- songs only Windows can decode
+
+
+def peak_hertz(samples, rate: int) -> float:
+    """The frequency that is loudest in a stretch of sound."""
+    import numpy as np
+
+    window = np.hanning(len(samples))
+    spectrum = np.abs(np.fft.rfft(samples * window))
+    return float(np.argmax(spectrum) * rate / len(samples))
+
+
+def check_decoding(exe: str) -> None:
+    """Windows decodes AAC and WMA (through Media Foundation) so that such songs can go on a music CD. A build machine has the same Windows parts, so
+    what is checked here is real: that a song is found to be decodable, that it is decoded to sound with the rate, channels, length and pitch it has,
+    and that a song Windows cannot read is said so and leaves nothing behind. (A plain WAV needs no decoder, so it proves the plumbing even on a
+    machine without the codecs; the codecs are checked when this Windows has them.)"""
+    import json
+
+    import numpy as np
+    import soundfile as sf
+
+    from musictoolkit.discs.helper import DiscError, DiscHelper
+
+    fixtures = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+    folder = Path(tempfile.mkdtemp(prefix="mtk-decode-check-"))
+    try:
+        rate = 44100
+        t = np.arange(rate * 2) / rate
+        both = np.stack([0.5 * np.sin(2 * np.pi * 440 * t), 0.5 * np.sin(2 * np.pi * 660 * t)], axis=1)
+        plain = folder / "plain.wav"
+        sf.write(str(plain), both, rate, subtype="PCM_16")
+        garbage = folder / "garbage.m4a"
+        garbage.write_bytes(os.urandom(5000))
+        mono_wav = folder / "mono.wav"
+        sf.write(str(mono_wav), 0.5 * np.sin(2 * np.pi * 440 * np.arange(22050 * 2) / 22050), 22050, subtype="PCM_16")
+        # name, path, the shapes the sound may come out in (rate, channels), the frequency heard in each channel, how loud (the tone files were made
+        # a quarter as loud as full scale by a generator whose own level is an eighth), and whether this Windows has to decode it. The AAC decoder
+        # assumes at first that a stream of 24 kHz or less carries HE-AAC's extra band (twice the rate, two channels for one), so for such a song
+        # either shape is right: what matters is that the file says what it holds.
+        songs = [
+            ("a plain WAV", plain, [(44100, 2)], (440, 660), 0.5, False),
+            ("a mono WAV at 22.05 kHz", mono_wav, [(22050, 1)], (440,), 0.5, False),
+            ("an AAC song in an M4A file", fixtures / "tones_aac.m4a", [(44100, 2)], (440, 660), 0.0625, True),
+            ("a WMA song", fixtures / "tones_wma.wma", [(44100, 2)], (440, 660), 0.0625, True),
+            ("a mono AAC song at 22.05 kHz", fixtures / "tone_mono_22k.m4a", [(22050, 1), (44100, 2)], (440,), 0.0625, True),
+        ]
+        with DiscHelper([exe]) as helper:
+            listed = helper.call("inspect", paths=[str(p) for _, p, *_ in songs] + [str(garbage), str(folder / "gone.m4a"), "relative.m4a", ""])["songs"]
+            for entry in listed:
+                print(f"      {entry}", flush=True)
+            check(len(listed) == len(songs) + 4, "every song asked about is answered, one by one")
+            found = {entry["path"]: entry for entry in listed}
+            for name, path, shapes, tones, level, needs_codec in songs:
+                entry = found.get(str(path), {})
+                if not entry.get("ok") and needs_codec and entry.get("code") == "unsupported":
+                    note(f"{name}: this Windows cannot decode it ({entry.get('error')}), so it is not checked here")
+                    continue
+                check(entry.get("ok") is True, f"{name}: Windows says it can decode it ({entry.get('error', entry.get('codec'))})")
+                if entry.get("ok") is not True:
+                    continue
+                check((entry.get("rate"), entry.get("channels")) in shapes, f"{name}: and says what it is like ({entry.get('codec')}, {entry.get('rate')} Hz, {entry.get('channels')} channels, {entry.get('seconds')} s)")
+                check(abs(float(entry.get("seconds", 0)) - 2.0) < 0.15, f"{name}: and how long it is ({entry.get('seconds')} s)")
+                out = folder / f"{path.stem}-decoded.wav"
+                seen: list[dict] = []
+                try:
+                    done = helper.call("decode", src=str(path), out=str(out), on_event=seen.append)
+                except DiscError as error:
+                    check(False, f"{name}: it is decoded ({error.code}: {error})")
+                    continue
+                check(out.is_file() and not Path(str(out) + ".part").exists(), f"{name}: it is decoded to a WAV file, and no half-written file is left beside it ({done})")
+                if not out.is_file():
+                    continue
+                samples, got_rate = sf.read(str(out), dtype="float32", always_2d=True)
+                check((got_rate, samples.shape[1]) in shapes and (got_rate, samples.shape[1]) == (done.get("rate"), done.get("channels")),
+                      f"{name}: the file has the rate and channels the helper said ({got_rate} Hz, {samples.shape[1]} channels)")
+                check(abs(len(samples) / got_rate - 2.0) < 0.15 and done.get("frames") == len(samples), f"{name}: and the length of the song ({len(samples) / got_rate:.3f} s)")
+                heard = tuple(round(peak_hertz(samples[:, c], got_rate)) for c in range(min(samples.shape[1], len(tones))))
+                check(all(abs(h - w) <= 5 for h, w in zip(heard, tones)), f"{name}: and each channel has its own pitch ({heard} Hz, {tones} expected)")
+                loudness = [float(np.abs(samples[len(samples) // 4 : 3 * len(samples) // 4, c]).max()) for c in range(samples.shape[1])]
+                check(all(0.75 * level < v < 1.25 * level for v in loudness), f"{name}: and is as loud as it was ({[round(v, 4) for v in loudness]}, about {level} expected)")
+                if name.startswith("a plain WAV"):
+                    exact = sf.read(str(plain), dtype="int16", always_2d=True)[0]
+                    check(done.get("bits") == 16 and np.array_equal(sf.read(str(out), dtype="int16", always_2d=True)[0], exact), "a plain WAV comes out as the very same samples")
+                check(bool(seen) and seen[-1].get("done") == seen[-1].get("total"), f"{name}: and the last report says it is done ({len(seen)} reports)")
+
+            for name, path in (("a file that is not a song", garbage), ("a file that is not there", folder / "gone.m4a")):
+                entry = found.get(str(path), {})
+                check(entry.get("ok") is False and entry.get("code") in ("unsupported", "failed") and bool(entry.get("error")), f"{name}: Windows says it cannot decode it, in words ({entry.get('code')}: {entry.get('error')})")
+                out = folder / "refused.wav"
+                try:
+                    helper.call("decode", src=str(path), out=str(out))
+                    check(False, f"{name} is not decoded")
+                except DiscError as error:
+                    check(error.code in ("unsupported", "failed") and not out.exists() and not Path(str(out) + ".part").exists(), f"{name} is refused and leaves nothing behind ({error.code}: {error})")
+            for bad in ("relative.m4a", ""):
+                check(found.get(bad, {}).get("ok") is False, f"{bad!r} is not a place a song can be: it is refused")
+            for out, why in ((folder / "no-extension", "a name that is not .wav"), (folder / "missing" / "x.wav", "a folder that is not there"), ("relative.wav", "a relative path"),
+                             ("\\\\.\\PhysicalDrive0\\x.wav", "a device path"), (plain, "a file that is there")):
+                before = plain.read_bytes()
+                try:
+                    helper.call("decode", src=str(plain), out=str(out))
+                    check(False, f"a song is not decoded to {why}")
+                except DiscError as error:
+                    check(error.code == "failed" and plain.read_bytes() == before, f"a song is not decoded to {why} ({error.code})")
+            check(helper.call("drives") is not None, "and the helper still answers")
+
+        # a stop that is there before the decoding begins stops it, and leaves nothing
+        process = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            process.stdout.readline()  # ready
+            stopped = folder / "stopped.wav"
+            process.stdin.write(json.dumps({"cmd": "cancel", "target": 1}) + "\n" + json.dumps({"id": 1, "cmd": "decode", "src": str(plain), "out": str(stopped)}) + "\n")
+            process.stdin.flush()
+            answer = {}
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                answer = json.loads(line)
+                if answer.get("id") == 1:
+                    break
+            check(answer.get("code") == "cancelled" and not stopped.exists() and not Path(str(stopped) + ".part").exists(), f"a song that is told to stop is not decoded, and nothing is left ({answer.get('code')})")
+            process.stdin.write(json.dumps({"id": 2, "cmd": "close"}) + "\n")
+            process.stdin.flush()
+            process.wait(timeout=20)
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+    except DiscError as error:
+        check(False, f"decoding songs: {error.code}: {error}")
+    finally:
+        for leftover in sorted(folder.rglob("*"), reverse=True):
+            try:
+                leftover.unlink() if leftover.is_file() else leftover.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------------------- the checks
 
 
@@ -613,6 +911,8 @@ def main() -> None:
     if sys.platform == "win32":
         check_mounted_image(exe)
         check_images(exe)
+        check_raw_images(exe)
+        check_decoding(exe)
 
     if failures:
         sys.exit(f"\n{len(failures)} check(s) failed")

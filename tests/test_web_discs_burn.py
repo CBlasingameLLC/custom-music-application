@@ -130,9 +130,11 @@ def test_diagnostics_say_which_drives_can_write_and_what(rig) -> None:
 
 
 def test_the_options_say_what_burning_starts_with(rig) -> None:
-    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": True, "verify": True}
+    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": True, "verify": True, "gapless": True}
     assert rig.client.put("/api/settings", json={"disc": {"eject_after_burn": False}}).json()["disc"]["eject_after_burn"] is False
-    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": False, "verify": True}
+    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": False, "verify": True, "gapless": True}
+    assert rig.client.put("/api/settings", json={"disc": {"burn_gapless": False}}).json()["disc"]["burn_gapless"] is False
+    assert rig.client.get("/api/discs/options").json()["burn"] == {"eject": False, "verify": True, "gapless": False}
 
 
 # ---------------------------------------------------------------------------------------- looking before burning
@@ -155,12 +157,12 @@ def test_a_song_that_cannot_be_burned_is_listed_and_left_out_of_the_burn(rig) ->
     rig.ids = ids_by_title(rig.client)
     shown = preview(rig, "One", "Four", "Two").json()
     assert [s["verdict"] for s in shown["songs"]] == ["ok", "cannot", "ok"] and shown["counts"]["cannot"] == 1
-    assert shown["songs"][1]["notes"] == ["WMA songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg and Opus can."]
+    assert shown["songs"][1]["notes"] == ["Windows cannot read this kind of file (Four.wma)."]  # (Windows was asked, and said so)
     assert shown["disc_sectors"] == 375 + 450 + 150 and shown["ok"] is True
     job, history = burn_it(rig, "One", "Four", "Two")
     assert job.status == "done", job.error
     assert [(t["position"], t["title"], t["status"]) for t in history["tracks"]] == [(1, "One", "done"), (2, "Four", "skipped"), (3, "Two", "done")]
-    assert history["tracks"][1]["message"].startswith("WMA songs cannot be burned") and history["tracks"][1]["sectors"] is None
+    assert history["tracks"][1]["message"] == "Windows cannot read this kind of file (Four.wma)." and history["tracks"][1]["sectors"] is None
     assert len(rip_back(rig, 2)) == 2
 
 
@@ -588,3 +590,108 @@ def test_a_finished_burn_is_not_marked_spoiled_even_though_writing_began(rig) ->
         store.finish_burn(conn, burn_id, "done", None, sectors=1234)
         shown = store.get_burn(conn, burn_id)
     assert (shown["status"], shown["spoiled"], shown["sectors"]) == ("done", 0, 1234) and [t["status"] for t in shown["tracks"]] == ["done"]
+
+
+# ---------------------------------------------------------------------------------------- without gaps between the songs
+
+
+def test_a_blank_cd_in_a_recorder_that_can_do_it_says_that_it_can_be_written_without_gaps(rig) -> None:
+    assert media(rig)["gapless"] is True and media(rig, "F:")["gapless"] is False
+    set_control(rig.world, no_gapless=True)
+    assert media(rig)["gapless"] is False
+
+
+def test_the_preview_without_gaps_counts_only_the_songs_and_two_seconds_stay_the_way_it_is_asked_for_unless_said_otherwise(rig) -> None:
+    gapless = preview(rig, gapless=True).json()
+    assert gapless["gapless"] is True and gapless["disc_sectors"] == 375 + 450 + 400 and gapless["ok"] is True and gapless["problems"] == []
+    plain = preview(rig).json()
+    assert plain["gapless"] is False and plain["disc_sectors"] == 375 + 450 + 400 + 2 * 150
+
+
+def test_songs_burned_without_gaps_run_on_and_ripping_the_disc_gives_each_back_whole(rig) -> None:
+    job, history = burn_it(rig, gapless=True)
+    assert job.status == "done", job.error
+    assert job.result["songs"] == 3 and job.result["sectors"] == 375 + 450 + 400
+    assert (history["gaps"], history["sectors"], history["spoiled"], history["status"]) == ("none", 1225, 0, "done")
+    assert (job.done, job.total) == (job.total, 1225 + 1225) and not scratch(rig).exists()
+    for (title, seed, sectors), samples in zip(SONGS, rip_back(rig, 3)):
+        assert np.array_equal(samples, original(seed, sectors)), title  # whole songs: nothing before, nothing after
+
+
+def test_the_history_says_whether_there_were_gaps_between_the_songs(rig) -> None:
+    _, plain = burn_it(rig)
+    add_drive(rig.world, "E", writer=True, disc=blank_disc())
+    _, gapless = burn_it(rig, gapless=True)
+    assert (plain["gaps"], gapless["gaps"]) == ("2s", "none")
+    assert [b["gaps"] for b in rig.client.get("/api/discs/burns").json()["burns"]] == ["none", "2s"]
+
+
+def test_the_recorder_is_asked_to_write_without_gaps_only_when_that_was_chosen(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict] = []
+    real = disc_helper.DiscHelper.call
+
+    def spy(self, cmd, **args):
+        if cmd == "burn_audio":
+            seen.append(args)
+        return real(self, cmd, **args)
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "call", spy)
+    burn_it(rig, gapless=True)
+    add_drive(rig.world, "E", writer=True, disc=blank_disc())
+    burn_it(rig)
+    assert [args.get("gapless") for args in seen] == [True, None]
+
+
+def test_a_recorder_that_cannot_write_without_gaps_is_told_so_in_the_preview_and_refused_at_the_start(rig) -> None:
+    set_control(rig.world, no_gapless=True)
+    shown = preview(rig, gapless=True).json()
+    assert shown["ok"] is False and shown["problems"] == [burn.NO_GAPLESS]
+    refused = rig.client.post("/api/discs/burn/start", json=ask(rig, gapless=True))
+    assert refused.status_code == 409 and refused.json()["detail"] == burn.NO_GAPLESS
+    assert rig.client.get("/api/discs/burns").json()["burns"] == []
+    assert preview(rig).json()["ok"] is True  # two seconds between the songs is still open
+
+
+def test_the_job_asks_the_recorder_again_whether_it_can_write_without_gaps(rig) -> None:
+    found = media(rig)
+    songs = [SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
+    plan = burn.plan_audio(songs, found, scratch(rig), gapless=True)
+    assert plan.problems == []
+    request = burnjob.AudioRequest(drive="E:", eject=False, gapless=True)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "nogaps", found)
+    set_control(rig.world, no_gapless=True)  # the disc was changed for another recorder's after the plan was made
+    handle = SimpleNamespace(cancelled=False, update=lambda **_k: None, log=lambda _line: None, check=lambda: None)
+    with pytest.raises(burn.BurnError, match="without gaps"):
+        burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="nogaps", burn_id=burn_id, scratch=scratch(rig), handle=handle)
+    with rig.ctx.db() as conn:
+        shown = store.get_burn(conn, burn_id)
+    assert shown["status"] == "failed" and shown["spoiled"] == 0 and shown["gaps"] == "none"
+    assert not scratch(rig).exists() and not (rig.world / "E" / "disc.pcm").exists()
+
+
+def test_a_recorder_that_refuses_after_all_leaves_the_disc_as_it_was(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recorder said it could, and then, when it was asked to write, said it could not: nothing was written, and the person is told what to do."""
+    real = disc_helper.DiscHelper.call
+
+    def spy(self, cmd, **args):
+        reply = real(self, cmd, **args)
+        if cmd == "media" and disc_helper._in_use:  # (the look the job takes just before it writes, not the page's)
+            set_control(rig.world, no_gapless=True)  # (after it has answered, as the real helper may find out only when it lays the disc out)
+        return reply
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "call", spy)
+    job, history = burn_it(rig, gapless=True)
+    assert job.status == "error" and "without gaps" in job.error and "Nothing had been written" in job.error
+    assert (history["status"], history["spoiled"]) == ("failed", 0) and media(rig)["blank"] is True
+
+
+def test_a_burn_without_gaps_that_is_stopped_spoils_the_disc_like_any_other(rig) -> None:
+    set_control(rig.world, burn_slow=0.004)
+    started = begin(rig, gapless=True)
+    job_id = started["job"]["id"]
+    _wait_until_writing(rig, job_id)
+    rig.client.post(f"/api/jobs/{job_id}/cancel")
+    job = rig.ctx.jobs.wait(job_id, timeout=30)
+    shown = rig.client.get(f"/api/discs/burns/{started['burn_id']}").json()
+    assert job.status == "cancelled" and (shown["status"], shown["spoiled"]) == ("cancelled", 1)

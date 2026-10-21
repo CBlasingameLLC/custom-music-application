@@ -26,10 +26,13 @@
      "unlisted": ["G"],                               the listing leaves the drive out, but it still answers (a careless helper)
      "burn_fail_at": 120,                             a burn fails (an underrun) when it has written this many sectors, and ruins the disc
      "write_protected": true,                         every burn and erase is refused as a write-protected disc
+     "no_gapless": true,                              the recorder cannot write a music CD without gaps (a drive.json with "gapless": false says the same for one drive)
      "corrupt_burn": true,                            a data disc is written with its first file changed in its last byte (a bad burn that looked fine)
      "no_root": true,                                 a disc with files does not say where they can be read (Windows has not shown them yet)
-     "burn_slow": 0.002}                              seconds a burn takes per sector (cancel can interrupt it)
-Commands: drives, toc, read, flush, eject, media, burn_audio, burn_data, build_iso, erase, ticks {n} (n progress events), hang (never
+     "burn_slow": 0.002,                              seconds a burn takes per sector (cancel can interrupt it)
+     "no_decoder": true,                              this Windows cannot decode songs (the Media Foundation parts are missing)
+     "decode_slow": 0.01}                             seconds a decode takes per quarter of a song (cancel can interrupt it)
+Commands: drives, toc, read, flush, eject, media, burn_audio, burn_data, build_iso, erase, inspect, decode, ticks {n} (n progress events), hang (never
 answers), crash (says why on stderr, exits), confused (an answer to some other request comes first), nocode (a refusal with no code),
 silent (a refusal with a code and no words), close.
 
@@ -42,6 +45,7 @@ import array
 import base64
 import collections
 import functools
+import io
 import json
 import math
 import os
@@ -50,6 +54,7 @@ import shutil
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 
 RATE = 44100
@@ -113,6 +118,17 @@ def set_control(root: Path, **control: object) -> None:
     (Path(root) / "control.json").write_text(json.dumps(control), encoding="utf-8")
 
 
+# A song only the stand-in's Windows can decode (a stand-in for an M4A or WMA file the audio library cannot read): eight bytes that say what it is,
+# then the sound as a plain WAV file. FAKEDRM1 is one that Windows will not decode (copy-protected).
+FAKE_SONGS = {b"FAKEAAC1": "AAC", b"FAKEWMA1": "WMA"}
+
+
+def fake_song(path: Path, wav: bytes, kind: bytes = b"FAKEAAC1") -> Path:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_bytes(kind + wav)
+    return Path(path)
+
+
 CD_EXTRA_GAP = 11400  # the end of the music session, the lead-in of the data session and its pre-gap: sectors that can be read as nothing
 
 
@@ -174,6 +190,8 @@ class Fake:
         while time.monotonic() < end:
             if self.current in self.cancelled:
                 self.cancelled.discard(self.current)
+                with (self.root / "cancelled.log").open("a", encoding="utf-8") as log:  # (so that a test can tell that a press of Stop reached the helper)
+                    log.write("cancelled\n")
                 raise Refusal("cancelled", "Stopped.")
             time.sleep(0.01)
 
@@ -257,12 +275,15 @@ class Fake:
         try:
             disc = json.loads((folder / "disc.json").read_text())
         except FileNotFoundError:
-            return {**reply, "state": "none", "type": "", "rewritable": False, "blank": False, "capacity_sectors": 0, "free_sectors": 0, "can_audio": False}
+            return {**reply, "state": "none", "type": "", "rewritable": False, "blank": False, "capacity_sectors": 0, "free_sectors": 0, "can_audio": False,
+                    "gapless": False}
         blank = disc.get("kind") == "blank"
         kind = disc.get("type", "CD-ROM")
         capacity = int(disc.get("capacity", 0))
+        audio_ok = bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", []))
         reply.update(state="blank" if blank else "written", type=kind, rewritable=bool(disc.get("rewritable")), blank=blank, capacity_sectors=capacity,
-                     free_sectors=capacity if blank else 0, can_audio=bool(blank and info.get("writer") and kind in CD_TYPES and kind in info.get("writes", [])))
+                     free_sectors=capacity if blank else 0, can_audio=audio_ok,
+                     gapless=audio_ok and info.get("gapless", True) is not False and not self.control().get("no_gapless"))
         if disc.get("kind") == "data" and not self.control().get("no_root"):
             reply["root"] = str(folder / "files")  # where the files of the disc can be read (Windows gives the drive letter)
         return reply
@@ -283,13 +304,17 @@ class Fake:
         tracks = request.get("tracks") or []
         if not 1 <= len(tracks) <= 99:
             raise Refusal("failed", "A music CD holds 1 to 99 songs.")
+        gapless = bool(request.get("gapless"))
+        if gapless and (info.get("gapless", True) is False or self.control().get("no_gapless")):
+            raise Refusal("unsupported", "This drive cannot write a music CD without gaps between the songs. Choose two seconds between songs instead.")
+        between = 0 if gapless else 150  # two seconds of silence between songs, unless they run on
         lengths = []
         for item in tracks:
             path = Path(str(item.get("path", "")))
             if not path.is_file() or not path.stat().st_size or path.stat().st_size % SECTOR_BYTES:
                 raise Refusal("failed", f"{path.name} is not audio the drive can write.")
             lengths.append(max(path.stat().st_size // SECTOR_BYTES, 4 * 75))  # (a track is at least four seconds long)
-        need = sum(lengths) + 150 * (len(lengths) - 1)  # two seconds of silence between songs
+        need = sum(lengths) + between * (len(lengths) - 1)
         capacity = int(disc.get("capacity", 0))
         if need > capacity:
             raise Refusal("no_space", f"The songs need {need} sectors and the disc holds {capacity}.")
@@ -298,9 +323,9 @@ class Fake:
         try:
             with (folder / "disc.pcm").open("wb") as out:
                 for index, (item, sectors) in enumerate(zip(tracks, lengths), start=1):
-                    if index > 1:
-                        out.write(b"\0" * (150 * SECTOR_BYTES))
-                        written += 150
+                    if index > 1 and between:
+                        out.write(b"\0" * (between * SECTOR_BYTES))
+                        written += between
                     starts.append(written)
                     data = Path(item["path"]).read_bytes()
                     data += b"\0" * (sectors * SECTOR_BYTES - len(data))
@@ -324,7 +349,7 @@ class Fake:
         self.cache.clear()
         if request.get("eject"):
             self.eject(request.get("drive", ""))
-        return {"ok": True, "tracks": len(tracks), "sectors": written}
+        return {"ok": True, "tracks": len(tracks), "sectors": written, "gapless": gapless}
 
     @staticmethod
     def parts(dest: object) -> list[str]:
@@ -422,6 +447,57 @@ class Fake:
         self.cache.clear()
         return {"ok": True}
 
+    # ------------------------------------------------------------------------------------- Windows' decoder
+
+    def song_of(self, path: object) -> tuple[bytes, str]:
+        """The sound inside a song that only this stand-in's Windows can decode, and what kind it is - or the refusal the real helper would give."""
+        song = Path(str(path or ""))
+        if not song.is_absolute() or not song.is_file():
+            raise Refusal("failed", f"{song.name or 'A song'} is not there.")
+        if self.control().get("no_decoder"):
+            raise Refusal("unsupported", "This Windows has no Media Foundation, which decodes songs like these. A 'N' edition of Windows needs the Media Feature Pack from Microsoft.")
+        data = song.read_bytes()
+        if data[:8] == b"FAKEDRM1":
+            raise Refusal("unsupported", f"Windows cannot decode {song.name}: it is copy-protected.")
+        kind = FAKE_SONGS.get(data[:8])
+        if kind is None:
+            raise Refusal("unsupported", f"Windows cannot read this kind of file ({song.name}).")
+        return data[8:], kind
+
+    def inspect(self, request: dict) -> dict:
+        songs = []
+        for path in request.get("paths") or []:
+            try:
+                wav, kind = self.song_of(path)
+                with wave.open(io.BytesIO(wav)) as sound:
+                    rate, channels, frames = sound.getframerate(), sound.getnchannels(), sound.getnframes()
+                songs.append({"path": path, "ok": True, "codec": kind, "rate": rate, "channels": channels, "bits": 16, "seconds": round(frames / rate, 3)})
+            except Refusal as refusal:
+                songs.append({"path": path, "ok": False, "code": refusal.code, "error": refusal.message})
+        return {"ok": True, "songs": songs}
+
+    def decode(self, request: dict, emit) -> dict:
+        wav, _ = self.song_of(request.get("src"))
+        out = Path(str(request.get("out") or ""))
+        if not out.is_absolute() or out.suffix.lower() != ".wav" or not out.parent.is_dir() or out.exists():
+            raise Refusal("failed", "That is not a place a decoded song can be written.")
+        with wave.open(io.BytesIO(wav)) as sound:
+            rate, channels, frames = sound.getframerate(), sound.getnchannels(), sound.getnframes()
+        part = Path(str(out) + ".part")
+        step = max(len(wav) // 4, 1)
+        try:
+            with part.open("wb") as handle:
+                for first in range(0, len(wav), step):
+                    if self.control().get("decode_slow"):
+                        self.pause(float(self.control()["decode_slow"]))
+                    handle.write(wav[first : first + step])
+                    emit({"event": "progress", "id": request.get("id"), "done": min(first + step, len(wav)), "total": len(wav), "message": f"Decoding {Path(request['src']).name}"})
+            part.replace(out)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+        return {"ok": True, "rate": rate, "channels": channels, "bits": 16, "float": False, "frames": frames, "bytes": len(wav)}
+
     def eject(self, drive: str) -> None:
         folder = self.folder(drive)
         (folder / "disc.json").unlink(missing_ok=True)
@@ -494,6 +570,10 @@ class Fake:
             return self.build_iso(request, emit)
         if cmd == "erase":
             return self.erase(request, emit)
+        if cmd == "inspect":
+            return self.inspect(request)
+        if cmd == "decode":
+            return self.decode(request, emit)
         if cmd == "ticks":
             for i in range(int(request.get("n", 3))):
                 emit({"event": "progress", "id": request.get("id"), "done": i + 1, "total": int(request.get("n", 3)), "message": f"step {i + 1}"})

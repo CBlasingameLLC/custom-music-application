@@ -71,6 +71,7 @@ class BurnBody(BaseModel):
     speed: int | None = Field(None, ge=1)  # one of the speeds the recorder lists for the disc; None lets it choose
     eject: bool = True
     title: str = Field("", max_length=200)
+    gapless: bool = False  # the songs run on from one another; otherwise two seconds of silence lie between them
 
 
 class DataBody(BaseModel):
@@ -191,7 +192,7 @@ def options(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
             "format": fmt, "quality": cfg.disc.rip_mp3_quality if fmt == "mp3" else encode.DEFAULT_QUALITY["flac"], "mp3_quality": cfg.disc.rip_mp3_quality,
             "accuracy": cfg.disc.rip_accuracy, "root": root, "cover": cfg.disc.rip_cover, "eject": cfg.disc.eject_after_rip,
         },
-        "burn": {"eject": cfg.disc.eject_after_burn, "verify": cfg.disc.burn_verify},
+        "burn": {"eject": cfg.disc.eject_after_burn, "verify": cfg.disc.burn_verify, "gapless": cfg.disc.burn_gapless},
         "iso_folder": str(_default_iso_folder()),
     }
 
@@ -381,7 +382,7 @@ def _burn_plan(ctx: AppContext, body: BurnBody) -> tuple[burn.AudioPlan, dict[st
     media = _media(drive)
     _check_speed(media, body.speed)
     try:
-        return burn.plan_audio(songs, media, _cache_dir(ctx) / "burn"), media
+        return burn.plan_audio(songs, media, _cache_dir(ctx) / "burn", gapless=body.gapless), media
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from None
 
@@ -418,7 +419,7 @@ def burn_start(body: BurnBody, ctx: AppContext = Depends(get_ctx)) -> dict[str, 
     plan, media_found = _burn_plan(ctx, body)  # plan again: the disc or the songs may have changed since the preview
     if plan.problems:
         raise HTTPException(status_code=409, detail=plan.problems[0])
-    request = burnjob.AudioRequest(drive=valid_drive_or_404(body.drive), speed=body.speed, eject=body.eject, title=body.title)
+    request = burnjob.AudioRequest(drive=valid_drive_or_404(body.drive), speed=body.speed, eject=body.eject, title=body.title, gapless=body.gapless)
     batch_id = rip.new_batch_id()
     with ctx.db() as conn:
         burn_id = burnjob.begin_audio(conn, plan, request, batch_id, media_found)

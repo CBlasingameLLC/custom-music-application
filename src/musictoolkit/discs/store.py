@@ -115,14 +115,14 @@ def recover(conn: sqlite3.Connection, cache_dir: Path | None = None) -> int:
 
 def create_burn(
     conn: sqlite3.Connection, *, batch_id: str, kind: str, title: str, drive: str | None, disc_type: str | None = None, label: str | None = None,
-    speed: int | None = None, sectors: int | None = None, items: list[dict[str, Any]] | None = None,
+    speed: int | None = None, sectors: int | None = None, items: list[dict[str, Any]] | None = None, gaps: str | None = None,
 ) -> int:
     """A burn that is about to start, with every song or file it was asked for as a row (those that will not be written say why).
     `items`: title, artist, source, track_id, sectors, status, message."""
     items = items or []
     cursor = conn.execute(
-        "INSERT INTO disc_burns (batch_id, kind, title, drive, disc_type, label, speed, items, sectors, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (batch_id, kind, title, drive, disc_type, label, speed, sum(1 for i in items if i.get("status", "waiting") == "waiting"), sectors, _now()),
+        "INSERT INTO disc_burns (batch_id, kind, title, drive, disc_type, label, speed, items, sectors, gaps, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (batch_id, kind, title, drive, disc_type, label, speed, sum(1 for i in items if i.get("status", "waiting") == "waiting"), sectors, gaps, _now()),
     )
     burn_id = cursor.lastrowid
     conn.executemany(
@@ -187,7 +187,7 @@ def recover_burns(conn: sqlite3.Connection, cache_dir: Path | None = None) -> in
             words += " Writing had begun, so the disc cannot be trusted. A rewritable disc can be erased and used again."
         finish_burn(conn, burn["id"], "interrupted", words)
         if cache_dir is not None and cache_dir.is_dir():
-            for leftover in cache_dir.glob(f"{burn['batch_id']}-*.pcm"):
+            for leftover in cache_dir.glob(f"{burn['batch_id']}-*"):
                 try:
                     leftover.unlink()
                 except OSError:

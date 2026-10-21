@@ -1,0 +1,42 @@
+name: Windows helpers
+
+# The small C# programs for CDs and burning (helpers/disc) on a real Windows machine, without the rest of the build, which takes much
+# longer. It runs when a push touches a helper or its check, so that work on them is answered in minutes. The Build workflow runs the same
+# checks again as part of a pull request.
+on:
+  push:
+    paths:
+      - 'helpers/**'
+      - 'scripts/check_disc_helper.py'
+      - 'tests/fixtures/**'
+      - '.github/workflows/helpers.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helpers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disc:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The checks talk to the helper with the app's own client.
+      - name: Install the app
+        run: python -m pip install -e .
+
+      - name: Build the disc helper
+        run: dotnet build helpers\disc\MtkDisc.csproj -c Release -o helpers\disc\out
+
+      - name: Check the disc helper
+        run: python scripts\check_disc_helper.py helpers\disc\out\mtk-disc.exe
