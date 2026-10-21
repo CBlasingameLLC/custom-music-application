@@ -556,6 +556,147 @@ def check_raw_images(exe: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------------------- songs only Windows can decode
+
+
+def peak_hertz(samples, rate: int) -> float:
+    """The frequency that is loudest in a stretch of sound."""
+    import numpy as np
+
+    window = np.hanning(len(samples))
+    spectrum = np.abs(np.fft.rfft(samples * window))
+    return float(np.argmax(spectrum) * rate / len(samples))
+
+
+def check_decoding(exe: str) -> None:
+    """Windows decodes AAC and WMA (through Media Foundation) so that such songs can go on a music CD. A build machine has the same Windows parts, so
+    what is checked here is real: that a song is found to be decodable, that it is decoded to sound with the rate, channels, length and pitch it has,
+    and that a song Windows cannot read is said so and leaves nothing behind. (A plain WAV needs no decoder, so it proves the plumbing even on a
+    machine without the codecs; the codecs are checked when this Windows has them.)"""
+    import json
+
+    import numpy as np
+    import soundfile as sf
+
+    from musictoolkit.discs.helper import DiscError, DiscHelper
+
+    fixtures = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
+    folder = Path(tempfile.mkdtemp(prefix="mtk-decode-check-"))
+    try:
+        rate = 44100
+        t = np.arange(rate * 2) / rate
+        both = np.stack([0.5 * np.sin(2 * np.pi * 440 * t), 0.5 * np.sin(2 * np.pi * 660 * t)], axis=1)
+        plain = folder / "plain.wav"
+        sf.write(str(plain), both, rate, subtype="PCM_16")
+        garbage = folder / "garbage.m4a"
+        garbage.write_bytes(os.urandom(5000))
+        mono_wav = folder / "mono.wav"
+        sf.write(str(mono_wav), 0.5 * np.sin(2 * np.pi * 440 * np.arange(22050 * 2) / 22050), 22050, subtype="PCM_16")
+        # name, path, rate, channels, frequencies heard in the left (and right) channel, whether this Windows has to decode it
+        songs = [
+            ("a plain WAV", plain, 44100, 2, (440, 660), False),
+            ("a mono WAV at 22.05 kHz", mono_wav, 22050, 1, (440,), False),
+            ("an AAC song in an M4A file", fixtures / "tones_aac.m4a", 44100, 2, (440, 660), True),
+            ("a WMA song", fixtures / "tones_wma.wma", 44100, 2, (440, 660), True),
+            ("a mono AAC song at 22.05 kHz", fixtures / "tone_mono_22k.m4a", 22050, 1, (440,), True),
+        ]
+        with DiscHelper([exe]) as helper:
+            listed = helper.call("inspect", paths=[str(p) for _, p, *_ in songs] + [str(garbage), str(folder / "gone.m4a"), "relative.m4a", ""])["songs"]
+            for entry in listed:
+                print(f"      {entry}", flush=True)
+            check(len(listed) == len(songs) + 4, "every song asked about is answered, one by one")
+            found = {entry["path"]: entry for entry in listed}
+            for name, path, want_rate, want_channels, tones, needs_codec in songs:
+                entry = found.get(str(path), {})
+                if not entry.get("ok") and needs_codec and entry.get("code") == "unsupported":
+                    note(f"{name}: this Windows cannot decode it ({entry.get('error')}), so it is not checked here")
+                    continue
+                check(entry.get("ok") is True, f"{name}: Windows says it can decode it ({entry.get('error', entry.get('codec'))})")
+                if entry.get("ok") is not True:
+                    continue
+                check((entry.get("rate"), entry.get("channels")) == (want_rate, want_channels), f"{name}: and says what it is like ({entry.get('codec')}, {entry.get('rate')} Hz, {entry.get('channels')} channels, {entry.get('seconds')} s)")
+                check(abs(float(entry.get("seconds", 0)) - 2.0) < 0.15, f"{name}: and how long it is ({entry.get('seconds')} s)")
+                out = folder / f"{path.stem}-decoded.wav"
+                seen: list[dict] = []
+                done = helper.call("decode", src=str(path), out=str(out), on_event=seen.append)
+                check(out.is_file() and not Path(str(out) + ".part").exists(), f"{name}: it is decoded to a WAV file, and no half-written file is left beside it ({done})")
+                if not out.is_file():
+                    continue
+                samples, got_rate = sf.read(str(out), dtype="float32", always_2d=True)
+                check((got_rate, samples.shape[1], done.get("rate"), done.get("channels")) == (want_rate, want_channels, want_rate, want_channels),
+                      f"{name}: the file has the rate and channels the helper said ({got_rate} Hz, {samples.shape[1]} channels)")
+                check(abs(len(samples) / got_rate - 2.0) < 0.15 and done.get("frames") == len(samples), f"{name}: and the length of the song ({len(samples) / got_rate:.3f} s)")
+                heard = tuple(round(peak_hertz(samples[:, c], got_rate)) for c in range(samples.shape[1]))
+                check(all(abs(h - w) <= 5 for h, w in zip(heard, tones)), f"{name}: and each channel has its own pitch ({heard} Hz, {tones} expected)")
+                loudness = [float(np.abs(samples[len(samples) // 4 : 3 * len(samples) // 4, c]).max()) for c in range(samples.shape[1])]
+                check(all(0.4 < v < 0.6 for v in loudness), f"{name}: and is as loud as it was ({[round(v, 3) for v in loudness]})")
+                if name.startswith("a plain WAV"):
+                    exact = sf.read(str(plain), dtype="int16", always_2d=True)[0]
+                    check(done.get("bits") == 16 and np.array_equal(sf.read(str(out), dtype="int16", always_2d=True)[0], exact), "a plain WAV comes out as the very same samples")
+                check(bool(seen) and seen[-1].get("done") == seen[-1].get("total"), f"{name}: and the last report says it is done ({len(seen)} reports)")
+
+            for name, path in (("a file that is not a song", garbage), ("a file that is not there", folder / "gone.m4a")):
+                entry = found.get(str(path), {})
+                check(entry.get("ok") is False and entry.get("code") in ("unsupported", "failed") and bool(entry.get("error")), f"{name}: Windows says it cannot decode it, in words ({entry.get('code')}: {entry.get('error')})")
+                out = folder / "refused.wav"
+                try:
+                    helper.call("decode", src=str(path), out=str(out))
+                    check(False, f"{name} is not decoded")
+                except DiscError as error:
+                    check(error.code in ("unsupported", "failed") and not out.exists() and not Path(str(out) + ".part").exists(), f"{name} is refused and leaves nothing behind ({error.code}: {error})")
+            for bad in ("relative.m4a", ""):
+                check(found.get(bad, {}).get("ok") is False, f"{bad!r} is not a place a song can be: it is refused")
+            for out, why in ((folder / "no-extension", "a name that is not .wav"), (folder / "missing" / "x.wav", "a folder that is not there"), ("relative.wav", "a relative path"),
+                             ("\\\\.\\PhysicalDrive0\\x.wav", "a device path"), (plain, "a file that is there")):
+                before = plain.read_bytes()
+                try:
+                    helper.call("decode", src=str(plain), out=str(out))
+                    check(False, f"a song is not decoded to {why}")
+                except DiscError as error:
+                    check(error.code == "failed" and plain.read_bytes() == before, f"a song is not decoded to {why} ({error.code})")
+            check(helper.call("drives") is not None, "and the helper still answers")
+
+        # a stop that is there before the decoding begins stops it, and leaves nothing
+        process = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            process.stdout.readline()  # ready
+            stopped = folder / "stopped.wav"
+            process.stdin.write(json.dumps({"cmd": "cancel", "target": 1}) + "\n" + json.dumps({"id": 1, "cmd": "decode", "src": str(plain), "out": str(stopped)}) + "\n")
+            process.stdin.flush()
+            answer = {}
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                answer = json.loads(line)
+                if answer.get("id") == 1:
+                    break
+            check(answer.get("code") == "cancelled" and not stopped.exists() and not Path(str(stopped) + ".part").exists(), f"a song that is told to stop is not decoded, and nothing is left ({answer.get('code')})")
+            process.stdin.write(json.dumps({"id": 2, "cmd": "close"}) + "\n")
+            process.stdin.flush()
+            process.wait(timeout=20)
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+    except DiscError as error:
+        check(False, f"decoding songs: {error.code}: {error}")
+    finally:
+        for leftover in sorted(folder.rglob("*"), reverse=True):
+            try:
+                leftover.unlink() if leftover.is_file() else leftover.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------------------- the checks
 
 
@@ -764,6 +905,7 @@ def main() -> None:
         check_mounted_image(exe)
         check_images(exe)
         check_raw_images(exe)
+        check_decoding(exe)
 
     if failures:
         sys.exit(f"\n{len(failures)} check(s) failed")

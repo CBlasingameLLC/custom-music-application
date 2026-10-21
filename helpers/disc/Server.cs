@@ -213,6 +213,10 @@ namespace MusicToolkit.Disc
                 case "build_iso":
                     return Ok(Imapi.BuildIso(
                         Text(request, "label"), Text(request, "label_iso"), Files(request), Strings(Get(request, "filesystems")), Text(request, "out"), call));
+                case "inspect":
+                    return Ok(new Dictionary<string, object> { { "songs", Decoder.Inspect(Strings(Get(request, "paths"))) } });
+                case "decode":
+                    return Ok(Decoder.Decode(Text(request, "src"), Text(request, "out"), call));
                 case "erase":
                     return Ok(Imapi.Erase(Text(request, "drive"), Get(request, "full") is bool && (bool)Get(request, "full"), call));
                 case "imapi_probe" when testing:
