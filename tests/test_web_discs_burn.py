@@ -157,12 +157,12 @@ def test_a_song_that_cannot_be_burned_is_listed_and_left_out_of_the_burn(rig) ->
     rig.ids = ids_by_title(rig.client)
     shown = preview(rig, "One", "Four", "Two").json()
     assert [s["verdict"] for s in shown["songs"]] == ["ok", "cannot", "ok"] and shown["counts"]["cannot"] == 1
-    assert shown["songs"][1]["notes"] == ["WMA songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg and Opus can."]
+    assert shown["songs"][1]["notes"] == ["Windows cannot read this kind of file (Four.wma)."]  # (Windows was asked, and said so)
     assert shown["disc_sectors"] == 375 + 450 + 150 and shown["ok"] is True
     job, history = burn_it(rig, "One", "Four", "Two")
     assert job.status == "done", job.error
     assert [(t["position"], t["title"], t["status"]) for t in history["tracks"]] == [(1, "One", "done"), (2, "Four", "skipped"), (3, "Two", "done")]
-    assert history["tracks"][1]["message"].startswith("WMA songs cannot be burned") and history["tracks"][1]["sectors"] is None
+    assert history["tracks"][1]["message"] == "Windows cannot read this kind of file (Four.wma)." and history["tracks"][1]["sectors"] is None
     assert len(rip_back(rig, 2)) == 2
 
 

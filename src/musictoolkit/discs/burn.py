@@ -12,7 +12,6 @@ like any other song.
 from __future__ import annotations
 
 import contextlib
-import math
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -175,16 +174,16 @@ def windows_song(path: str | Path, info: dict[str, Any] | None) -> SongCheck:
     path = Path(path)
     if not info or not info.get("ok"):
         return _cannot(path, str((info or {}).get("error") or "Windows could not say what is in this song."), via="windows")
-    rate, channels, seconds = int(info.get("rate") or 0), int(info.get("channels") or 0), float(info.get("seconds") or 0)
+    rate, channels, milliseconds = int(info.get("rate") or 0), int(info.get("channels") or 0), round(float(info.get("seconds") or 0) * 1000)
     kind = str(info.get("codec") or WINDOWS_DECODES.get(path.suffix.lower().lstrip(".")) or "")
     found: dict[str, Any] = {"rate": rate, "channels": channels, "format": kind, "subtype": "WINDOWS", "via": "windows"}
     if channels > CHANNELS:
         return _cannot(path, f"This song has {channels} channels; a music CD holds two (stereo).", **found)
     if rate <= 0 or channels <= 0:
         return _cannot(path, "Windows could not say what the sound in this song is like.", **found)
-    if seconds <= 0:
+    if milliseconds <= 0:
         return _cannot(path, "Windows could not say how long this song is.", **found)
-    out_frames = math.ceil(seconds * SAMPLE_RATE)
+    out_frames = -(-milliseconds * SAMPLE_RATE // 1000)  # (whole frames: the length is known to the millisecond)
     notes = [f"Decoded by Windows{f' ({kind})' if kind else ''} and made into CD sound."]
     if rate != SAMPLE_RATE:
         notes.append(f"Converted from {rate / 1000:g} kHz to 44.1 kHz.")
@@ -347,7 +346,9 @@ class AudioPlan:
 
     @property
     def scratch_bytes(self) -> int:
-        return self.song_sectors * SECTOR_BYTES
+        """The room the temporary copies take: every song as CD sound, and (one at a time) a song Windows decodes first, at worst as floating point."""
+        decoded = max((s.check.sectors for s in self.burnable if s.check.via == "windows"), default=0)
+        return self.song_sectors * SECTOR_BYTES + decoded * SECTOR_BYTES * 2
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -401,12 +402,20 @@ def fit_problem(disc_sectors: int, free_sectors: int) -> str | None:
 
 def plan_audio(
     songs: list[SongInput], media: dict[str, Any] | None, scratch: Path, *, gapless: bool = False, inspector: Callable[[str], SongCheck] = inspect_song,
+    windows: Callable[[list[str]], dict[str, SongCheck]] = check_with_windows,
 ) -> AudioPlan:
-    """Which of these songs can go on a music CD, how much of the disc they take, and whether the burn can start. Touches nothing.
-    Raises ValueError for a request that makes no sense (the message is fit for the person)."""
+    """Which of these songs can go on a music CD, how much of the disc they take, and whether the burn can start. Touches nothing but the disc
+    helper, which is asked once about the songs only Windows can decode (`windows`). Raises ValueError for a request that makes no sense (the
+    message is fit for the person)."""
     if not songs:
         raise ValueError("Choose some songs first.")
     planned = [PlannedSong(position, song, inspector(song.path)) for position, song in enumerate(songs, start=1)]
+    waiting = [p.check.path for p in planned if p.check.pending]
+    if waiting:
+        resolved = windows(waiting)
+        for one in planned:
+            if one.check.pending:
+                one.check = resolved.get(one.check.path) or _cannot(Path(one.check.path), "Windows could not say what is in this song.", via="windows")
     free = _scratch_free(scratch)
     plan = AudioPlan(songs=planned, free_sectors=None, scratch_free=free, problems=[], gapless=gapless)
     problems = plan.problems

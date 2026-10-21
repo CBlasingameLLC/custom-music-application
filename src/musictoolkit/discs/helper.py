@@ -10,10 +10,13 @@ A command that takes long may print {"event": "progress", "id": 1, "done": 3, "t
 
 Commands: drives; toc {drive}; read {drive, lba, count} (at most 16 sectors; "data" is base64 of 2352 bytes per sector);
 flush {drive, lba, count} (read and throw away, to push earlier data out of the drive's own cache); eject {drive}; close.
-Writing: media {drive} (what is in a recorder: its kind, whether it is blank, the room, the speeds it writes at); burn_audio {drive, tracks:
-[{path, sectors}], speed?, eject?} (raw CD sound the app converted; progress events count sectors, a stop cancels the write); burn_data {drive,
-label, label_iso, files: [{src, dest}], filesystems, speed?, eject?}; build_iso {label, label_iso, files, filesystems, out} (makes an image file,
-needs no drive, never replaces a file); erase {drive, full} (cannot be stopped).
+Writing: media {drive} (what is in a recorder: its kind, whether it is blank, the room, the speeds it writes at, whether a music CD can be written
+without gaps); burn_audio {drive, tracks: [{path, sectors}], speed?, gapless?, eject?} (raw CD sound the app converted; progress events count
+sectors, a stop cancels the write; gapless writes the whole disc in one go so that the songs run on from one another, otherwise the recorder leaves
+two seconds between them); burn_data {drive, label, label_iso, files: [{src, dest}], filesystems, speed?, eject?}; build_iso {label, label_iso,
+files, filesystems, out} (makes an image file, needs no drive, never replaces a file); erase {drive, full} (cannot be stopped).
+Songs the app's audio library cannot read: inspect {paths} (for each: whether Windows can decode it, and its kind, rate, channels and length); decode
+{src, out} (to a WAV file at out, which must not exist; progress events count the song's own time).
 Sector numbers (lba) count from the start of the first track, as Windows does; a disc's table of contents in MusicBrainz terms adds 150.
 """
 

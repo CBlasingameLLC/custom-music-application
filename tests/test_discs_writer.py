@@ -4,16 +4,18 @@ how the real helper has to answer. A disc that was burned can be read back, so w
 from __future__ import annotations
 
 import base64
+import io
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 
 import pytest
 
 from musictoolkit.discs import helper as disc_helper
 from musictoolkit.discs.helper import DiscError, DiscHelper
-from tests.fake_disc_helper import CD_BLANK_SECTORS, SECTOR_BYTES, add_drive, audio, audio_disc, blank_disc, set_control
+from tests.fake_disc_helper import CD_BLANK_SECTORS, SECTOR_BYTES, add_drive, audio, audio_disc, blank_disc, fake_song, set_control
 
 FAKE = Path(__file__).parent / "fake_disc_helper.py"
 
@@ -321,3 +323,76 @@ def test_a_rewritable_disc_is_erased_to_blank_and_a_disc_that_is_blank_already_s
         with pytest.raises(DiscError) as refused:
             helper.call("erase", drive="F:")
         assert refused.value.code == "unsupported"
+
+
+# ---------------------------------------------------------------------------------------- songs only Windows can decode
+
+
+def wav(sectors: int, rate: int = 44100, channels: int = 2) -> bytes:
+    out = io.BytesIO()
+    with wave.open(out, "wb") as sound:
+        sound.setnchannels(channels)
+        sound.setsampwidth(2)
+        sound.setframerate(rate)
+        sound.writeframes(audio(3, 0, sectors))
+    return out.getvalue()
+
+
+def test_windows_says_what_each_song_is_like_and_why_it_cannot_decode_the_ones_it_cannot(world: Path, tmp_path: Path) -> None:
+    aac = fake_song(tmp_path / "a.m4a", wav(300), b"FAKEAAC1")
+    wma = fake_song(tmp_path / "b.wma", wav(150, rate=22050, channels=1), b"FAKEWMA1")
+    locked = fake_song(tmp_path / "c.m4a", wav(300), b"FAKEDRM1")
+    junk = tmp_path / "d.m4a"
+    junk.write_bytes(b"no song")
+    paths = [str(aac), str(wma), str(locked), str(junk), str(tmp_path / "gone.m4a"), "relative.m4a"]
+    with start(world) as helper:
+        songs = {s["path"]: s for s in helper.call("inspect", paths=paths)["songs"]}
+    assert list(songs) == paths
+    assert songs[str(aac)] == {"path": str(aac), "ok": True, "codec": "AAC", "rate": 44100, "channels": 2, "bits": 16, "seconds": round(300 * 588 / 44100, 3)}
+    assert (songs[str(wma)]["codec"], songs[str(wma)]["rate"], songs[str(wma)]["channels"]) == ("WMA", 22050, 1)
+    assert [(songs[p]["ok"], songs[p]["code"]) for p in paths[2:]] == [(False, "unsupported"), (False, "unsupported"), (False, "failed"), (False, "failed")]
+    assert "copy-protected" in songs[str(locked)]["error"] and "gone.m4a is not there" in songs[str(tmp_path / "gone.m4a")]["error"]
+
+
+def test_windows_decodes_a_song_to_a_wav_file_and_reports_how_far_it_is(world: Path, tmp_path: Path) -> None:
+    song = fake_song(tmp_path / "a.m4a", wav(400))
+    out = tmp_path / "a.wav"
+    seen: list[dict] = []
+    with start(world) as helper:
+        done = helper.call("decode", src=str(song), out=str(out), on_event=seen.append)
+    assert done["rate"] == 44100 and done["channels"] == 2 and done["frames"] == 400 * 588 and out.read_bytes() == wav(400)
+    assert seen and seen[-1]["done"] == seen[-1]["total"] and not Path(str(out) + ".part").exists()
+
+
+def test_a_song_is_decoded_only_to_a_wav_file_that_is_not_there_yet(world: Path, tmp_path: Path) -> None:
+    song = fake_song(tmp_path / "a.m4a", wav(400))
+    taken = tmp_path / "taken.wav"
+    taken.write_bytes(b"mine")
+    with start(world) as helper:
+        for out in (tmp_path / "no-extension", tmp_path / "missing" / "x.wav", "relative.wav", taken):
+            with pytest.raises(DiscError) as refused:
+                helper.call("decode", src=str(song), out=str(out))
+            assert refused.value.code == "failed", out
+    assert taken.read_bytes() == b"mine"
+
+
+def test_a_decode_that_is_stopped_leaves_nothing_behind(world: Path, tmp_path: Path) -> None:
+    song = fake_song(tmp_path / "a.m4a", wav(600))
+    out = tmp_path / "a.wav"
+    set_control(world, decode_slow=0.3)
+    with start(world) as helper:
+        threading.Timer(0.4, helper.cancel).start()
+        with pytest.raises(DiscError) as stopped:
+            helper.call("decode", src=str(song), out=str(out))
+        assert stopped.value.code == "cancelled" and not out.exists() and not Path(str(out) + ".part").exists()
+        assert helper.call("drives") is not None
+
+
+def test_a_windows_without_its_decoders_refuses_every_song(world: Path, tmp_path: Path) -> None:
+    song = fake_song(tmp_path / "a.m4a", wav(400))
+    set_control(world, no_decoder=True)
+    with start(world) as helper:
+        assert helper.call("inspect", paths=[str(song)])["songs"][0]["ok"] is False
+        with pytest.raises(DiscError) as refused:
+            helper.call("decode", src=str(song), out=str(tmp_path / "a.wav"))
+    assert refused.value.code == "unsupported" and "Media Feature Pack" in str(refused.value)
