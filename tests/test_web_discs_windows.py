@@ -307,6 +307,81 @@ def test_a_song_windows_does_not_decode_is_prepared_over_the_whole_of_its_progre
     assert percents[:3] == [0, 50, 100]  # (with nothing for Windows to do first, the conversion is the whole of the song's progress)
 
 
+def test_the_job_lets_go_of_its_helper_before_it_writes_the_history_and_forgets_the_listing(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    found = media(rig)
+    songs = [SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "let-go", found)
+    closed: list[int] = []
+    seen: dict[str, tuple[int, bool]] = {}
+    real_close, real_finish, real_forget = disc_helper.DiscHelper.close, burnjob.store.finish_burn, disc_helper.forget_listing
+
+    def closing(self):
+        closed.append(1)
+        return real_close(self)
+
+    def finishing(*args, **kwargs):
+        seen["history written"] = (disc_helper._in_use, bool(closed))
+        return real_finish(*args, **kwargs)
+
+    def forgetting():
+        seen["listing forgotten"] = (disc_helper._in_use, bool(closed))
+        return real_forget()
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "close", closing)
+    monkeypatch.setattr(burnjob.store, "finish_burn", finishing)
+    monkeypatch.setattr(disc_helper, "forget_listing", forgetting)
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="let-go", burn_id=burn_id, scratch=scratch(rig), handle=Handle())
+    # by then the drive is claimed by no one and the helper is closed: what looks at the drives next starts a helper of its own, with this one gone
+    assert seen == {"history written": (0, True), "listing forgotten": (0, True)}
+
+
+def test_what_the_decoder_says_of_its_progress_is_not_taken_at_its_word(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_song(rig, "Four", 14, 400)
+    found = media(rig)
+    songs = [SongInput(str(rig.music / "Burner" / "Mix" / "Four.m4a"), "Four", "Burner", rig.ids["Four"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "odd-events", found)
+    real = disc_helper.DiscHelper.call
+
+    def spy(self, cmd, **args):
+        got = real(self, cmd, **args)
+        if cmd == "decode":
+            for odd in ({"done": 5, "total": 0}, {"done": 300, "total": 100}):  # (nothing to measure it by; and more done than there is)
+                args["on_event"](odd)
+        return got
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "call", spy)
+    handle = Handle()
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="odd-events", burn_id=burn_id, scratch=scratch(rig), handle=handle)
+    percents = [int(m.group(1)) for u in handle.updates if (m := re.search(r"Preparing song 1 of 1: Four \((\d+)%\)", str(u.get("message", ""))))]
+    assert percents == sorted(percents) and max(percents) == 100  # (never over the whole, and never back)
+
+
+def test_one_helper_serves_the_whole_job_however_many_songs_windows_decodes(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    four, five = windows_song(rig, "Four", 14, 400), windows_song(rig, "Five", 15, 400, extension="wma", kind=b"FAKEWMA1")
+    found = media(rig)
+    songs = [SongInput(str(four), "Four", "Burner", rig.ids["Four"]), SongInput(str(five), "Five", "Burner", rig.ids["Five"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "one-helper", found)
+    started: list[int] = []
+    real_start = disc_helper.DiscHelper.start
+
+    def starting(self):
+        started.append(1)
+        return real_start(self)
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "start", starting)
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="one-helper", burn_id=burn_id, scratch=scratch(rig), handle=Handle())
+    assert len(started) == 1  # (two songs decoded, the disc looked at and written: one helper process, started when first needed, however it would be started)
+
+
 def test_the_decoded_copy_of_a_song_is_removed_before_the_next_song_is_decoded(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     four, five = windows_song(rig, "Four", 14, 400), windows_song(rig, "Five", 15, 400, extension="wma", kind=b"FAKEWMA1")
     found = media(rig)
