@@ -16,7 +16,7 @@ import pytest
 from musictoolkit.discs import burn, burnjob, store
 from musictoolkit.discs import helper as disc_helper
 from musictoolkit.discs.burn import SongInput
-from musictoolkit.discs.helper import DiscUnavailable
+from musictoolkit.discs.helper import DiscError, DiscUnavailable
 from tests import test_web_discs_burn as base
 from tests.conftest import ids_by_title
 from tests.fake_disc_helper import audio, fake_song, set_control
@@ -174,6 +174,43 @@ def test_a_helper_that_cannot_be_asked_leaves_the_songs_it_would_decode_unburnab
     assert burn.check_with_windows([]) == {}
 
 
+def test_a_helper_that_answers_with_an_error_leaves_the_songs_unburnable_in_words_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class Refusing:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def call(self, cmd, **args):
+            raise DiscError("failed", "The helper could not look at the songs.")
+
+    monkeypatch.setattr(burn, "DiscHelper", Refusing)
+    song = str(tmp_path / "a.m4a")
+    got = burn.check_with_windows([song])
+    assert (got[song].verdict, got[song].via, got[song].sectors) == ("cannot", "windows", 0)
+    assert got[song].notes == ["Windows could not be asked to decode this song (The helper could not look at the songs)."]
+
+
+def test_a_song_the_helper_says_nothing_about_is_one_that_cannot_be_burned_never_one_that_is_guessed_at(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class Forgetful:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def call(self, cmd, **args):
+            assert cmd == "inspect"
+            return {"songs": [{"path": args["paths"][0], "ok": True, "codec": "AAC", "rate": 44100, "channels": 2, "seconds": 5.0}]}  # (and not a word about the others)
+
+    monkeypatch.setattr(burn, "DiscHelper", Forgetful)
+    told, not_told = str(tmp_path / "a.m4a"), str(tmp_path / "b.m4a")
+    got = burn.check_with_windows([told, not_told])
+    assert got[told].verdict == "converted"
+    assert (got[not_told].verdict, got[not_told].via, got[not_told].sectors, got[not_told].notes) == ("cannot", "windows", 0, ["Windows could not say what is in this song."])
+
+
 def test_what_the_plan_asks_windows_is_settled_before_the_plan_is_made(rig, tmp_path: Path) -> None:
     four = windows_song(rig, "Four", 14, 400)
     songs = [SongInput(str(four), "Four", "Burner", rig.ids["Four"]), SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
@@ -192,6 +229,18 @@ def test_what_the_plan_asks_windows_is_settled_before_the_plan_is_made(rig, tmp_
     assert plan.scratch_bytes == plan.song_sectors * 2352
     big = burn.plan_audio(songs, media(rig), scratch(rig), windows=lambda paths: {paths[0]: burn.windows_song(paths[0], {"ok": True, "rate": 44100, "channels": 2, "seconds": 10.0})})
     assert big.scratch_bytes == big.song_sectors * 2352 + big.songs[0].check.sectors * 2352 * 2
+
+
+def test_the_room_for_temporary_copies_counts_the_biggest_decoded_copy_only_as_each_is_removed_before_the_next(rig) -> None:
+    four = windows_song(rig, "Four", 14, 400)
+    five = windows_song(rig, "Five", 15, 400, extension="wma", kind=b"FAKEWMA1")
+    songs = [SongInput(str(four), "Four", "Burner", rig.ids["Four"]), SongInput(str(five), "Five", "Burner", rig.ids["Five"]),
+             SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
+    lasting = {str(four): 10.0, str(five): 30.0}
+    plan = burn.plan_audio(songs, media(rig), scratch(rig), windows=lambda paths: {p: burn.windows_song(p, {"ok": True, "rate": 44100, "channels": 2, "seconds": lasting[p]}) for p in paths})
+    decoded = sorted(s.check.sectors for s in plan.songs if s.check.via == "windows")
+    assert len(decoded) == 2 and 0 < decoded[0] < decoded[1]
+    assert plan.scratch_bytes == plan.song_sectors * 2352 + decoded[1] * 2352 * 2  # (not both of them: the copy of one song is gone before the next is decoded)
 
 
 # ---------------------------------------------------------------------------------------- the job

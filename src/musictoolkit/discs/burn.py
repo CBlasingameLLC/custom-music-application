@@ -118,7 +118,7 @@ class SongCheck:
     @property
     def pending(self) -> bool:
         """Windows has still to be asked what this song is like (see `windows_song`)."""
-        return self.via == "windows" and self.verdict == "pending"
+        return self.verdict == "pending"
 
     @property
     def exact(self) -> bool:

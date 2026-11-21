@@ -167,8 +167,10 @@ A burn cannot be undone, and one that is stopped or fails once it has begun writ
      refused, and a 24-bit or floating-point song is reduced to 16 bits (with dither). Any other song (Apple Lossless, APE ...) is listed as
      *Cannot be burned* rather than skipped silently. **Between songs** you choose *no gap* (the whole disc is written in one go, so each song
      begins where the one before ends: right for live albums and mixes; it is the default, switchable in Settings, and offered only where the
-     recorder can do it) or *two seconds of silence* (the songs written one by one, the way Windows' track-at-once burning does). At most 99 songs,
-     and about 80 minutes on a CD-R. Only a blank CD-R or CD-RW can take a music CD. It is **not** read back afterwards: listen to it once.
+     recorder can do it) or *two seconds of silence* (the songs written one by one, the way Windows' track-at-once burning does). *No gap* means that
+     the burn adds nothing between the songs; what a song has at its own ends stays: an AAC song comes out of Windows' decoder a little longer than
+     it is (the format's lead-in and padding are kept: a tenth of a second at most in the check files), so AAC songs do not run on quite as cleanly as FLAC or WAV ones.
+     At most 99 songs, and about 80 minutes on a CD-R. Only a blank CD-R or CD-RW can take a music CD. It is **not** read back afterwards: listen to it once.
    - *Data disc*: the song files as they are, for a computer, an MP3 player or a car stereo that reads files, on a CD, DVD or Blu-ray disc. The
      layout is the folders of your library, or one numbered folder (best for car stereos). File and folder names are made safe for every disc
      format (ISO 9660, Joliet, and UDF on discs bigger than a CD), and two files that would end up with the same name are told apart. The disc is

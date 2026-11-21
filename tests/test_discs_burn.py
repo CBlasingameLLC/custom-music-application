@@ -134,6 +134,18 @@ def test_what_windows_says_of_a_song_becomes_its_check(tmp_path: Path) -> None:
     assert check.seconds == pytest.approx(215.3, abs=0.02) and check.notes == ["Decoded by Windows (AAC) and made into CD sound."]
 
 
+def test_a_length_between_two_frames_is_rounded_up_to_the_next_never_down(tmp_path: Path) -> None:
+    # 10.001 seconds is 441,044.1 frames of 44.1 kHz sound: the plan must not be a frame short of what Windows will decode
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=10.001))
+    assert round(check.seconds * burn.SAMPLE_RATE) == 441_045
+
+
+def test_a_song_whose_codec_windows_does_not_name_is_named_by_its_file_extension(tmp_path: Path) -> None:
+    for name, kind in [("a.wma", "WMA"), ("a.m4a", "M4A"), ("a.aac", "AAC")]:
+        for found in (windows_says(codec=""), {k: v for k, v in windows_says().items() if k != "codec"}):
+            assert burn.windows_song(tmp_path / name, found).notes[0] == f"Decoded by Windows ({kind}) and made into CD sound."
+
+
 def test_a_song_windows_decodes_at_another_rate_or_in_mono_says_so(tmp_path: Path) -> None:
     check = burn.windows_song(tmp_path / "a.wma", windows_says(codec="WMA", rate=22050, channels=1, seconds=10.0))
     assert check.notes == ["Decoded by Windows (WMA) and made into CD sound.", "Converted from 22.05 kHz to 44.1 kHz.", "Mono: both speakers get the same sound."]
@@ -143,6 +155,13 @@ def test_a_song_windows_decodes_at_another_rate_or_in_mono_says_so(tmp_path: Pat
 def test_a_short_song_windows_decodes_is_given_its_four_seconds_and_says_so(tmp_path: Path) -> None:
     check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=1.0))
     assert check.sectors == MIN_SECTORS and check.notes[-1] == "Shorter than four seconds: silence is added to make four, as a music CD needs."
+
+
+@pytest.mark.parametrize("seconds,short,sectors", [(3.999, True, MIN_SECTORS), (4.0, False, MIN_SECTORS), (4.001, False, MIN_SECTORS + 1)])
+def test_the_four_second_note_is_for_songs_shorter_than_four_seconds_and_no_others(tmp_path: Path, seconds: float, short: bool, sectors: int) -> None:
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=seconds))
+    assert ("Shorter than four seconds: silence is added to make four, as a music CD needs." in check.notes) is short
+    assert check.sectors == sectors
 
 
 def test_a_song_windows_cannot_decode_is_refused_in_the_words_windows_gave(tmp_path: Path) -> None:
@@ -526,7 +545,7 @@ def test_a_real_folder_of_real_songs_is_planned_end_to_end(tmp_path: Path) -> No
 def test_forgetting_a_burns_scratch_removes_that_batch_only(tmp_path: Path) -> None:
     folder = tmp_path / "burn"
     folder.mkdir()
-    for name in ("abc-01.pcm", "abc-02.pcm", "xyz-01.pcm"):
+    for name in ("abc-01.pcm", "abc-02.pcm", "abc-01.wav", "abc-03.wav.part", "xyz-01.pcm"):  # (a song, and what Windows decoded of one: finished or begun)
         (folder / name).write_bytes(b"1234")
     burn.forget_scratch(folder, "abc")
     assert sorted(p.name for p in folder.iterdir()) == ["xyz-01.pcm"]
