@@ -263,6 +263,72 @@ def test_while_windows_decodes_a_song_the_progress_goes_through_both_halves(rig)
     assert len(first_half) >= 4  # (the stand-in reports a quarter at a time)
 
 
+def test_the_conversion_of_a_decoded_song_is_the_second_half_of_its_progress_not_a_new_start(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows_song(rig, "Four", 14, 400)
+    found = media(rig)
+    songs = [SongInput(str(rig.music / "Burner" / "Mix" / "Four.m4a"), "Four", "Burner", rig.ids["Four"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "second-half", found)
+    real = burn.decode_to_pcm
+
+    def converting(source, target, **kwargs):
+        for done in (0, 50, 100):  # (the conversion, at its start, half way and done, said by the test: the real one reports only now and then)
+            kwargs["on_progress"](done, 100)
+        return real(source, target, **kwargs)
+
+    monkeypatch.setattr(burn, "decode_to_pcm", converting)
+    handle = Handle()
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="second-half", burn_id=burn_id, scratch=scratch(rig), handle=handle)
+    percents = [int(m.group(1)) for u in handle.updates if (m := re.search(r"Preparing song 1 of 1: Four \((\d+)%\)", str(u.get("message", ""))))]
+    end_of_decoding = percents.index(50)
+    assert percents[end_of_decoding : end_of_decoding + 4] == [50, 50, 75, 100]  # (decoding ends at half; converting then goes from half to the whole, and never back to the start)
+
+
+def test_a_song_windows_does_not_decode_is_prepared_over_the_whole_of_its_progress(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    found = media(rig)
+    songs = [SongInput(str(rig.music / "Burner" / "Mix" / "One.flac"), "One", "Burner", rig.ids["One"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "whole", found)
+    real = burn.decode_to_pcm
+
+    def converting(source, target, **kwargs):
+        for done in (0, 50, 100):  # (said by the test, at the start, half way and done: the real conversion reports only now and then)
+            kwargs["on_progress"](done, 100)
+        return real(source, target, **kwargs)
+
+    monkeypatch.setattr(burn, "decode_to_pcm", converting)
+    handle = Handle()
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="whole", burn_id=burn_id, scratch=scratch(rig), handle=handle)
+    percents = [int(m.group(1)) for u in handle.updates if (m := re.search(r"Preparing song 1 of 1: One \((\d+)%\)", str(u.get("message", ""))))]
+    assert percents[:3] == [0, 50, 100]  # (with nothing for Windows to do first, the conversion is the whole of the song's progress)
+
+
+def test_the_decoded_copy_of_a_song_is_removed_before_the_next_song_is_decoded(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    four, five = windows_song(rig, "Four", 14, 400), windows_song(rig, "Five", 15, 400, extension="wma", kind=b"FAKEWMA1")
+    found = media(rig)
+    songs = [SongInput(str(four), "Four", "Burner", rig.ids["Four"]), SongInput(str(five), "Five", "Burner", rig.ids["Five"])]
+    plan = burn.plan_audio(songs, found, scratch(rig))
+    request = burnjob.AudioRequest(drive="E:", eject=False)
+    with rig.ctx.db() as conn:
+        burn_id = burnjob.begin_audio(conn, plan, request, "tidy", found)
+    copies_there_when_a_song_is_decoded: list[list[str]] = []
+    real = disc_helper.DiscHelper.call
+
+    def spy(self, cmd, **args):
+        if cmd == "decode":
+            copies_there_when_a_song_is_decoded.append(sorted(p.name for p in scratch(rig).glob("tidy-*.wav")))
+        return real(self, cmd, **args)
+
+    monkeypatch.setattr(disc_helper.DiscHelper, "call", spy)
+    burnjob.run_audio(db=rig.ctx.db, plan=plan, request=request, batch_id="tidy", burn_id=burn_id, scratch=scratch(rig), handle=Handle())
+    assert copies_there_when_a_song_is_decoded == [[], []]  # (two songs were decoded, and neither found the copy of the other: one at a time is all the room planned for)
+    assert list(scratch(rig).glob("tidy-*")) == []  # (and nothing is left at the end)
+
+
 def test_stopping_while_windows_decodes_a_song_leaves_the_disc_as_it_was(rig) -> None:
     windows_song(rig, "Four", 14, 400)
     set_control(rig.world, decode_slow=0.3)
