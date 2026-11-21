@@ -85,7 +85,7 @@ def wait_until(rig, job_id: str, words: str) -> None:
 
 def test_the_options_say_what_data_discs_start_with_and_where_images_go(rig) -> None:
     got = rig.client.get("/api/discs/options").json()
-    assert got["burn"] == {"eject": True, "verify": True} and got["iso_folder"] == str(rig.home / "Downloads")
+    assert got["burn"] == {"eject": True, "verify": True, "gapless": True} and got["iso_folder"] == str(rig.home / "Downloads")
     assert rig.client.put("/api/settings", json={"disc": {"burn_verify": False}}).json()["disc"]["burn_verify"] is False
     assert rig.client.get("/api/discs/options").json()["burn"]["verify"] is False
 

@@ -100,12 +100,87 @@ def test_more_than_two_channels_is_refused_in_words(tmp_path: Path, channels: in
     assert check.notes == [f"This song has {channels} channels; a music CD holds two (stereo)."]
 
 
-@pytest.mark.parametrize("extension,named", [("m4a", "M4A"), ("wma", "WMA"), ("aac", "AAC"), ("ape", "APE")])
+@pytest.mark.parametrize("extension,named", [("ape", "APE"), ("alac", "ALAC"), ("m4p", "Copy-protected M4P"), ("wv", "WavPack"), ("dsf", "DSD")])
 def test_formats_that_are_not_supported_yet_are_named_not_silently_skipped(tmp_path: Path, extension: str, named: str) -> None:
     path = tmp_path / f"a.{extension}"
     path.write_bytes(b"not audio libsndfile knows" * 100)
     check = inspect_song(path)
-    assert check.verdict == "cannot" and check.notes == [f"{named} songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg and Opus can."]
+    assert check.verdict == "cannot" and check.notes == [f"{named} songs cannot be burned to a music CD yet. MP3, FLAC, WAV, Ogg, Opus, M4A, AAC and WMA can."]
+
+
+@pytest.mark.parametrize("extension,named", [("m4a", "M4A"), ("mp4", "MP4"), ("aac", "AAC"), ("wma", "WMA"), ("WMA", "WMA")])
+def test_songs_only_windows_can_decode_wait_for_windows_to_say_what_they_are_like(tmp_path: Path, extension: str, named: str) -> None:
+    path = tmp_path / f"a.{extension}"
+    path.write_bytes(b"not audio libsndfile knows" * 100)
+    check = inspect_song(path)
+    assert (check.verdict, check.via, check.format, check.pending, check.sectors, check.exact) == ("pending", "windows", named, True, 0, False)
+    assert check.notes == []
+
+
+def test_a_song_the_audio_library_reads_is_never_sent_to_windows_whatever_it_is_called(tmp_path: Path) -> None:
+    path = song(tmp_path, "really-a-wav.m4a", noise(FIVE_SECONDS), subtype="PCM_16", format="WAV")
+    check = inspect_song(path)
+    assert (check.verdict, check.via, check.exact) == ("ok", "", True)
+
+
+def windows_says(**found) -> dict:
+    return {"ok": True, "codec": "AAC", "rate": 44100, "channels": 2, "bits": 16, "seconds": 215.3, **found}
+
+
+def test_what_windows_says_of_a_song_becomes_its_check(tmp_path: Path) -> None:
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says())
+    assert (check.verdict, check.via, check.format, check.rate, check.channels, check.exact) == ("converted", "windows", "AAC", 44100, 2, False)
+    assert check.sectors == -(-9_494_730 // FRAMES_PER_SECTOR) == 16148  # 215.3 seconds of 44.1 kHz frames, in whole sectors
+    assert check.seconds == pytest.approx(215.3, abs=0.02) and check.notes == ["Decoded by Windows (AAC) and made into CD sound."]
+
+
+def test_a_length_between_two_frames_is_rounded_up_to_the_next_never_down(tmp_path: Path) -> None:
+    # 10.001 seconds is 441,044.1 frames of 44.1 kHz sound: the plan must not be a frame short of what Windows will decode
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=10.001))
+    assert round(check.seconds * burn.SAMPLE_RATE) == 441_045
+
+
+def test_a_song_whose_codec_windows_does_not_name_is_named_by_its_file_extension(tmp_path: Path) -> None:
+    for name, kind in [("a.wma", "WMA"), ("a.m4a", "M4A"), ("a.aac", "AAC")]:
+        for found in (windows_says(codec=""), {k: v for k, v in windows_says().items() if k != "codec"}):
+            assert burn.windows_song(tmp_path / name, found).notes[0] == f"Decoded by Windows ({kind}) and made into CD sound."
+
+
+def test_a_song_windows_decodes_at_another_rate_or_in_mono_says_so(tmp_path: Path) -> None:
+    check = burn.windows_song(tmp_path / "a.wma", windows_says(codec="WMA", rate=22050, channels=1, seconds=10.0))
+    assert check.notes == ["Decoded by Windows (WMA) and made into CD sound.", "Converted from 22.05 kHz to 44.1 kHz.", "Mono: both speakers get the same sound."]
+    assert check.sectors == 750
+
+
+def test_a_short_song_windows_decodes_is_given_its_four_seconds_and_says_so(tmp_path: Path) -> None:
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=1.0))
+    assert check.sectors == MIN_SECTORS and check.notes[-1] == "Shorter than four seconds: silence is added to make four, as a music CD needs."
+
+
+@pytest.mark.parametrize("seconds,short,sectors", [(3.999, True, MIN_SECTORS), (4.0, False, MIN_SECTORS), (4.001, False, MIN_SECTORS + 1)])
+def test_the_four_second_note_is_for_songs_shorter_than_four_seconds_and_no_others(tmp_path: Path, seconds: float, short: bool, sectors: int) -> None:
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(seconds=seconds))
+    assert ("Shorter than four seconds: silence is added to make four, as a music CD needs." in check.notes) is short
+    assert check.sectors == sectors
+
+
+def test_a_song_windows_cannot_decode_is_refused_in_the_words_windows_gave(tmp_path: Path) -> None:
+    said = {"ok": False, "code": "unsupported", "error": "Windows has no decoder for the sound in a.m4a."}
+    check = burn.windows_song(tmp_path / "a.m4a", said)
+    assert (check.verdict, check.sectors, check.via, check.notes) == ("cannot", 0, "windows", ["Windows has no decoder for the sound in a.m4a."])
+    nothing = burn.windows_song(tmp_path / "a.m4a", None)
+    assert (nothing.verdict, nothing.notes) == ("cannot", ["Windows could not say what is in this song."])
+
+
+@pytest.mark.parametrize("found,said", [
+    ({"channels": 6}, "This song has 6 channels; a music CD holds two (stereo)."),
+    ({"seconds": 0}, "Windows could not say how long this song is."),
+    ({"rate": 0}, "Windows could not say what the sound in this song is like."),
+    ({"channels": 0}, "Windows could not say what the sound in this song is like."),
+])
+def test_a_song_windows_cannot_describe_is_not_guessed_at(tmp_path: Path, found: dict, said: str) -> None:
+    check = burn.windows_song(tmp_path / "a.m4a", windows_says(**found))
+    assert (check.verdict, check.sectors, check.notes) == ("cannot", 0, [said])
 
 
 def test_a_file_that_is_missing_unreadable_or_silent_is_refused_in_words(tmp_path: Path) -> None:
@@ -271,14 +346,17 @@ def test_a_stop_leaves_no_file_behind(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_a_song_that_cannot_be_read_is_refused_with_its_name_and_leaves_nothing(tmp_path: Path) -> None:
-    broken, wma = tmp_path / "broken.mp3", tmp_path / "w.wma"
+    broken, ape, wma = tmp_path / "broken.mp3", tmp_path / "w.ape", tmp_path / "w.wma"
     broken.write_bytes(b"\0" * 3000)
+    ape.write_bytes(b"x" * 100)
     wma.write_bytes(b"x" * 100)
     with pytest.raises(BurnError, match=r"^broken\.mp3: The song cannot be read"):
         decode_to_pcm(broken, tmp_path / "broken.pcm")
-    with pytest.raises(BurnError, match=r"^w\.wma: WMA songs cannot be burned"):
-        decode_to_pcm(wma, tmp_path / "w.pcm")
-    assert not (tmp_path / "broken.pcm").exists() and not (tmp_path / "w.pcm").exists()
+    with pytest.raises(BurnError, match=r"^w\.ape: APE songs cannot be burned"):
+        decode_to_pcm(ape, tmp_path / "w.pcm")
+    with pytest.raises(BurnError, match=r"^w\.wma: this song has to be decoded by Windows first\.$"):
+        decode_to_pcm(wma, tmp_path / "wma.pcm")  # (the job has Windows decode it first and hands this the WAV it made)
+    assert not (tmp_path / "broken.pcm").exists() and not (tmp_path / "w.pcm").exists() and not (tmp_path / "wma.pcm").exists()
 
 
 def test_running_out_of_room_for_the_temporary_copy_is_said_in_words(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -467,7 +545,7 @@ def test_a_real_folder_of_real_songs_is_planned_end_to_end(tmp_path: Path) -> No
 def test_forgetting_a_burns_scratch_removes_that_batch_only(tmp_path: Path) -> None:
     folder = tmp_path / "burn"
     folder.mkdir()
-    for name in ("abc-01.pcm", "abc-02.pcm", "xyz-01.pcm"):
+    for name in ("abc-01.pcm", "abc-02.pcm", "abc-01.wav", "abc-03.wav.part", "xyz-01.pcm"):  # (a song, and what Windows decoded of one: finished or begun)
         (folder / name).write_bytes(b"1234")
     burn.forget_scratch(folder, "abc")
     assert sorted(p.name for p in folder.iterdir()) == ["xyz-01.pcm"]

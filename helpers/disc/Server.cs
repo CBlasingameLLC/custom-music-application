@@ -204,7 +204,8 @@ namespace MusicToolkit.Disc
                 case "media":
                     return Ok(Imapi.Media(Text(request, "drive")));
                 case "burn_audio":
-                    return Ok(Imapi.BurnAudio(Text(request, "drive"), Tracks(request), (int)Whole(Get(request, "speed"), 0), call));
+                    return Ok(Imapi.BurnAudio(
+                        Text(request, "drive"), Tracks(request), (int)Whole(Get(request, "speed"), 0), Get(request, "gapless") is bool && (bool)Get(request, "gapless"), call));
                 case "burn_data":
                     return Ok(Imapi.BurnData(
                         Text(request, "drive"), Text(request, "label"), Text(request, "label_iso"), Files(request), Strings(Get(request, "filesystems")),
@@ -212,10 +213,17 @@ namespace MusicToolkit.Disc
                 case "build_iso":
                     return Ok(Imapi.BuildIso(
                         Text(request, "label"), Text(request, "label_iso"), Files(request), Strings(Get(request, "filesystems")), Text(request, "out"), call));
+                case "inspect":
+                    return Ok(new Dictionary<string, object> { { "songs", Decoder.Inspect(Strings(Get(request, "paths"))) } });
+                case "decode":
+                    return Ok(Decoder.Decode(Text(request, "src"), Text(request, "out"), call));
                 case "erase":
                     return Ok(Imapi.Erase(Text(request, "drive"), Get(request, "full") is bool && (bool)Get(request, "full"), call));
                 case "imapi_probe" when testing:
                     return Ok(Imapi.Probe());
+                case "raw_image" when testing:
+                    return Ok(Imapi.RawProbe(
+                        Tracks(request), (int)Whole(Get(request, "type"), 1), Get(request, "property") is bool && (bool)Get(request, "property"), Text(request, "out"), call));
                 case "ticks" when testing:
                     return Ticks((int)Whole(Get(request, "n"), 3), call);
                 case "wait" when testing:

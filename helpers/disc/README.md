@@ -29,8 +29,10 @@ Windows.
 | `read {drive, lba, count}` | `{"sectors": 16, "data": "<base64 of 2352 bytes a sector>"}`, at most 16 sectors. |
 | `flush {drive, lba, count}` | Reads up to 4096 sectors and throws them away, to push what the drive remembers of an earlier read out of its own memory. Sectors that cannot be read do not matter and are passed over. |
 | `eject {drive}` | Opens the tray. |
-| `media {drive}` | What the disc in a recorder is, as far as writing goes: `{"writer": true, "writes": ["CD-R", "CD-RW", "DVD+R", ...], "state": "none" \| "blank" \| "written" \| "unusable", "type": "CD-R", "rewritable": false, "blank": true, "protected": false, "capacity_sectors": 359846, "free_sectors": 359846, "can_audio": true, "speeds": [{"speed": 600, "label": "8x"}, ...], "root": "E:\\"}`. `speed` is in sectors a second, as IMAPI counts it; `root` (present when the disc has something on it) is where its files can be read. |
-| `burn_audio {drive, tracks: [{path, sectors}], speed}` | Writes a music CD, song by song. Each `path` is a file of raw CD audio (44.1 kHz, 16 bit, stereo, whole sectors of 2352 bytes, at least 300 of them); the two seconds between songs are added by the recorder. Reports progress in sectors of the disc. Blank CD-R or CD-RW only. |
+| `media {drive}` | What the disc in a recorder is, as far as writing goes: `{"writer": true, "writes": ["CD-R", "CD-RW", "DVD+R", ...], "state": "none" \| "blank" \| "written" \| "unusable", "type": "CD-R", "rewritable": false, "blank": true, "protected": false, "capacity_sectors": 359846, "free_sectors": 359846, "can_audio": true, "gapless": true, "speeds": [{"speed": 600, "label": "8x"}, ...], "root": "E:\\"}`. `speed` is in sectors a second, as IMAPI counts it; `root` (present when the disc has something on it) is where its files can be read. |
+| `burn_audio {drive, tracks: [{path, sectors}], speed, gapless}` | Writes a music CD. Each `path` is a file of raw CD audio (44.1 kHz, 16 bit, stereo, whole sectors of 2352 bytes, at least 300 of them). Song by song (`gapless` absent or false) the recorder adds two seconds of silence between the songs; with `gapless` true the whole disc is laid out first and written in one go (disc at once) so that each song begins where the one before ends. Reports progress in sectors of the disc. Blank CD-R or CD-RW only. |
+| `inspect {paths}` | `{"songs": [{"path", "ok": true, "codec": "AAC", "rate": 44100, "channels": 2, "bits": 16, "seconds": 215.3} \| {"path", "ok": false, "code", "error"}]}`: for songs the audio library in Python cannot read (M4A, AAC, WMA), whether Windows can decode each, and what it is like. One song that cannot be read does not spoil the answer for the others. |
+| `decode {src, out}` | Decodes a song to a WAV file at `out` (an absolute path ending in `.wav`, in a folder that exists, that is not a file already): 16-bit whole numbers where the decoder gives them, otherwise floating point, at the rate and with the channels the decoder gives. Written as `out.part` and renamed when whole; a stop or a failure removes it. Progress counts the song's own time (units of 100 nanoseconds). |
 | `burn_data {drive, label, label_iso, files: [{src, dest}], filesystems, speed}` | Writes the files to a data disc and closes it. `dest` is a path inside the disc with `/` between the names; `filesystems` is some of `iso9660`, `joliet`, `udf`. Refused before anything is written if the files do not fit. |
 | `build_iso {label, label_iso, files, filesystems, out}` | The same image as an ISO file at `out` (an absolute path ending in `.iso`, in a folder that exists, that is not a file already). Needs no drive. The file is written as `out.part` and renamed when it is whole; a stop or a failure removes it. |
 | `erase {drive, full}` | Erases a rewritable disc (CD-RW, DVD-RW). Cannot be stopped once it has begun. |
@@ -49,8 +51,9 @@ A request that takes long may print `{"event":"progress","id":3,"done":1,"total"
 that arrives before its request has begun stops it when it does; one that arrives after the answer is forgotten.
 
 With `MTK_DISC_TEST=1` in its environment the program also answers `ticks {n}` (n progress lines), `wait {ms}` (a wait that can be
-stopped), `crash` and `imapi_probe` (whether each IMAPI component can be made); `scripts/check_disc_helper.py` uses them. They open no
-drive.
+stopped), `crash`, `imapi_probe` (whether each IMAPI component can be made) and `raw_image {tracks, type, property, out}` (lays songs out as
+the image of a whole disc, the way a burn without gaps does, and says what IMAPI made of them; with `out` the image itself is written there);
+`scripts/check_disc_helper.py` uses them. They open no drive.
 
 ## What it opens
 
@@ -96,6 +99,11 @@ are needed.
 - **A music CD** is written with the track-at-once format: `PrepareMedia`, one `AddAudioTrack` for every song, `ReleaseMedia` (which
   closes the disc). IMAPI puts two seconds of silence between songs and pads a song shorter than four seconds. It is refused before
   `PrepareMedia` if the disc is not blank (`not_blank`), is write-protected or closed (`write_protected`) or is too small (`no_space`).
+- **A music CD without gaps** is written disc at once: the whole disc is laid out first by IMAPI's raw image maker (`IMAPI2.MsftRawCDImageCreator`,
+  from the same song files; `DisableGaplessAudio` left false, which despite its documentation is what makes the songs run on) and written with
+  `IMAPI2.MsftDiscFormat2RawCD` in one go (`PrepareMedia`, `RequestedSectorType` chosen among what the recorder lists, `WriteMedia`, `ReleaseMedia`).
+  The layout is checked before anything is written: the disc, from the first song to the lead-out, must be exactly as long as the songs added up;
+  if it is not, nothing is written.
 - **A data disc** is a file system image (ISO 9660 with names of up to 31 characters, Joliet with the real names, and UDF for the
   bigger discs) made in memory by IMAPI and written with `IDiscFormat2Data`, closed so that nothing can be added later. A disc that is
   too small is refused when the image is made, before anything is written (`IMAPI_E_IMAGE_TOO_BIG`).
@@ -109,14 +117,26 @@ are needed.
 
 What the build machine can prove without a recorder (`scripts/check_disc_helper.py`): that every IMAPI component can be made, and that
 an ISO image of files comes out right: it is read back the way a disc reader would (ISO 9660, Joliet, UDF), every file is compared with
-the one it was made from, and an image can be stopped and never replaces a file. What only a recorder can prove is the writing itself:
-the speeds, the timing, a stop in the middle, and how other players read the disc.
+the one it was made from, and an image can be stopped and never replaces a file. For a music CD without gaps it lays songs out as the image of a
+whole disc, in every way IMAPI offers, and reads the image: every sector of every song is in it word for word, each song starts where IMAPI says
+and (with the setting the burn uses) nothing lies between the songs. What only a recorder can prove is the writing itself: the speeds, the
+timing, a stop in the middle, and how other players read the disc.
+
+## How it decodes
+
+Songs the audio library in Python cannot read (M4A, AAC, WMA) are decoded by Windows itself, through Media Foundation (`Decoder.cs`, interfaces
+declared by hand, nothing installed): a source reader opens the song, is asked for plain sound (16-bit whole numbers, floating point if the decoder
+will not), and its samples are written to a WAV file. A decoder may change its mind about the format with its first sample (the AAC decoder first
+assumes the extra band of HE-AAC for a stream of 24 kHz or less, and says so again when the song has none): a change before any sound has been
+taken is the decoder settling and the file is written in the format it settled on; after that it is a song that changes in the middle, which a
+music CD cannot follow. A Windows without Media Foundation (a "N" edition without the Media Feature Pack) is said so in words. What the build
+machine proves, with small tone files (440 Hz left, 660 Hz right): the rate, channels, length, pitch of each channel and loudness that come out.
 
 ## Not here (yet)
 
 No SCSI pass-through fallback (`READ CD`), no C2 error pointers, no drive read-offset correction, no AccurateRip: reading is checked by
 reading twice and comparing (in Python), which catches a drive that returns different data, not one that returns the same wrong data
-every time. Writing: no gapless music CDs (the two-second gaps are IMAPI's), no CD-Text, no multi-session discs, and no erasing of
+every time. Writing: no CD-Text, no multi-session discs, and no erasing of
 DVD+RW, DVD-RAM or BD-RE (those are overwritten, not erased).
 
 ## Licence

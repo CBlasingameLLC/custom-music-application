@@ -88,6 +88,7 @@ class DiscConfig:
     eject_after_rip: bool = True  # take the disc out when a rip finished without trouble
     eject_after_burn: bool = True  # take the disc out when a burn finished well
     burn_verify: bool = True  # after a data disc is written, read every file back and compare it
+    burn_gapless: bool = True  # write music CDs without gaps between the songs where the recorder can (otherwise the recorder leaves two seconds)
 
 
 @dataclass

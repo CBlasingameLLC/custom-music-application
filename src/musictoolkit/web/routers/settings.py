@@ -24,7 +24,7 @@ EDITABLE: dict[str, set[str]] = {
     "lastfm": {"enabled", "api_key", "api_secret"},
     "sync": {"device_scheme"},
     "app": {"rescan_on_launch", "lyrics_lrclib", "release_radar", "auto_update", "close_action", "podcast_refresh"},
-    "disc": {"rip_format", "rip_mp3_quality", "rip_accuracy", "rip_root", "rip_scheme", "rip_cover", "eject_after_rip", "eject_after_burn", "burn_verify"},
+    "disc": {"rip_format", "rip_mp3_quality", "rip_accuracy", "rip_root", "rip_scheme", "rip_cover", "eject_after_rip", "eject_after_burn", "burn_verify", "burn_gapless"},
 }
 # Fields that take one of a few words.
 CHOICES: dict[tuple[str, str], set[str]] = {
@@ -59,7 +59,7 @@ def public_settings(cfg: Config) -> dict[str, Any]:
         "disc": {
             "rip_format": cfg.disc.rip_format, "rip_mp3_quality": cfg.disc.rip_mp3_quality, "rip_accuracy": cfg.disc.rip_accuracy,
             "rip_root": cfg.disc.rip_root, "rip_scheme": cfg.disc.rip_scheme, "rip_cover": cfg.disc.rip_cover, "eject_after_rip": cfg.disc.eject_after_rip,
-            "eject_after_burn": cfg.disc.eject_after_burn, "burn_verify": cfg.disc.burn_verify,
+            "eject_after_burn": cfg.disc.eject_after_burn, "burn_verify": cfg.disc.burn_verify, "burn_gapless": cfg.disc.burn_gapless,
         },
     }
 
