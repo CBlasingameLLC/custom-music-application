@@ -262,6 +262,27 @@ def test_the_history_knows_what_is_not_there(rig: SimpleNamespace) -> None:
     assert (refused.status_code, refused.json()["detail"]) == (409, "That conversion made no files to take back.")
 
 
+def test_a_conversions_songs_can_be_narrowed_to_those_that_were_not_made(rig: SimpleNamespace) -> None:
+    def item(title: str) -> dict[str, Any]:
+        return {"track_id": None, "title": title, "source": f"/s/{title}", "target": str(rig.out / f"{title}.mp3"), "action": "convert"}
+
+    with rig.ctx.db() as conn:
+        conversion_id, ids = store.create_conversion(
+            conn, batch_id="mixed", title="x", fmt="mp3", quality="256", destination=str(rig.out), scheme=SCHEME, options={}, left_out=0,
+            items=[item(t) for t in ("made", "failed", "left", "also made", "also failed")],
+        )
+        for item_id, status in zip(ids, ("done", "failed", "skipped", "done", "failed")):
+            store.set_item(conn, item_id, status=status, message=None if status == "done" else f"{status} because")
+        assert [i["title"] for i in store.get_conversion(conn, conversion_id, only="not_made")["items"]] == ["failed", "left", "also failed"]
+    everything = rig.client.get(f"/api/tools/convert/batches/{conversion_id}").json()
+    assert everything["items_total"] == 5 and len(everything["items"]) == 5
+    narrowed = rig.client.get(f"/api/tools/convert/batches/{conversion_id}", params={"only": "not_made", "limit": 2, "offset": 1}).json()
+    assert narrowed["items_total"] == 3 and [(i["title"], i["status"], i["message"]) for i in narrowed["items"]] == [("left", "skipped", "skipped because"), ("also failed", "failed", "failed because")]
+    refused = rig.client.get(f"/api/tools/convert/batches/{conversion_id}", params={"only": "everything"})
+    assert (refused.status_code, refused.json()["detail"]) == (422, "only must be one of: not_made")
+    assert rig.client.get("/api/tools/convert/batches/99", params={"only": "not_made"}).status_code == 404
+
+
 def test_taking_back_while_something_is_converting_waits(rig: SimpleNamespace) -> None:
     import threading
 

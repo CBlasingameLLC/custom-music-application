@@ -217,9 +217,13 @@ def batches(ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
 
 
 @router.get("/batches/{conversion_id}")
-def batch(conversion_id: int, offset: int = 0, limit: int = planning.PAGE, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
-    with ctx.db() as conn:
-        found = store.get_conversion(conn, conversion_id, offset, limit)
+def batch(conversion_id: int, offset: int = 0, limit: int = planning.PAGE, only: str | None = None, ctx: AppContext = Depends(get_ctx)) -> dict[str, Any]:
+    """One conversion and a page of its songs; `only=not_made` narrows them to the ones that failed or were left out."""
+    try:
+        with ctx.db() as conn:
+            found = store.get_conversion(conn, conversion_id, offset, limit, only)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     if found is None:
         raise HTTPException(status_code=404, detail="That conversion is not in the history.")
     return found

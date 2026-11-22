@@ -79,17 +79,24 @@ def list_conversions(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str
     return [_conversion(row) for row in rows]
 
 
-def get_conversion(conn: sqlite3.Connection, conversion_id: int, offset: int = 0, limit: int = 100) -> dict[str, Any] | None:
-    """One conversion with a page of its songs."""
+ONLY = {"not_made": " AND status IN ('failed', 'skipped')"}  # what a page of a conversion's songs can be narrowed to
+
+
+def get_conversion(conn: sqlite3.Connection, conversion_id: int, offset: int = 0, limit: int = 100, only: str | None = None) -> dict[str, Any] | None:
+    """One conversion with a page of its songs: all of them, or (`only` "not_made") the ones that failed or were left out. `items_total` counts the
+    songs that page is taken from. Raises ValueError for an `only` that is not offered."""
+    if only is not None and only not in ONLY:
+        raise ValueError(f"only must be one of: {', '.join(ONLY)}")
     row = conn.execute("SELECT * FROM conversions WHERE id = ?", (conversion_id,)).fetchone()
     if row is None:
         return None
     out = _conversion(row)
     offset, limit = max(0, offset), max(1, min(limit, 500))
-    out["items_total"] = conn.execute("SELECT COUNT(*) FROM conversion_items WHERE conversion_id = ?", (conversion_id,)).fetchone()[0]
+    narrowing = ONLY.get(only or "", "")
+    out["items_total"] = conn.execute(f"SELECT COUNT(*) FROM conversion_items WHERE conversion_id = ?{narrowing}", (conversion_id,)).fetchone()[0]
     out["items"] = [
         dict(item) for item in conn.execute(
-            "SELECT id, track_id, title, source, target, action, status, message, size FROM conversion_items WHERE conversion_id = ? ORDER BY id LIMIT ? OFFSET ?",
+            f"SELECT id, track_id, title, source, target, action, status, message, size FROM conversion_items WHERE conversion_id = ?{narrowing} ORDER BY id LIMIT ? OFFSET ?",
             (conversion_id, limit, offset),
         )
     ]

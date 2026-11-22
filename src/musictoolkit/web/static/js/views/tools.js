@@ -22,6 +22,13 @@ const TOOLS = [
     status: (d) => (d.organize?.batches?.length ? `Last change ${fmt.ago(Date.parse(d.organize.batches[0].moved_at) / 1000)}` : ''),
   },
   {
+    path: '/tools/convert',
+    icon: 'refresh',
+    title: 'Convert songs',
+    blurb: 'Make copies of songs in another format: MP3, Ogg Vorbis, Opus, FLAC or WAV. Tags and covers come along, your library is not touched, and a whole batch can be undone.',
+    status: (d) => (d.convert?.batches?.length ? `Last conversion ${fmt.ago(Date.parse(d.convert.batches[0].started_at) / 1000)}` : ''),
+  },
+  {
     path: '/tools/duplicates',
     icon: 'copy',
     title: 'Find duplicates',
@@ -41,9 +48,10 @@ export function ToolsView() {
   const rev = useStore(library, (s) => s.rev);
   const { data: enrich } = useAsync(() => api('/tools/enrich/summary'), [rev]);
   const { data: organize } = useAsync(() => api('/tools/organize/batches'), [rev]);
+  const { data: convert } = useAsync(() => api('/tools/convert/batches'), [rev]);
   const { data: duplicates } = useAsync(() => api('/tools/duplicates/info'), [rev]);
   const { data: missing } = useAsync(() => api('/tools/missing/summary'), [rev]);
-  const data = { enrich, organize, duplicates, missing };
+  const data = { enrich, organize, convert, duplicates, missing };
   return html`
     <${PageHeader} title="Library tools" subtitle="Keep your collection tidy. Every tool shows a preview first and can be undone." />
     <div class="tool-grid">

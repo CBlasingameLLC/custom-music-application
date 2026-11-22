@@ -705,6 +705,26 @@ input.mono { font-size: 13.5px; }
   .organize-form { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* ---- convert songs (the form is the organize form) ---- */
+.convert-form .format-blurb { margin: -6px 0 14px; font-size: 13px; line-height: 1.45; }
+.convert-form .source-add select { width: auto; max-width: 100%; }
+.convert-form .check input { width: 16px; min-width: 16px; }
+.convert-form .cover-check { align-self: end; min-height: 36px; margin-bottom: 14px; }
+.convert-form .field > .subtle { font-size: 12.5px; font-weight: 400; }
+.convert-table .move-row .from, .convert-items .move-row .from { font-family: inherit; font-size: 13px; color: var(--text); }
+.convert-table .move-row .from small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-dim); }
+.convert-items .move-head, .convert-items .move-row { grid-template-columns: minmax(0, 1.1fr) 104px minmax(0, 1.4fr); }
+.convert-items .move-row .to { color: var(--text-dim); font-size: 12px; }
+.batch-item + .batch-item { border-top: 1px solid var(--border); }
+.batch-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-detail { display: flex; flex-direction: column; gap: 4px; padding: 2px 14px 14px; font-size: 13px; }
+.batch-detail .info-grid { margin: 4px 0; }
+.batch-detail .row-actions { margin: 4px 0; }
+@media (max-width: 900px) {
+  .batch-row { flex-wrap: wrap; }
+  .batch-when { min-width: 0; }
+}
+
 /* ---- duplicates, review folder, missing files ---- */
 .dup-bar { position: sticky; top: -1px; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--border); margin: 0 0 6px; padding-top: 10px; }
 .dup-help { margin: 4px 0 14px; }
