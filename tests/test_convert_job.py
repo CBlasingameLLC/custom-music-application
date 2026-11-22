@@ -119,6 +119,16 @@ def parts_in(folder: Path) -> list[Path]:
 # ---------------------------------------------------------------------------------------- the songs are written
 
 
+@pytest.mark.parametrize("spec,title", [
+    (Spec("mp3", "256"), "1 song to MP3 (256 kbps)"), (Spec("ogg", "160"), "1 song to Ogg Vorbis (about 160 kbps)"), (Spec("opus", "96"), "1 song to Opus (about 96 kbps)"),
+    (Spec("flac"), "1 song to FLAC"), (Spec("wav"), "1 song to WAV"),
+])
+def test_a_conversion_is_titled_by_its_format_and_how_good_it_is(rig: SimpleNamespace, spec: Spec, title: str) -> None:
+    song_file(rig, "a.flac", title="A")
+    run(rig, spec)
+    assert header(rig)["title"] == title
+
+
 def test_songs_go_to_their_places_with_their_tags_and_cover(rig: SimpleNamespace) -> None:
     sources = [song_file(rig, f"{n}.flac", seed=n, title=title, track_number=n) for n, title in enumerate(("One", "Two", "Three"), start=1)]
     result, _ = run(rig)
@@ -682,6 +692,45 @@ def test_a_file_whose_time_is_a_little_different_is_still_the_one_that_was_writt
     made = target.stat()
     os.utime(target, (made.st_atime, made.st_mtime + 1.9))  # (a FAT drive keeps the time to the nearest two seconds)
     assert job.undo_conversion(db=rig.db, conversion_id=1, handle=Handle())["removed"] == 1
+
+
+def test_a_file_whose_time_is_exactly_as_far_off_as_is_allowed_is_still_the_one_that_was_written_and_a_little_further_is_not(rig: SimpleNamespace) -> None:
+    for n, title in enumerate(("A", "B"), start=1):
+        song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
+    run(rig)
+    album = rig.out / "Aurora Vale/Northern Lights"
+    recorded = 1_700_000_000.0  # (a time that can be said exactly, so that the distance between two of them can be too)
+    with rig.db() as conn:
+        for item in header(rig)["items"]:
+            store.set_item(conn, item["id"], status="done", size=(album / Path(item["target"]).name).stat().st_size, mtime=recorded)
+    os.utime(album / "01 - A.mp3", (recorded + job.MTIME_SLACK, recorded + job.MTIME_SLACK))
+    os.utime(album / "02 - B.mp3", (recorded - job.MTIME_SLACK - 0.25, recorded - job.MTIME_SLACK - 0.25))
+    result = job.undo_conversion(db=rig.db, conversion_id=1, handle=Handle())
+    assert (result["removed"], result["changed"]) == (1, 1) and [p.name for p in album.iterdir()] == ["02 - B.mp3"]
+
+
+def test_a_file_that_cannot_be_looked_at_or_deleted_is_counted_as_it_and_left_where_it_is(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    for n, title in enumerate(("A", "B", "C"), start=1):
+        song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
+    run(rig)
+    album = rig.out / "Aurora Vale/Northern Lights"
+    real_stat, real_unlink = os.stat, Path.unlink
+
+    def stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if str(path) == str(album / "01 - A.mp3"):
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return real_stat(path, *args, **kwargs)
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == album / "02 - B.mp3":
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(job.os, "stat", stat)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result = job.undo_conversion(db=rig.db, conversion_id=1, handle=Handle())
+    assert result == {"conversion_id": 1, "removed": 1, "changed": 0, "gone": 0, "failed": 2}
+    assert sorted(p.name for p in album.iterdir()) == ["01 - A.mp3", "02 - B.mp3"]
 
 
 def test_a_file_that_was_touched_a_while_after_is_the_persons_now(rig: SimpleNamespace) -> None:
