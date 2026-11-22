@@ -72,7 +72,7 @@ your music folders (a converted copy there would turn up in the library as a sec
 2. **Format and quality.**
    - *MP3*: constant bitrate, 320, 256, 192 or 128 kbps.
    - *Ogg Vorbis*: variable bitrate, about 320, 256, 192, 160, 128 or 96 kbps.
-   - *Opus*: variable bitrate, about 192, 160, 128, 96 or 64 kbps.
+   - *Opus*: variable bitrate, about 192, 160, 128, 96 or 64 kbps (for stereo: a mono song comes out at about half).
    - *FLAC* and *WAV*: lossless. **Bit depth**: 16 (a 24-bit song is reduced with a little dither) or *keep the original* (a song with more than 16 bits is
      written at 24; the others at 16). A 16-bit song stays bit-for-bit what it was.
    - **Sample rate**: a song keeps its own rate unless the format cannot hold it (MP3 takes 32, 44.1 and 48 kHz; Opus takes 8, 12, 16, 24 and 48 kHz, and a
