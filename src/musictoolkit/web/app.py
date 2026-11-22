@@ -21,10 +21,12 @@ from starlette.types import Scope
 
 from musictoolkit import __version__
 from musictoolkit.config import Config
+from musictoolkit.convert import store as convert_store
 from musictoolkit.db.connection import connect
 from musictoolkit.discs import store as disc_store
 from musictoolkit.web.context import AppContext
 from musictoolkit.web.routers import (
+    convert,
     devices,
     discover,
     discs,
@@ -105,8 +107,9 @@ def create_app(
         with ctx.db() as conn:
             disc_store.recover(conn, ctx.data_dir / "cache" / "discs")
             disc_store.recover_burns(conn, ctx.data_dir / "cache" / "discs" / "burn")
+            convert_store.recover(conn, ctx.data_dir / "cache" / "convert")
     except Exception:
-        logger.warning("Could not tidy up after an interrupted rip or burn", exc_info=True)
+        logger.warning("Could not tidy up after an interrupted rip, burn or conversion", exc_info=True)
     ctx.scrobbler = Scrobbler(ctx)
     ctx.radar = RadarSchedule(ctx)
     ctx.radio = RadioHub()
@@ -149,7 +152,7 @@ def create_app(
         logger.error("Unhandled error serving %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
-    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats, mixes, releases, radio, podcasts, discs):
+    for module in (system, library, playback, playlists, settings, manage, discover, history, devices, tags, enrich, organize, duplicates, missing, scrobbling, stats, mixes, releases, radio, podcasts, discs, convert):
         app.include_router(module.router)
 
     @app.get("/", include_in_schema=False)
