@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import errno
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Self
 
 import numpy as np
 import pytest
@@ -161,7 +163,34 @@ def test_a_24_bit_song_keeps_its_depth_exactly_or_comes_down_to_16_bits(tmp_path
     assert sf.info(str(lowered)).subtype == "PCM_16"
     difference = audio.read(lowered, "int16")[0].astype(np.int32) - (exact >> 16)
     assert np.abs(difference).max() <= 2  # (rounded, with one least-significant bit of dither)
+    assert np.count_nonzero(difference) > difference.size // 4  # (not just cut off at 16 bits, which would leave every sample where `>> 16` puts it)
     assert lowered.read_bytes() == again.read_bytes()  # (the same song is always converted to the same bytes)
+
+
+def test_a_lossy_song_is_written_at_16_bits_with_dither_not_passed_through(tmp_path: Path) -> None:
+    """A lossless song at the same rate and depth is copied sample for sample, but what a lossy song decodes to is floating point: it is
+    brought down to 16 bits with the same dither as any other song that ends up there."""
+    mp3 = audio.write_song(tmp_path / "a.mp3", audio.music(44100, 4), 44100, "MPEG_LAYER_III", bitrate_mode="CONSTANT", compression_level=0.19)
+    assert inspect_source(mp3).lossy
+    out, again = tmp_path / "a.flac", tmp_path / "b.flac"
+    convert(mp3, out, Spec("flac", existing="convert"))
+    convert(mp3, again, Spec("flac", existing="convert"))
+    assert sf.info(str(out)).subtype == "PCM_16" and out.read_bytes() == again.read_bytes()
+    plain = audio.read(mp3, "int16")[0]  # (the decoder's own 16-bit numbers, rounded and with no dither)
+    made = audio.read(out, "int16")[0]
+    difference = made.astype(np.int32) - plain[: len(made)].astype(np.int32)
+    assert np.abs(difference).max() <= 2  # (the song itself, within a bit or two)
+    assert np.count_nonzero(difference) > len(made) // 8  # (and not those numbers: a good part of them were moved by the dither)
+
+
+def test_a_sound_quieter_than_the_last_bit_is_still_there_on_average_because_of_the_dither(tmp_path: Path) -> None:
+    """What dither is for: without it, a sound smaller than one least-significant bit is rounded away to silence."""
+    quiet = np.full((44100 * 3, 2), 0.3 / 32768, dtype=np.float32)  # (three tenths of a bit)
+    src = audio.write_song(tmp_path / "quiet.wav", quiet, 44100, "FLOAT")
+    out = tmp_path / "quiet.flac"
+    convert(src, out, Spec("flac", depth="16"))
+    made = audio.read(out, "int16")[0].astype(np.int64)
+    assert set(np.unique(made)) <= {-1, 0, 1, 2} and made.mean() == pytest.approx(0.3, abs=0.02)
 
 
 def test_a_32_bit_float_song_comes_down_to_24_bits_when_the_depth_is_kept(tmp_path: Path) -> None:
@@ -194,6 +223,17 @@ def test_a_lossy_song_keeps_its_pitch_its_level_and_its_length(tmp_path: Path, f
     assert loud(middle[:, 0]) == pytest.approx(0.4 / np.sqrt(2), rel=0.07)
 
 
+@pytest.mark.parametrize("fmt,quality", [("mp3", "256"), ("ogg", "160"), ("opus", "128")])
+def test_a_song_that_goes_beyond_full_scale_is_clipped_before_a_lossy_encoder_is_given_it(tmp_path: Path, fmt: str, quality: str) -> None:
+    t = np.arange(44100 * 3) / 44100
+    hot = np.where(np.sin(2 * np.pi * 100 * t) >= 0, 1.5, -1.5).astype(np.float32)  # (a floating-point song can go beyond full scale)
+    src = audio.write_song(tmp_path / "hot.wav", np.column_stack([hot, hot]), 44100, "FLOAT")
+    out = tmp_path / f"hot.{formats.FORMATS[fmt].extension}"
+    convert(src, out, Spec(fmt, quality))
+    # (a square wave held at full scale comes back from an encoder at 1.15 to 1.25 times full scale at most; one handed 1.5 times full scale, at 1.7 to 2)
+    assert np.abs(audio.read(out)[0]).max() < 1.4
+
+
 def test_a_song_of_a_high_rate_is_brought_down_when_the_person_capped_it(tmp_path: Path) -> None:
     src = audio.write_song(tmp_path / "a.flac", audio.tones(96000, 5), 96000, "PCM_24")
     out = tmp_path / "a.flac.part"
@@ -202,6 +242,25 @@ def test_a_song_of_a_high_rate_is_brought_down_when_the_person_capped_it(tmp_pat
     assert (result.rate, back_rate) == (48000, 48000) and abs(len(back) - 5 * 48000) <= 2 and result.frames == len(back)
     assert audio.peak_hertz(back[24000:-24000, 0], back_rate) == pytest.approx(440, abs=2)
     assert loud(back[24000:-24000, 0]) == pytest.approx(0.4 / np.sqrt(2), rel=0.01)
+
+
+def level_near(samples: np.ndarray, rate: int, hertz: float, width: float = 100.0) -> float:
+    """The strongest part of the spectrum within `width` hertz of `hertz` (one channel, Hann window)."""
+    spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples))))
+    frequencies = np.fft.rfftfreq(len(samples), 1 / rate)
+    return float(spectrum[(frequencies > hertz - width) & (frequencies < hertz + width)].max())
+
+
+def test_a_tone_the_new_rate_cannot_hold_is_filtered_out_and_not_folded_back_into_the_music(tmp_path: Path) -> None:
+    rate = 96000
+    t = np.arange(rate * 4) / rate
+    tone = (0.3 * np.sin(2 * np.pi * 1000 * t) + 0.3 * np.sin(2 * np.pi * 30000 * t)).astype(np.float32)  # (at 48 kHz, 30 kHz would come back as 18 kHz)
+    src = audio.write_song(tmp_path / "a.wav", np.column_stack([tone, tone]), rate, "PCM_24")
+    out = tmp_path / "a.flac"
+    convert(src, out, Spec("flac", max_rate=48000, depth="keep"))
+    back, back_rate = audio.read(out)
+    middle = back[back_rate // 2 : -back_rate // 2, 0].astype(np.float64)
+    assert back_rate == 48000 and 20 * np.log10(level_near(middle, back_rate, 18000) / level_near(middle, back_rate, 1000)) < -120
 
 
 def test_a_song_of_the_44_1_family_stays_in_it_under_a_48_khz_cap(tmp_path: Path) -> None:
@@ -349,6 +408,66 @@ def test_running_out_of_room_is_said_in_words_and_leaves_nothing(tmp_path: Path,
     assert not out.exists()
 
 
+@pytest.mark.parametrize("exc,full", [
+    (OSError(errno.ENOSPC, "No space left on device"), True),
+    (OSError(errno.ENOSPC, "Il n'y a plus de place sur le disque"), True),  # (the number, when the words are another language's)
+    (RuntimeError("System error : No space left on device."), True),  # (the words, when only they come through)
+    (RuntimeError("Error opening '/music/Outer Space/01.flac': Format not recognised."), False),  # (a folder called Space is not a full drive)
+    (OSError(errno.ENOENT, "No such file or directory", "/music/Outer Space/01.flac"), False),
+    (OSError(errno.EIO, "Input/output error"), False),
+])
+def test_what_counts_as_the_drive_running_full(exc: BaseException, full: bool) -> None:
+    assert engine.no_room(exc) is full
+
+
+@pytest.mark.parametrize("free,full", [(0, True), (300 * 1024, True), (engine.LOW_ROOM - 1, True), (engine.LOW_ROOM, False), (100 * 1024**2, False), (50 * 1024**3, False)])
+def test_the_audio_librarys_bare_system_error_is_a_full_drive_when_the_drive_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, free: int, full: bool) -> None:
+    monkeypatch.setattr(engine.shutil, "disk_usage", lambda folder: SimpleNamespace(total=10**12, used=10**12 - free, free=free))
+    refused = sf.LibsndfileError(2)  # (all that libsndfile says of a write that the system refused: found on a drive that was really full)
+    assert str(refused) == "System error."
+    assert engine.no_room(refused, tmp_path) is full
+    assert engine.no_room(refused) is False  # (with no folder there is no drive to look at)
+    assert engine.no_room(RuntimeError("Something else went wrong."), tmp_path) is False  # (and only that one message is taken for it)
+
+
+def test_a_drive_that_cannot_be_looked_at_is_not_taken_for_a_full_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def gone(folder: Path) -> None:
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+
+    monkeypatch.setattr(engine.shutil, "disk_usage", gone)
+    assert engine.no_room(sf.LibsndfileError(2), tmp_path) is False
+
+
+@pytest.mark.parametrize("full,said", [
+    (True, "^There is not enough room on the drive for the converted songs.$"),
+    (False, r"^The song could not be converted \(System error\.\)\.$"),
+])
+def test_a_write_the_audio_library_refuses_is_a_full_drive_only_if_the_drive_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, full: bool, said: str) -> None:
+    src = audio.write_song(tmp_path / "a.flac", audio.tones(44100, 2), 44100, "PCM_16")
+    out = tmp_path / "a.mp3.part"
+
+    class Refusing:
+        def __enter__(self) -> Self:
+            out.write_bytes(b"half")
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def write(self, block: np.ndarray) -> None:
+            raise sf.LibsndfileError(2)
+
+    def disk_usage(folder: Path) -> SimpleNamespace:  # (a full drive is full while the half-written file is on it, and has room again when that is taken off)
+        free = 0 if full and out.exists() else 50 * 1024**3
+        return SimpleNamespace(total=10**12, used=10**12 - free, free=free)
+
+    monkeypatch.setattr(engine, "_open_writer", lambda *args, **kwargs: Refusing())
+    monkeypatch.setattr(engine.shutil, "disk_usage", disk_usage)
+    with pytest.raises(ConvertError, match=said):
+        convert(src, out, Spec("mp3"))
+    assert not out.exists()
+
+
 def test_a_song_with_six_channels_is_refused_in_words(tmp_path: Path) -> None:
     src = audio.write_song(tmp_path / "a.flac", np.zeros((44100, 6), dtype=np.int16) + 100, 44100, "PCM_16")
     with pytest.raises(ConvertError, match="^This song has 6 channels; Convert handles mono and stereo.$"):
@@ -363,6 +482,22 @@ def test_a_file_that_turns_out_to_hold_no_sound_leaves_nothing(tmp_path: Path) -
     out = tmp_path / "a.mp3"
     with pytest.raises(ConvertError, match=r"^The song could not be converted \(|^There is no sound"):
         engine.convert_file(src, out, info, Spec("mp3"))
+    assert not out.exists()
+    audio.write_song(src, np.zeros((0, 2), dtype=np.int16), 44100, "PCM_16", "WAV")  # (or it is a file that is whole, and has no sound in it)
+    with pytest.raises(ConvertError, match="^There is no sound in this file.$"):
+        engine.convert_file(src, out, info, Spec("mp3"))
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("spec,said", [
+    (Spec("mp3", "999"), "quality for mp3 must be one of"), (Spec("mp3", max_rate=12345), "the highest rate must be one of"), (Spec("flac", depth="32"), "depth must be one of"),
+    (Spec("mp3", existing="overwrite"), "existing songs must be one of"), (Spec("nope"), "format must be one of"),
+])
+def test_a_choice_that_is_not_offered_is_refused_before_anything_is_written(tmp_path: Path, spec: Spec, said: str) -> None:
+    src = audio.write_song(tmp_path / "a.flac", audio.tones(44100, 2), 44100, "PCM_16")
+    out = tmp_path / "a.out.part"
+    with pytest.raises(ValueError, match=said):
+        engine.convert_file(src, out, inspect_source(src), spec)
     assert not out.exists()
 
 
@@ -402,6 +537,24 @@ def test_a_stopped_copy_and_a_copy_of_nothing_leave_no_file_behind(tmp_path: Pat
     with pytest.raises(Stop):
         engine.copy_file(src, tmp_path / "copy.part", check=check)
     assert not (tmp_path / "copy.part").exists()
-    with pytest.raises(ConvertError, match=r"^The song could not be copied \("):
-        engine.copy_file(tmp_path / "gone.mp3", tmp_path / "copy2.part")
+    with pytest.raises(ConvertError, match=r"^The song could not be copied \(No such file or directory\)\.$"):
+        engine.copy_file(tmp_path / "Outer Space" / "gone.mp3", tmp_path / "copy2.part")  # (a folder with "space" in its name is not a full drive)
     assert not (tmp_path / "copy2.part").exists()
+
+
+@pytest.mark.parametrize("number,reason,said", [
+    (errno.ENOSPC, "No space left on device", "^There is not enough room on the drive for the converted songs.$"),
+    (errno.EIO, "Input/output error", r"^The song could not be copied \(Input/output error\).$"),
+])
+def test_a_copy_that_fails_after_it_was_started_is_said_in_words_and_leaves_no_file_behind(tmp_path: Path, number: int, reason: str, said: str) -> None:
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x" * (engine.COPY_CHUNK * 3))
+    target = tmp_path / "copy.part"
+
+    def fails_after_the_first_block(done: int, total: int) -> None:
+        assert target.exists() and done == engine.COPY_CHUNK  # (what is half written is there to be left behind)
+        raise OSError(number, reason)
+
+    with pytest.raises(ConvertError, match=said):
+        engine.copy_file(src, target, on_progress=fails_after_the_first_block)
+    assert not target.exists()

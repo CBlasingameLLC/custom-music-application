@@ -201,6 +201,18 @@ def test_the_folder_the_converted_songs_go_in(tmp_path: Path) -> None:
         assert folder is None and words in (problem or ""), raw
 
 
+def test_a_folder_on_a_drive_that_is_not_there_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(planning, "_existing_ancestor", lambda path: None)  # (no part of the path is there: a drive letter that nothing is plugged in as)
+    assert planning.check_destination(str(tmp_path / "converted"), []) == (None, "That folder's drive is not there.")
+
+
+def test_an_empty_library_folder_in_the_settings_is_ignored_not_taken_for_the_folder_the_app_is_in(library: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library.add("a.flac", audio.music(44100, 3), title="A")
+    monkeypatch.chdir(tmp_path)  # (an empty name means "here" to the system, and the folder for the converted songs is in here)
+    plan = planning.build_plan(library.rows, Spec("mp3"), str(tmp_path / "out"), SCHEME, ["", str(library.folder)], ask_windows=lambda paths: {})
+    assert plan.ok and [(s.action, s.notes) for s in plan.songs] == [("convert", [])] and plan.destination == str(tmp_path / "out")
+
+
 def test_a_folder_that_only_looks_like_a_library_folder_is_not_one(tmp_path: Path) -> None:
     (tmp_path / "Music").mkdir()
     assert planning.check_destination(str(tmp_path / "Music-converted"), [str(tmp_path / "Music")])[1] is None
@@ -327,9 +339,33 @@ def test_the_summary_and_the_pages_of_songs(library: Library, tmp_path: Path) ->
     assert page["items"][0]["to"] == "Aurora Vale/Northern Lights/03 - S2.opus" and page["items"][0]["from"].endswith("2.flac") and page["items"][0]["id"] == 3
     assert plan.page("cannot")["items"][0]["notes"] == ["This song has 6 channels; Convert handles mono and stereo."]
     assert plan.page("convert", offset=-5, limit=10_000)["items"][0]["title"] == "S0" and len(plan.page("convert", limit=10_000)["items"]) == 7
+    many = planning.ConvertPlan(Spec("mp3"), SCHEME, "/out", [planning.PlannedSong(n, f"/m/{n}.flac", f"S{n}", "A", "convert") for n in range(600)], [])
+    assert (many.page("convert", limit=10_000)["total"], len(many.page("convert", limit=10_000)["items"])) == (600, 500)  # (a page is never more than 500 songs)
+    assert len(many.page("convert", limit=0)["items"]) == 1 and len(many.page("convert", limit=-3)["items"]) == 1 and len(many.page("convert", offset=550, limit=100)["items"]) == 50
     assert Spec("opus").quality is None and make(library, tmp_path, Spec("opus")).summary()["quality"] == "128"  # (the default of the format, said in the summary)
     with pytest.raises(ValueError, match="action must be one of"):
         plan.page("everything")
+
+
+@pytest.mark.parametrize("size,said", [
+    (0, "0 bytes"), (1, "1 bytes"), (1023, "1023 bytes"), (1024, "1.0 KB"), (1536, "1.5 KB"), (1024**2, "1.0 MB"), (int(2.5 * 1024**3), "2.5 GB"),
+    (1024**4, "1.0 TB"), (3 * 1024**4, "3.0 TB"), (2048 * 1024**4, "2048.0 TB"),
+])
+def test_a_size_is_said_in_the_biggest_unit_it_fills(size: int, said: str) -> None:
+    assert planning.size_text(size) == said
+
+
+def test_a_song_without_a_title_tag_is_known_by_its_file_name(library: Library, tmp_path: Path) -> None:
+    library.add("no title here.flac", audio.music(44100, 3), title="")
+    library.add("another one.flac", audio.music(44100, 3, seed=2), title=None)
+    assert [s.title for s in make(library, tmp_path, Spec("mp3")).songs] == ["no title here", "another one"]
+
+
+def test_a_song_that_cannot_be_converted_does_not_take_the_name_of_one_that_can(library: Library, tmp_path: Path) -> None:
+    library.add("six.flac", np.zeros((44100, 6), dtype=np.int16) + 5, title="Same", track_number=1)
+    library.add("two.flac", audio.music(44100, 3), title="Same", track_number=1)
+    plan = make(library, tmp_path, Spec("mp3"))
+    assert [(s.action, s.relative, s.target) for s in plan.songs] == [("cannot", "", ""), ("convert", "Aurora Vale/Northern Lights/01 - Same.mp3", str(tmp_path / "out" / "Aurora Vale/Northern Lights/01 - Same.mp3"))]
 
 
 def test_a_failed_inspection_in_words_does_not_stop_the_other_songs(library: Library, tmp_path: Path) -> None:

@@ -224,7 +224,7 @@ def test_what_was_chosen_is_there_again_next_time_but_not_what_to_convert(page, 
     page.get_by_label("Bit depth").select_option(value="keep")
     page.get_by_label("Sample rate").select_option(label="At most 44.1 kHz (CD)")
     page.get_by_label("Songs already in this format").select_option(label="Leave them out")
-    page.locator("#convert-folder").fill(str(out))
+    page.locator("#convert-folder").fill(f"  {out}  ")  # (spaces typed or pasted around it are not part of the folder, nor of what is remembered)
     page.get_by_label("Folder and file name, built from these fields").fill("{artist} - {title}.{ext}")
     page.get_by_label("Carry each song’s cover picture into its copy").uncheck()
     preview(page)
@@ -372,6 +372,37 @@ def test_only_one_conversion_runs_at_a_time(page, live, tmp_path, monkeypatch):
     release.set()
     expect(page.locator(".toast", has_text="Converted 9 songs")).to_be_visible(timeout=120_000)
     expect(page.get_by_role("button", name="Preview", exact=True)).to_be_enabled()
+
+
+def test_the_form_is_held_by_the_work_of_converting_even_while_it_waits_for_its_turn_and_by_no_other_work(page, live, tmp_path):
+    add_library(page, live)
+    release = threading.Event()
+
+    def hold(handle) -> None:
+        while not release.is_set():
+            handle.check()
+            time.sleep(0.05)
+
+    try:
+        live.ctx.jobs.submit("hold-other", "Holding other work", hold, lane="hold-other")  # (a kind of work that is not Convert's)
+        open_convert(page)
+        choose_the_whole_library(page)
+        page.locator("#convert-folder").fill(str(tmp_path / "converted"))
+        expect(page.get_by_role("button", name="Background tasks")).to_contain_text("Holding other work")  # (the page has been told of it)
+        button = page.get_by_role("button", name="Preview", exact=True)
+        expect(button).to_be_enabled()
+        expect(page.locator("#convert-folder")).to_be_enabled()
+
+        live.ctx.jobs.submit("hold-analysis", "Holding the analysis", hold, lane="analyze")  # (the lane the preview is made in: it has to wait)
+        button.click()
+        expect(page.locator(".job-banner")).to_contain_text("Looking at the songs to convert")
+        for control in page.locator(".organize-form select, .organize-form input, .organize-form button").all():
+            expect(control).to_be_disabled()  # (waiting for a turn holds the form as running does)
+        release.set()
+        expect(page.locator(".stat-row")).to_be_visible()
+        expect(button).to_be_enabled()
+    finally:
+        release.set()
 
 
 def test_the_same_choice_is_not_added_twice_and_two_ratings_are_two_choices(page, live):

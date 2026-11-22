@@ -216,6 +216,8 @@ def run_conversion(
                 fields = {"status": "failed", "message": str(error)}
             except OSError as error:
                 fields = {"status": "failed", "message": f"The file could not be written ({error.strerror or error})."}
+                if engine.no_room(error, Path(song.target).parent):
+                    fields["message"], fatal = engine.NO_ROOM, engine.NO_ROOM
             else:
                 made = os.stat(song.target)
                 fields = {"status": "done", "size": made.st_size, "mtime": made.st_mtime}

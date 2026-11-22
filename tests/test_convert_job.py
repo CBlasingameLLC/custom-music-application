@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 import os
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
 import pytest
@@ -19,9 +20,10 @@ from musictoolkit.convert import engine, job, store, windows
 from musictoolkit.convert import plan as planning
 from musictoolkit.convert.engine import ConvertError, Spec
 from musictoolkit.convert.job import ConvertProblem
+from musictoolkit.convert.source import SourceError
 from musictoolkit.convert.tags import read_tags
 from musictoolkit.db.connection import connect
-from musictoolkit.discs.helper import DiscError
+from musictoolkit.discs.helper import DiscError, DiscUnavailable
 from musictoolkit.discs.tagging import SongTags, write_tags
 from musictoolkit.media import art
 from musictoolkit.web.jobs import JobCancelled
@@ -199,10 +201,18 @@ def test_the_plan_is_made_again_so_a_song_added_since_the_preview_is_converted(r
     assert len(shown.writing) == 1 and result["converted"] == 2 and result["previewed"] == 2  # (the request says what the screen showed: the caller passes it)
 
 
-def test_a_file_that_turns_up_while_the_songs_are_being_looked_at_is_not_replaced(rig: SimpleNamespace) -> None:
+def test_a_file_that_turns_up_while_the_songs_are_being_looked_at_is_not_replaced_and_its_song_is_not_even_converted(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     song_file(rig, "a.flac", title="A", track_number=1)
     song_file(rig, "b.flac", seed=2, title="B", track_number=2)
     taken = rig.out / "Aurora Vale/Northern Lights/02 - B.mp3"
+    converted: list[str] = []
+    real = engine.convert_file
+
+    def spy(source, target, info, spec, **kwargs):
+        converted.append(Path(source).name)
+        return real(source, target, info, spec, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", spy)
 
     def wrap(made: planning.ConvertPlan) -> None:  # (the plan has been made; then the person's own file appears)
         taken.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +222,54 @@ def test_a_file_that_turns_up_while_the_songs_are_being_looked_at_is_not_replace
     assert taken.read_bytes() == b"arrived late" and (result["converted"], result["status"]) == (1, "done")
     skipped = [i for i in header(rig)["items"] if i["status"] == "skipped"]
     assert [(i["title"], i["message"]) for i in skipped] == [("B", "Already there: left as it is.")] and parts_in(rig.out) == []
+    assert converted == ["a.flac"]  # (there was no point in making a copy of B that would be thrown away)
+
+
+def test_a_batch_in_which_every_song_turned_out_to_be_there_already_is_done_and_not_failed(rig: SimpleNamespace) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    taken = rig.out / "Aurora Vale/Northern Lights/01 - A.mp3"
+
+    def wrap(made: planning.ConvertPlan) -> None:
+        taken.parent.mkdir(parents=True, exist_ok=True)
+        taken.write_bytes(b"mine")
+
+    result, _ = run(rig, wrap=wrap)
+    assert (result["status"], result["converted"], result["failed"], result["message"]) == ("done", 0, 0, None) and taken.read_bytes() == b"mine"
+    assert header(rig)["status"] == "done"
+
+
+def test_a_file_that_turns_up_while_its_own_song_is_being_converted_is_not_replaced(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=2)
+    taken = rig.out / "Aurora Vale/Northern Lights/02 - B.mp3"
+    real = engine.convert_file
+
+    def meanwhile(source, target, info, spec, **kwargs):
+        if Path(source).name == "b.flac":  # (the person's own file takes the name while the song is being written under its temporary one)
+            taken.write_bytes(b"arrived meanwhile")
+        return real(source, target, info, spec, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", meanwhile)
+    result, _ = run(rig)
+    assert taken.read_bytes() == b"arrived meanwhile" and (result["converted"], result["status"]) == (1, "done")
+    skipped = [i for i in header(rig)["items"] if i["status"] == "skipped"]
+    assert [(i["title"], i["message"]) for i in skipped] == [("B", "Already there: left as it is.")] and parts_in(rig.out) == []
+
+
+def test_a_leftover_under_the_temporary_name_is_replaced_and_never_written_through(rig: SimpleNamespace) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    precious = rig.tmp / "precious.txt"
+    precious.write_bytes(b"the person's own file")
+    album = rig.out / "Aurora Vale" / "Northern Lights"
+    album.mkdir(parents=True)
+    leftover = album / ("01 - A.mp3" + store.PART_SUFFIX)
+    try:
+        leftover.symlink_to(precious)  # (what a name under the temporary one could be, if anything put a link there)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system does not let a test make a link")
+    result, _ = run(rig)
+    assert (result["converted"], result["status"]) == (1, "done") and (album / "01 - A.mp3").is_file() and not (album / "01 - A.mp3").is_symlink()
+    assert precious.read_bytes() == b"the person's own file" and parts_in(rig.out) == []
 
 
 # ---------------------------------------------------------------------------------------- a conversion that cannot begin
@@ -311,6 +369,40 @@ def test_running_out_of_room_ends_the_batch_and_leaves_the_songs_that_were_done(
     assert header(rig)["items"][2]["message"] == engine.NO_ROOM and [p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()] == ["01 - A.mp3"]
 
 
+def test_a_drive_too_full_to_make_a_folder_ends_the_batch_like_one_too_full_to_write_a_song(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    for n, title in enumerate(("A", "B", "C"), start=1):
+        song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
+    real, made = job._make_folders, []
+
+    def make(folder: Path) -> list[Path]:
+        made.append(folder)
+        if len(made) == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(folder)
+
+    monkeypatch.setattr(job, "_make_folders", make)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"], result["message"]) == ("partial", 1, 1, engine.NO_ROOM)
+    assert [(i["title"], i["status"], i["message"]) for i in header(rig)["items"]] == [("A", "done", None), ("B", "failed", engine.NO_ROOM), ("C", "skipped", engine.NO_ROOM)]
+
+
+def test_a_folder_that_cannot_be_made_for_another_reason_is_a_failed_song_and_the_batch_goes_on(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    for n, title in enumerate(("A", "B", "C"), start=1):
+        song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
+    real, made = job._make_folders, []
+
+    def make(folder: Path) -> list[Path]:
+        made.append(folder)
+        if len(made) == 2:
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return real(folder)
+
+    monkeypatch.setattr(job, "_make_folders", make)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 2, 1)
+    assert [(i["title"], i["status"], i["message"]) for i in header(rig)["items"]] == [("A", "done", None), ("B", "failed", "The file could not be written (Permission denied)."), ("C", "done", None)]
+
+
 def test_no_room_for_the_first_song_is_an_error(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     song_file(rig, "a.flac", title="A")
     monkeypatch.setattr(engine, "convert_file", failing(engine.convert_file, lambda name: True, ConvertError(engine.NO_ROOM)))
@@ -380,6 +472,26 @@ def test_a_stop_leaves_the_songs_that_were_done_and_nothing_half_written(rig: Si
     assert (saved["status"], saved["converted"], saved["failed"]) == ("cancelled", 1, 0) and saved["message"] == "Stopped. The songs that were finished stay where they are."
     assert [(i["title"], i["status"]) for i in saved["items"]] == [("A", "done"), ("B", "skipped"), ("C", "skipped")]
     assert saved["items"][1]["message"] == "Stopped before this song was finished." and saved["items"][2]["message"] == "Stopped."
+
+
+def test_a_stop_that_comes_between_two_songs_begins_nothing_of_the_next(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    for n, title in enumerate(("A", "B"), start=1):
+        song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
+    handle = Handle()
+    real = store.set_item
+
+    def set_item(conn: sqlite3.Connection, item_id: int, **fields: Any) -> None:
+        real(conn, item_id, **fields)
+        if fields.get("status") == "done":
+            handle.cancelled = True  # (the first song has just been finished: the stop comes between it and the next)
+
+    monkeypatch.setattr(store, "set_item", set_item)
+    with pytest.raises(JobCancelled):
+        run(rig, handle=handle)
+    saved = header(rig)
+    assert [(i["title"], i["status"]) for i in saved["items"]] == [("A", "done"), ("B", "skipped")] and saved["items"][1]["message"] == "Stopped."
+    assert not any("song 2" in str(update.get("message")) for update in handle.updates)  # (the next song was not so much as announced)
+    assert [p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()] == ["01 - A.mp3"]
 
 
 def test_a_stop_leaves_no_empty_folder_of_the_song_that_was_stopped(rig: SimpleNamespace) -> None:
@@ -460,6 +572,58 @@ def test_a_song_windows_cannot_decode_after_all_is_a_failed_song_and_the_rest_go
     result, _ = run(rig, Spec("flac"))
     assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
     assert header(rig)["items"][0]["message"] == "Windows could not decode A after all." and not list(rig.scratch.glob("*"))
+
+
+def test_a_decoded_file_that_cannot_be_read_is_a_failed_song_and_the_others_go_on(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    stand_in_windows(rig.tmp, monkeypatch)
+    rig.library.windows_song("a.m4a", 14, 300, title="A", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=2)
+    real = job.inspect_source
+
+    def inspect(path: Any) -> Any:
+        if Path(str(path)).parent == rig.scratch:  # (what Windows made of the song)
+            raise SourceError("The song cannot be read (boom).")
+        return real(path)
+
+    monkeypatch.setattr(job, "inspect_source", inspect)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
+    assert [(i["title"], i["status"], i["message"]) for i in header(rig)["items"]] == [("A", "failed", "The song cannot be read (boom)."), ("B", "done", None)]
+    assert not list(rig.scratch.glob("*")) and parts_in(rig.out) == []
+
+
+def test_a_windows_that_goes_away_after_the_preview_fails_its_songs_in_words_and_the_others_go_on(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    stand_in_windows(rig.tmp, monkeypatch)
+    rig.library.windows_song("a.m4a", 14, 300, title="A", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=2)
+
+    class Gone:
+        def __enter__(self) -> Self:
+            raise DiscUnavailable("The disc helper is only in the Windows app.")
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+    monkeypatch.setattr(job, "DiscHelper", Gone)  # (the plan asked Windows through the real stand-in; the job's own helper is the one that is gone)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
+    assert [(i["title"], i["status"], i["message"]) for i in header(rig)["items"]] == [("A", "failed", "The disc helper is only in the Windows app."), ("B", "done", None)]
+
+
+def test_a_decoded_copy_that_could_not_be_removed_at_once_is_removed_at_the_end(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    stand_in_windows(rig.tmp, monkeypatch)
+    rig.library.windows_song("a.m4a", 14, 300, title="A", track_number=1)
+    real, refused = Path.unlink, []
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.parent == rig.scratch and not refused:  # (the first time: something still has the file open)
+            refused.append(self)
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result, _ = run(rig)
+    assert refused and result["converted"] == 1 and not list(rig.scratch.glob("*"))
 
 
 def test_a_stop_while_windows_decodes_a_song_stops_the_conversion_and_leaves_nothing(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:

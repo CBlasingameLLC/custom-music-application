@@ -131,6 +131,12 @@ def test_what_the_person_chose_is_remembered_for_next_time(rig: SimpleNamespace)
     assert sorted(p.name for p in rig.out.iterdir()) == [f"Aurora Vale - {t}.opus" for t in ("Four", "One", "Three", "Two")]
 
 
+def test_a_layout_sent_with_spaces_around_it_is_the_layout_without_them(rig: SimpleNamespace) -> None:
+    convert(rig, format="opus", quality="96", scheme="  {artist} - {title}.{ext}  ")
+    assert sorted(p.name for p in rig.out.iterdir()) == [f"Aurora Vale - {t}.opus" for t in ("Four", "One", "Three", "Two")]
+    assert [b["scheme"] for b in rig.client.get("/api/tools/convert/batches").json()["batches"]] == ["{artist} - {title}.{ext}"]
+
+
 def test_the_songs_can_be_chosen_the_way_a_device_is(rig: SimpleNamespace) -> None:
     rig.client.post("/api/library/favorites", json={"ids": [rig.ids["Two"]], "favorite": True})
     got = look(rig, song_ids=[], sources=[{"kind": "all"}]).result
@@ -162,7 +168,7 @@ def test_nothing_starts_without_a_preview_of_the_same_choices(rig: SimpleNamespa
     assert (first.status_code, first.json()["detail"]) == (409, wanted)
     look(rig)
     for changes in (
-        {"quality": "256"}, {"format": "flac", "quality": None}, {"destination": str(rig.tmp / "elsewhere")}, {"song_ids": [rig.ids["One"]]}, {"cover": False},
+        {"quality": "256"}, {"format": "ogg"}, {"format": "flac", "quality": None}, {"destination": str(rig.tmp / "elsewhere")}, {"song_ids": [rig.ids["One"]]}, {"cover": False},
         {"scheme": "{title}.{ext}"}, {"max_rate": 48000}, {"depth": "keep"}, {"existing": "skip"}, {"sources": [{"kind": "all"}]},
     ):
         assert rig.client.post("/api/tools/convert/start", json=body(rig, **changes)).status_code == 409, changes

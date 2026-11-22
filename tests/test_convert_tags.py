@@ -7,6 +7,7 @@ import io
 import shutil
 from pathlib import Path
 
+import mutagen
 import pytest
 import soundfile as sf
 from mutagen.asf import ASF
@@ -155,10 +156,11 @@ def test_the_tags_of_an_m4a_file(tmp_path: Path) -> None:
     atoms["----:com.apple.iTunes:MusicBrainz Album Id"] = [MP4FreeForm(RELEASE.encode())]
     atoms["----:com.apple.iTunes:MusicBrainz Artist Id"] = [MP4FreeForm(ARTIST.encode())]
     atoms["----:com.apple.iTunes:replaygain_track_gain"] = [MP4FreeForm(b"-3.20 dB")]
+    atoms["----:com.apple.iTunes:BARCODE"], atoms["----:com.apple.iTunes:LABEL"] = [MP4FreeForm(b"743217522421")], [MP4FreeForm(b"A Records")]
     atoms.save()
     got = read_tags(path)
-    wanted = SongTags("Song", "Artist One; Artist Two", "Album", "Album Artist", 3, 12, 1, 2, 2001, "2001-02-03", "Jazz", RECORDING, RELEASE, None, [ARTIST], "", "",
-                      "Composer", "A comment", "Words\nof the song", {"track_gain": "-3.20 dB"})
+    wanted = SongTags("Song", "Artist One; Artist Two", "Album", "Album Artist", 3, 12, 1, 2, 2001, "2001-02-03", "Jazz", RECORDING, RELEASE, None, [ARTIST], "743217522421",
+                      "A Records", "Composer", "A comment", "Words\nof the song", {"track_gain": "-3.20 dB"})
     same(got, wanted)
 
 
@@ -168,13 +170,23 @@ def test_the_tags_of_a_wma_file(tmp_path: Path) -> None:
     attributes = ASF(path)
     for key, value in {"Title": "Song", "Author": "Artist", "WM/AlbumTitle": "Album", "WM/AlbumArtist": "Album Artist", "WM/TrackNumber": "3", "WM/PartOfSet": "1/2",
                        "WM/Year": "2001", "WM/Genre": "Jazz", "WM/Composer": "Composer", "Description": "A comment", "WM/Lyrics": "Words",
-                       "MusicBrainz/Track Id": RECORDING, "MusicBrainz/Album Id": RELEASE}.items():
+                       "MusicBrainz/Track Id": RECORDING, "MusicBrainz/Album Id": RELEASE, "MusicBrainz/Artist Id": ARTIST, "WM/Barcode": "743217522421", "WM/Publisher": "A Records"}.items():
         attributes[key] = [value]
     attributes.save()
     got = read_tags(path)
     assert (got.title, got.artist, got.album, got.album_artist, got.track_number, got.disc_number, got.disc_total, got.year, got.genre, got.composer) == (
         "Song", "Artist", "Album", "Album Artist", 3, 1, 2, 2001, "Jazz", "Composer")
-    assert (got.comment, got.lyrics, got.recording_id, got.release_id) == ("A comment", "Words", RECORDING, RELEASE)
+    assert (got.comment, got.lyrics, got.recording_id, got.release_id, got.artist_ids, got.barcode, got.label) == ("A comment", "Words", RECORDING, RELEASE, [ARTIST], "743217522421", "A Records")
+
+
+def test_a_wma_file_that_spells_the_artist_and_the_track_number_the_other_way(tmp_path: Path) -> None:
+    path = tmp_path / "other.wma"
+    shutil.copy(FIXTURES / "tones_wma.wma", path)
+    attributes = ASF(path)
+    attributes["WM/Author"], attributes["WM/Track"] = ["Another Artist"], ["7"]
+    attributes.save()
+    got = read_tags(path)
+    assert (got.artist, got.track_number) == ("Another Artist", 7)
 
 
 @pytest.mark.parametrize("name", ["tiny.flac", "tiny.ogg", "tiny.opus", "tiny.m4a", "sparse_tags.mp3", "complete_tags.mp3", "tone_12s.mp3"])
@@ -210,10 +222,14 @@ def test_a_vorbis_file_that_keeps_its_totals_in_the_other_fields_and_its_artists
     audio_file["TITLE"], audio_file["ARTIST"] = ["Song"], ["One", "Two"]
     audio_file["TRACKNUMBER"], audio_file["TOTALTRACKS"], audio_file["DISCNUMBER"], audio_file["TOTALDISCS"] = ["4"], ["10"], ["1"], ["3"]
     audio_file["YEAR"], audio_file["ORGANIZATION"], audio_file["DESCRIPTION"], audio_file["UNSYNCEDLYRICS"] = ["1999"], ["A Label"], ["Said"], ["Sung"]
+    audio_file["ALBUM ARTIST"] = ["Both of Them"]  # (spelt with a space by some taggers)
     audio_file.save()
     got = read_tags(path)
-    assert (got.artist, got.track_number, got.track_total, got.disc_number, got.disc_total, got.year, got.label, got.comment, got.lyrics) == (
-        "One; Two", 4, 10, 1, 3, 1999, "A Label", "Said", "Sung")
+    assert (got.artist, got.album_artist, got.track_number, got.track_total, got.disc_number, got.disc_total, got.year, got.label, got.comment, got.lyrics) == (
+        "One; Two", "Both of Them", 4, 10, 1, 3, 1999, "A Label", "Said", "Sung")
+    audio_file["ALBUMARTIST"] = ["The Usual Spelling"]
+    audio_file.save()
+    assert read_tags(path).album_artist == "The Usual Spelling"  # (and where both are there, the usual one wins)
 
 
 def test_text_values_are_trimmed_and_blank_ones_are_dropped() -> None:
@@ -242,3 +258,42 @@ def test_the_year_of_an_id3v2_3_file_is_read(tmp_path: Path) -> None:
     old.save(str(path), v2_version=3)  # (a year is a TYER frame here, not TDRC)
     got = read_tags(path)
     assert (got.title, got.year, got.date) == ("Old", 1999, "1999")
+
+
+def test_an_id3_publisher_is_the_label_unless_the_file_names_a_label_itself(tmp_path: Path) -> None:
+    from mutagen.id3 import ID3, TIT2, TPUB, TXXX
+
+    path = tmp_path / "publisher.mp3"
+    sf.write(str(path), audio.music(44100, 2), 44100, format="MP3", subtype="MPEG_LAYER_III")
+    frames = ID3()
+    frames.add(TIT2(encoding=3, text="Published"))
+    frames.add(TPUB(encoding=3, text="Some Records"))  # (the standard frame for it)
+    frames.save(str(path))
+    assert read_tags(path).label == "Some Records"
+    frames.add(TXXX(encoding=3, desc="LABEL", text="Picard's Label"))  # (the free text frame a tagger that knows MusicBrainz writes)
+    frames.save(str(path))
+    assert read_tags(path).label == "Picard's Label"
+
+
+@pytest.mark.parametrize("name,reader", [("tiny.flac", "_from_vorbis"), ("tiny.m4a", "_from_mp4"), ("tones_wma.wma", "_from_asf"), ("tone_12s.mp3", "_from_id3")])
+def test_tags_that_are_not_what_they_should_be_never_stop_a_song(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, reader: str) -> None:
+    path = tmp_path / name
+    shutil.copy(FIXTURES / name, path)
+
+    def odd(*args: object, **kwargs: object) -> None:
+        raise KeyError("a tag that is not the kind the reader expects")  # (not a ValueError: whatever it is, the song is converted without its tags)
+
+    monkeypatch.setattr(tags_module, reader, odd)
+    got = read_tags(path)
+    assert (got.title, got.artist, got.track_number, got.label) == ("", "", 0, "")
+
+
+def test_a_file_the_tag_reader_chokes_on_has_no_tags_rather_than_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "a.mp3"
+    path.write_bytes(b"x" * 100)
+
+    def choke(*args: object, **kwargs: object) -> None:
+        raise mutagen.MutagenError("This file is not what it says it is.")
+
+    monkeypatch.setattr(tags_module.mutagen, "File", choke)
+    assert read_tags(path).title == ""
