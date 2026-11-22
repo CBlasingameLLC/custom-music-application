@@ -132,8 +132,8 @@ def test_control_characters_do_not_get_into_a_tag(tmp_path: Path) -> None:
 
 
 def test_an_unknown_format_or_an_unwritable_file_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
-        write_tags(tmp_path / "x.wav", "wav", tags())
+    with pytest.raises(ValueError, match="cannot tag m4a files"):
+        write_tags(tmp_path / "x.m4a", "m4a", tags())
     with pytest.raises(TagError):
         write_tags(tmp_path / "missing.flac", "flac", tags())
 
