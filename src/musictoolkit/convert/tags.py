@@ -185,5 +185,5 @@ def read_tags(path: str | Path) -> SongTags:
         if kind == "asf":
             return _from_asf(audio.tags)
         return _from_id3(audio.tags)  # (MP3, WAV, AIFF, and what else keeps ID3 frames)
-    except Exception:
+    except Exception:  # noqa: BLE001 - tags are a courtesy: whatever is wrong with them, the song is still converted
         return _blank()

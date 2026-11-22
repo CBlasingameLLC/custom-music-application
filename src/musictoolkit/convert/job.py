@@ -76,12 +76,33 @@ def _tags_for(song: planning.PlannedSong) -> Any:
     return tags
 
 
+def _make_folders(folder: Path) -> list[Path]:
+    """Make `folder`, and any above it that are missing. Returns the ones that this made, the innermost first."""
+    made: list[Path] = []
+    probe = folder
+    while not probe.exists() and probe != probe.parent:
+        made.append(probe)
+        probe = probe.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    return made
+
+
+def _remove_folders(folders: list[Path]) -> None:
+    """Take away the folders a song that did not get made had made for itself: only while they are empty, and never one that was there before."""
+    for folder in folders:
+        try:
+            folder.rmdir()
+        except OSError:
+            return
+
+
 def _write_song(song: planning.PlannedSong, request: Request, scratch: Path, batch_id: str, number: int, handle: Any, progress: _Progress, helper_now: Callable[[], DiscHelper]) -> None:
-    """Put one song in its place. Raises _Skip for one that is left alone, anything else for one that failed."""
+    """Put one song in its place. Raises _Skip for one that is left alone, anything else for one that failed (or was stopped): then nothing of it is left,
+    not the temporary file and not the folders it made."""
     target = Path(song.target)
     if os.path.lexists(target):
         raise _Skip("Already there: left as it is.")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    made_folders = _make_folders(target.parent)
     part = target.with_name(target.name + ".part")
     part.unlink(missing_ok=True)
     decoded: Path | None = None
@@ -108,6 +129,11 @@ def _write_song(song: planning.PlannedSong, request: Request, scratch: Path, bat
         if os.path.lexists(target):  # (it appeared while this song was being converted)
             raise _Skip("Already there: left as it is.")
         os.replace(part, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)
+        _remove_folders(made_folders)
+        raise
     finally:
         with contextlib.suppress(OSError):
             part.unlink(missing_ok=True)

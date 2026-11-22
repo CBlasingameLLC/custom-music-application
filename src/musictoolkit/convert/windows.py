@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from musictoolkit.discs.burnjob import _carrying_stop as carrying_stop  # (the one way a press of Stop reaches the helper while it works)
+# The one way a press of Stop reaches the helper while it works:
+from musictoolkit.discs.burnjob import _carrying_stop as carrying_stop
 from musictoolkit.discs.helper import DiscError, DiscHelper, DiscUnavailable
 
 __all__ = ["BATCH", "ask", "carrying_stop", "decode"]

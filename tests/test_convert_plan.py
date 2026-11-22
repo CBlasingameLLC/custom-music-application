@@ -48,7 +48,7 @@ def test_a_mixed_library_is_sorted_into_what_each_song_needs(library: Library, t
     plan = make(library, tmp_path, Spec("mp3", "256", max_rate=48000))
     got = by_title(plan)
     assert {t: s.action for t, s in got.items()} == {"Lossless": "convert", "Hires": "convert", "Fits": "copy", "Six": "cannot", "Broken": "cannot", "Gone": "cannot"}
-    assert got["Hires"].notes == ["Converted from 96 kHz to 48 kHz."] and got["Lossless"].notes == []
+    assert got["Hires"].notes == ["Resampled from 96 kHz to 48 kHz."] and got["Lossless"].notes == []
     assert got["Fits"].notes == ["Already in this format: copied as it is."]
     assert got["Six"].notes == ["This song has 6 channels; Convert handles mono and stereo."]
     assert got["Broken"].notes[0].startswith("The song cannot be read (") and got["Gone"].notes == ["The file is not there any more."]

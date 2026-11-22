@@ -119,7 +119,7 @@ def parts_in(folder: Path) -> list[Path]:
 
 def test_songs_go_to_their_places_with_their_tags_and_cover(rig: SimpleNamespace) -> None:
     sources = [song_file(rig, f"{n}.flac", seed=n, title=title, track_number=n) for n, title in enumerate(("One", "Two", "Three"), start=1)]
-    result, handle = run(rig)
+    result, _ = run(rig)
     for (row, wrote), name in zip(sources, ("01 - One", "02 - Two", "03 - Three")):
         target = rig.out / "Aurora Vale" / "Northern Lights" / f"{name}.mp3"
         assert target.is_file()
@@ -312,6 +312,37 @@ def test_a_slip_in_a_tag_is_a_failed_song_not_a_stopped_batch(rig: SimpleNamespa
     assert header(rig)["items"][0]["message"] == "The file is read-only or in use by another program." and parts_in(rig.out) == []
 
 
+def only_one_song_fails(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Two songs, in different albums: the one in "Only One / Solo" fails, the other is converted."""
+    song_file(rig, "a.flac", title="A", album="Solo", album_artist="Only One", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=2)
+    monkeypatch.setattr(engine, "convert_file", failing(engine.convert_file, lambda name: name == "a.flac", ConvertError("The song could not be converted (boom).")))
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
+    assert [p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()] == ["02 - B.mp3"]
+    return result
+
+
+def test_a_song_that_fails_leaves_none_of_the_folders_it_made(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    only_one_song_fails(rig, monkeypatch)
+    assert not (rig.out / "Only One").exists()  # neither "Solo" nor the artist's folder above it is left empty
+
+
+def test_a_folder_that_was_there_before_stays_when_the_song_for_it_fails(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    mine = rig.out / "Only One" / "Solo"
+    mine.mkdir(parents=True)
+    only_one_song_fails(rig, monkeypatch)
+    assert mine.is_dir() and list(mine.iterdir()) == []  # it was the person's, and empty or not it is not the app's to remove
+
+
+def test_only_the_folders_a_failed_song_made_go_and_never_one_with_something_in_it(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    (rig.out / "Only One").mkdir(parents=True)
+    (rig.out / "Only One" / "notes.txt").write_text("the person's own")
+    only_one_song_fails(rig, monkeypatch)
+    assert not (rig.out / "Only One" / "Solo").exists()  # the one this song made is gone ...
+    assert (rig.out / "Only One" / "notes.txt").read_text() == "the person's own"  # ... the one with a file of the person's in it is not
+
+
 # ---------------------------------------------------------------------------------------- stopping
 
 
@@ -326,6 +357,16 @@ def test_a_stop_leaves_the_songs_that_were_done_and_nothing_half_written(rig: Si
     assert (saved["status"], saved["converted"], saved["failed"]) == ("cancelled", 1, 0) and saved["message"] == "Stopped. The songs that were finished stay where they are."
     assert [(i["title"], i["status"]) for i in saved["items"]] == [("A", "done"), ("B", "skipped"), ("C", "skipped")]
     assert saved["items"][1]["message"] == "Stopped before this song was finished." and saved["items"][2]["message"] == "Stopped."
+
+
+def test_a_stop_leaves_no_empty_folder_of_the_song_that_was_stopped(rig: SimpleNamespace) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", album="Solo", album_artist="Only One", track_number=1)
+    handle = Handle(cancel_when=lambda fields: fields.get("message", "").startswith("Converting song 2 of 2"))
+    with pytest.raises(JobCancelled):
+        run(rig, handle=handle)
+    assert [p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()] == ["01 - A.mp3"]
+    assert not (rig.out / "Only One").exists()
 
 
 def test_a_stop_before_the_first_song_writes_nothing(rig: SimpleNamespace) -> None:

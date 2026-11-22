@@ -71,12 +71,12 @@ def song(family: str = "flac", rate: int = 44100, channels: int = 2, bits: int =
     # not in the format, or not as asked for
     (song("flac", bits=24), Spec("flac", depth="16"), "convert", ["Reduced from 24 to 16 bits (with a little dither)."]),
     (song("flac", bits=24), Spec("flac", depth="keep"), "copy", ["Already in this format: copied as it is."]),
-    (song("flac", rate=96000), Spec("flac", max_rate=48000), "convert", ["Converted from 96 kHz to 48 kHz."]),
-    (song("flac", rate=88200, bits=24), Spec("wav", max_rate=48000, depth="16"), "convert", ["Converted from 88.2 kHz to 44.1 kHz.", "Reduced from 24 to 16 bits (with a little dither)."]),
+    (song("flac", rate=96000), Spec("flac", max_rate=48000), "convert", ["Resampled from 96 kHz to 48 kHz."]),
+    (song("flac", rate=88200, bits=24), Spec("wav", max_rate=48000, depth="16"), "convert", ["Resampled from 88.2 kHz to 44.1 kHz.", "Reduced from 24 to 16 bits (with a little dither)."]),
     (song("flac"), Spec("mp3", "256"), "convert", []),
-    (song("flac", rate=96000), Spec("mp3", "320"), "convert", ["Converted from 96 kHz to 48 kHz."]),
+    (song("flac", rate=96000), Spec("mp3", "320"), "convert", ["Resampled from 96 kHz to 48 kHz."]),
     (song("wav"), Spec("flac"), "convert", []),
-    (song("mp3", kbps=256), Spec("opus", "128"), "convert", ["Converted from 44.1 kHz to 48 kHz.", "A lossy song converted to another lossy format loses a little more quality."]),
+    (song("mp3", kbps=256), Spec("opus", "128"), "convert", ["Resampled from 44.1 kHz to 48 kHz.", "A lossy song converted to another lossy format loses a little more quality."]),
     (song("mp3", kbps=256), Spec("flac"), "convert", ["A lossy song does not get its quality back: the file only gets bigger."]),
     (song("ogg", kbps=160), Spec("wav"), "convert", ["A lossy song does not get its quality back: the file only gets bigger."]),
     # a song only Windows decodes is never copied, whatever it is going to

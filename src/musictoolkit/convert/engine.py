@@ -93,7 +93,7 @@ def decide(info: SourceInfo, spec: Spec) -> Treatment:
         if fits and spec.existing == "skip":
             return Treatment("skip", info.rate, info.channels, info.bits, ["Already in this format: left out."])
     if rate != info.rate:
-        notes.append(f"Converted from {_khz(info.rate)} to {_khz(rate)}.")
+        notes.append(f"Resampled from {_khz(info.rate)} to {_khz(rate)}.")
     if bits and info.bits > bits:
         notes.append(f"Reduced from {info.bits} to {bits} bits (with a little dither).")
     if info.lossy and formats.FORMATS[spec.format].lossy:
