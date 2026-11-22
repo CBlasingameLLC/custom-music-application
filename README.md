@@ -93,8 +93,9 @@ your music folders (a converted copy there would turn up in the library as a sec
    that was not shown (the files may have changed since: the batch is worked out again when it starts, and the result says when it differs from the preview).
 6. **Convert.** A job with progress for the whole batch (counted in minutes of music, not in songs), and a Cancel button; only one runs at a time, and not
    while Organize files is moving files. Every song is written under a temporary name (`.part`) and renamed when it is whole, so no half-written song is
-   ever where a player could find it; a file that is already there is never replaced; a song that fails is reported and the rest go on; running out of
-   room ends the batch. If the app is closed in the middle, the next start marks the conversion *interrupted* and removes what was half written.
+   ever where a player could find it; a file that is already there is never replaced (not even one that turns up a moment before the song is put in its
+   place); a file that Windows has in use for a moment (a virus scanner, the search indexer) is tried again a few times, as the ripper does; a song that fails is
+   reported and the rest go on; running out of room ends the batch. If the app is closed in the middle, the next start marks the conversion *interrupted* and removes what was half written.
 7. **History and undo.** The page lists every conversion under *Recent conversions*, with what happened to every song (the ones that were not made first), and
    what you chose is remembered for next time (not *what* to convert). **Undo** deletes the files the conversion made and the folders that leaves empty; a file whose size
    or time is not what the conversion left (you have edited it) is left alone, and so is everything else in the folder.

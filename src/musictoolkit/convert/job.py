@@ -21,6 +21,8 @@ from musictoolkit.convert.engine import ConvertError, Spec
 from musictoolkit.convert.source import SourceError, inspect_source
 from musictoolkit.convert.tags import read_tags
 from musictoolkit.discs.helper import DiscError, DiscHelper, DiscUnavailable
+from musictoolkit.discs.rip import _move_into_place as move_into_place
+from musictoolkit.discs.rip import _patiently as patiently
 from musictoolkit.discs.tagging import TagError, write_tags
 from musictoolkit.media import art
 
@@ -104,9 +106,9 @@ def _write_song(song: planning.PlannedSong, request: Request, scratch: Path, bat
         raise _Skip("Already there: left as it is.")
     made_folders = _make_folders(target.parent)
     part = target.with_name(target.name + store.PART_SUFFIX)
-    part.unlink(missing_ok=True)
     decoded: Path | None = None
     try:
+        part.unlink(missing_ok=True)  # (a leftover of an earlier run: it is replaced, never written through, which a link under this name would otherwise be)
         if song.action == "copy":
             engine.copy_file(song.source, part, check=handle.check, on_progress=progress.part(0, 2))
         else:
@@ -125,10 +127,14 @@ def _write_song(song: planning.PlannedSong, request: Request, scratch: Path, bat
                     windows.decode(helper, song.source, str(decoded), on_event=decoding)
                 info, source, converting = inspect_source(decoded), str(decoded), progress.part(1, 1)  # (what Windows made of it, which may differ from what it said first)
             engine.convert_file(source, part, info, request.spec, check=handle.check, on_progress=converting)
-            write_tags(part, request.spec.format, _tags_for(song), art.find_art(Path(song.source)) if request.cover else None)
+            tags, cover = _tags_for(song), art.find_art(Path(song.source)) if request.cover else None
+            patiently(lambda: write_tags(part, request.spec.format, tags, cover))  # (as the ripper does: a virus scanner may have the file for a moment, and Windows says it is in use)
         if os.path.lexists(target):  # (it appeared while this song was being converted)
             raise _Skip("Already there: left as it is.")
-        os.replace(part, target)
+        try:
+            patiently(lambda: move_into_place(part, target))  # (on Windows this refuses a name that was taken a moment ago, and waits if the file is in use)
+        except FileExistsError:
+            raise _Skip("Already there: left as it is.") from None
     except BaseException:
         with contextlib.suppress(OSError):
             part.unlink(missing_ok=True)
@@ -231,6 +237,9 @@ def run_conversion(
         with contextlib.suppress(OSError):
             for leftover in scratch.glob(f"{batch_id}-*"):
                 leftover.unlink()
+        for song in writing:  # (a program that held on to a half-written file a moment ago has most likely let go by now)
+            with contextlib.suppress(OSError):
+                Path(song.target + store.PART_SUFFIX).unlink(missing_ok=True)
     note = "Stopped." if stopped else fatal or "Stopped: there was no room for the rest."
     with db() as conn:
         conn.execute("UPDATE conversion_items SET status = 'skipped', message = ? WHERE conversion_id = ? AND status = 'waiting'", (note, conversion_id))

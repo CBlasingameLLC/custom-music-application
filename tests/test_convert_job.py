@@ -23,6 +23,7 @@ from musictoolkit.convert.job import ConvertProblem
 from musictoolkit.convert.source import SourceError
 from musictoolkit.convert.tags import read_tags
 from musictoolkit.db.connection import connect
+from musictoolkit.discs import rip as ripper
 from musictoolkit.discs.helper import DiscError, DiscUnavailable
 from musictoolkit.discs.tagging import SongTags, write_tags
 from musictoolkit.media import art
@@ -282,6 +283,27 @@ def test_a_leftover_under_the_temporary_name_is_replaced_and_never_written_throu
     assert precious.read_bytes() == b"the person's own file" and parts_in(rig.out) == []
 
 
+def test_a_leftover_that_cannot_be_taken_away_fails_its_own_song_and_the_others_go_on(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    song_file(rig, "a.flac", title="A", album="Solo", album_artist="Only One", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=1)
+    solo = rig.out / "Only One" / "Solo"
+    solo.mkdir(parents=True)
+    held = solo / ("01 - A.mp3" + store.PART_SUFFIX)
+    held.write_bytes(b"half of an earlier try")
+    real = Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self == held:
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
+    assert [(i["title"], i["status"]) for i in header(rig)["items"]] == [("A", "failed"), ("B", "done")]
+    assert held.read_bytes() == b"half of an earlier try" and (rig.out / "Aurora Vale/Northern Lights/01 - B.mp3").is_file()
+
+
 # ---------------------------------------------------------------------------------------- a conversion that cannot begin
 
 
@@ -421,12 +443,20 @@ def test_no_room_for_the_first_song_is_an_error(rig: SimpleNamespace, monkeypatc
     assert header(rig)["status"] == "failed"
 
 
-def test_a_slip_in_a_tag_is_a_failed_song_not_a_stopped_batch(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def no_waiting(monkeypatch: pytest.MonkeyPatch) -> tuple[float, ...]:
+    """The pauses between the tries at a file that Windows has in use (the ripper's: 0.2, 0.5, 1 and 2 seconds), as no time at all."""
+    monkeypatch.setattr(ripper, "PATIENCE", (0.0, 0.0, 0.0, 0.0))
+    return ripper.PATIENCE
+
+
+def test_a_slip_in_a_tag_is_a_failed_song_not_a_stopped_batch(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, no_waiting: tuple[float, ...]) -> None:
     song_file(rig, "a.flac", title="A", track_number=1)
     song_file(rig, "b.flac", seed=2, title="B", track_number=2)
-    real = job.write_tags
+    real, tried = job.write_tags, []
 
     def write(path, fmt, tags, cover):
+        tried.append(tags.title)
         if tags.title == "A":
             raise job.TagError("The file is read-only or in use by another program.", busy=True)
         return real(path, fmt, tags, cover)
@@ -435,6 +465,69 @@ def test_a_slip_in_a_tag_is_a_failed_song_not_a_stopped_batch(rig: SimpleNamespa
     result, _ = run(rig)
     assert (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
     assert header(rig)["items"][0]["message"] == "The file is read-only or in use by another program." and parts_in(rig.out) == []
+    assert tried == ["A"] * (len(no_waiting) + 1) + ["B"]  # (a file that stays in use is tried again as many times as the ripper tries, and then it is a failed song)
+
+
+def test_a_file_that_windows_has_in_use_for_a_moment_is_tagged_and_moved_when_it_lets_go(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, no_waiting: tuple[float, ...]) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    real_tags, real_move, refusals = job.write_tags, job.move_into_place, {"tags": 2, "move": 3}
+
+    def write(path, fmt, tags, cover):
+        if refusals["tags"]:
+            refusals["tags"] -= 1
+            raise job.TagError("The file is read-only or in use by another program.", busy=True)
+        return real_tags(path, fmt, tags, cover)
+
+    def move(source, target):
+        if refusals["move"]:
+            refusals["move"] -= 1
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        return real_move(source, target)
+
+    monkeypatch.setattr(job, "write_tags", write)
+    monkeypatch.setattr(job, "move_into_place", move)
+    result, _ = run(rig)
+    assert (result["status"], result["converted"], result["failed"]) == ("done", 1, 0) and refusals == {"tags": 0, "move": 0}
+    assert read_tags(rig.out / "Aurora Vale/Northern Lights/01 - A.mp3").title == "A" and parts_in(rig.out) == []
+
+
+def test_a_file_that_turns_up_under_the_name_while_it_is_being_put_there_is_not_replaced(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    taken = rig.out / "Aurora Vale/Northern Lights/01 - A.mp3"
+
+    def move(source, target):  # (what Windows does when the name was taken a moment ago: it refuses)
+        taken.write_bytes(b"arrived at the last moment")
+        raise FileExistsError(errno.EEXIST, "Cannot create a file when that file already exists")
+
+    monkeypatch.setattr(job, "move_into_place", move)
+    result, _ = run(rig)
+    assert taken.read_bytes() == b"arrived at the last moment" and (result["status"], result["converted"], result["failed"]) == ("done", 0, 0)
+    assert [(i["status"], i["message"]) for i in header(rig)["items"]] == [("skipped", "Already there: left as it is.")] and parts_in(rig.out) == []
+
+
+def test_a_half_written_file_that_a_program_held_on_to_is_taken_away_at_the_end(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, no_waiting: tuple[float, ...]) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    song_file(rig, "b.flac", seed=2, title="B", track_number=2)
+    original_convert = engine.convert_file
+    failing_convert = failing(original_convert, lambda name: name == "a.flac", ConvertError("The song could not be converted (boom)."))
+    real, held = Path.unlink, []
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self.name.endswith(store.PART_SUFFIX) and self.exists() and len(held) < 2:  # (a virus scanner has it: the first two tries to take it away are refused)
+            held.append(self)
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        return real(self, missing_ok=missing_ok)
+
+    def leaving_a_half_file(source, target, info, spec, **kwargs):
+        if Path(str(source)).name == "a.flac":
+            Path(target).write_bytes(b"half")
+        return failing_convert(source, target, info, spec, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", leaving_a_half_file)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    result, _ = run(rig)
+    assert held and (result["status"], result["converted"], result["failed"]) == ("partial", 1, 1)
+    assert parts_in(rig.out) == []  # (the end of the batch tried once more, and the program had let go)
 
 
 def only_one_song_fails(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -785,6 +878,34 @@ def test_the_history_lists_the_newest_first_and_pages_through_the_songs(rig: Sim
         assert store.get_conversion(conn, 999) is None and first
         with pytest.raises(ValueError, match="unknown columns"):
             store.set_item(conn, 1, nonsense=1)
+
+
+def test_a_page_of_songs_is_never_more_than_five_hundred_or_less_than_one(rig: SimpleNamespace) -> None:
+    items = [{"track_id": n, "title": f"S{n:03d}", "source": f"/s/{n}.flac", "target": f"/d/{n}.mp3", "action": "convert"} for n in range(600)]
+    with rig.db() as conn:
+        conversion_id = make_history(conn, "many", items)
+        assert [len(store.get_conversion(conn, conversion_id, limit=n)["items"]) for n in (10_000, 500, 100, 0, -1)] == [500, 500, 100, 1, 1]  # (to SQL a limit of -1 is "no limit")
+        last = store.get_conversion(conn, conversion_id, offset=550, limit=100)
+        assert last["items_total"] == 600 and [i["title"] for i in last["items"]][:2] == ["S550", "S551"] and len(last["items"]) == 50
+
+
+def test_conversions_that_began_in_the_same_second_are_listed_the_later_first(rig: SimpleNamespace) -> None:
+    item = [{"track_id": 1, "title": "S", "source": "/s/1.flac", "target": "/d/1.mp3", "action": "convert"}]
+    with rig.db() as conn:
+        earlier = make_history(conn, "a", item, started="2021-01-01T00:00:00+00:00")
+        later = make_history(conn, "b", item, started="2021-01-01T00:00:00+00:00")
+        assert [c["id"] for c in store.list_conversions(conn)] == [later, earlier]
+
+
+def test_a_conversion_counts_the_bytes_of_the_songs_it_made_and_no_others(rig: SimpleNamespace) -> None:
+    items = [{"track_id": n, "title": f"S{n}", "source": f"/s/{n}.flac", "target": f"/d/{n}.mp3", "action": "convert"} for n in range(3)]
+    with rig.db() as conn:
+        conversion_id, ids = store.create_conversion(conn, batch_id="b", title="x", fmt="mp3", quality="256", destination="/d", scheme=SCHEME, options={}, left_out=0, items=items)
+        store.set_item(conn, ids[0], status="done", size=1000, mtime=1.0)
+        store.set_item(conn, ids[1], status="failed", size=500)
+        store.set_item(conn, ids[2], status="skipped", size=300)
+        store.finish_conversion(conn, conversion_id, "partial")
+        assert store.get_conversion(conn, conversion_id)["bytes"] == 1000
 
 
 def test_a_conversion_the_app_was_closed_in_the_middle_of_is_marked_and_its_half_files_removed(rig: SimpleNamespace) -> None:
