@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+PART_SUFFIX = ".part"  # a song is written under its name and this, and renamed when it is whole
 ITEM_COLUMNS = {"status", "message", "size", "mtime", "target"}
 LEFT_UNDONE = "The app was closed before this song was finished."
 
@@ -116,7 +117,7 @@ def recover(conn: sqlite3.Connection, scratch: Path | None = None) -> int:
     for conversion in running:
         for item in conn.execute("SELECT target FROM conversion_items WHERE conversion_id = ? AND status IN ('waiting', 'working')", (conversion["id"],)):
             with contextlib.suppress(OSError):
-                Path(item["target"] + ".part").unlink(missing_ok=True)
+                Path(item["target"] + PART_SUFFIX).unlink(missing_ok=True)
         conn.execute(
             "UPDATE conversion_items SET status = 'failed', message = ? WHERE conversion_id = ? AND status IN ('waiting', 'working')", (LEFT_UNDONE, conversion["id"]),
         )

@@ -153,6 +153,20 @@ def test_a_name_too_long_for_windows_is_said_so(library: Library, tmp_path: Path
     assert song.action == "cannot" and song.notes[0].startswith("The name is too long for Windows (") and not plan.ok
 
 
+def test_the_longest_name_is_the_one_that_leaves_room_for_the_temporary_name(library: Library, tmp_path: Path) -> None:
+    library.add("a.flac", audio.music(44100, 5), title="T", album="A", album_artist="X")
+    base = len(str(tmp_path)) + 1
+    for extra, fits in ((0, True), (1, False)):
+        folder = tmp_path / ("x" * (248 - base + extra))  # (the song is then /T.mp3 after it: 254 characters, and 255)
+        plan = planning.build_plan(library.rows, Spec("mp3"), str(folder), "{title}.{ext}", [str(library.folder)], ask_windows=lambda paths: {})
+        song = plan.songs[0]
+        assert len(song.target) == 254 + extra
+        if fits:
+            assert song.action == "convert" and plan.ok
+        else:
+            assert song.action == "cannot" and song.notes == ["The name is too long for Windows (255 characters; at most 254, which leaves room for the temporary name the song is written under)."]
+
+
 def test_a_song_may_never_be_written_into_the_library(library: Library, tmp_path: Path) -> None:
     library.add("a.flac", audio.music(44100, 5))
     plan = planning.build_plan(library.rows, Spec("mp3"), str(tmp_path / "out"), "{title}.{ext}", [str(library.folder), str(tmp_path / "out" / "Inner")],

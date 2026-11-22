@@ -103,7 +103,7 @@ def _write_song(song: planning.PlannedSong, request: Request, scratch: Path, bat
     if os.path.lexists(target):
         raise _Skip("Already there: left as it is.")
     made_folders = _make_folders(target.parent)
-    part = target.with_name(target.name + ".part")
+    part = target.with_name(target.name + store.PART_SUFFIX)
     part.unlink(missing_ok=True)
     decoded: Path | None = None
     try:

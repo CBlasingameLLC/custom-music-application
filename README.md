@@ -85,7 +85,7 @@ your music folders (a converted copy there would turn up in the library as a sec
    bitrate is at most about 5 % above the quality chosen (for a lossless song: its rate and bit depth are the ones asked for). A song that only Windows
    can read is never copied: it always goes through the converter.
 4. **Where, and under which names.** The folder, and a layout built from the same fields as Organize files (with a live example); the new format's
-   extension is filled in. Windows' rules are enforced (reserved names, 259-character paths). The cover picture can be left out.
+   extension is filled in. Windows' rules are enforced (reserved names; a whole path of at most 254 characters, which leaves room for the temporary name each song is written under). The cover picture can be left out.
 5. **Preview.** Every song is looked at (a job, with progress). The page then lists, under tabs, what will be converted, copied as it is, left out, already
    in the folder (never overwritten), given the same name as another song of this batch (only the first is converted), and what *cannot be converted*,
    each in words ("This song has 6 channels; Convert handles mono and stereo."). It shows about how much will be written and how much room there is, and

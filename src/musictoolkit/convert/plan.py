@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from musictoolkit.convert import engine, formats, windows
+from musictoolkit.convert import engine, formats, store, windows
 from musictoolkit.convert.engine import Spec
 from musictoolkit.convert.source import (
     SourceError,
@@ -217,8 +217,9 @@ def build_plan(
             continue
         if folder is not None:
             song.target = os.path.normpath(os.path.join(str(folder), *song.relative.split("/")))
-            if len(song.target) > organizer.MAX_WINDOWS_PATH:
-                song.notes = [f"The name is too long for Windows ({len(song.target)} characters; at most {organizer.MAX_WINDOWS_PATH})."]
+            limit = organizer.MAX_WINDOWS_PATH - len(store.PART_SUFFIX)  # (the song is written under a name a little longer than its own)
+            if len(song.target) > limit:
+                song.notes = [f"The name is too long for Windows ({len(song.target)} characters; at most {limit}, which leaves room for the temporary name the song is written under)."]
                 continue
             if any(inside(song.target, root) for root in roots):
                 song.notes = ["This would write into your library."]
