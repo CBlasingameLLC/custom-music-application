@@ -71,10 +71,27 @@ def test_what_the_estimates_are_made_of(library: Library, tmp_path: Path) -> Non
     spec = Spec("mp3", "320")
     plan = make(library, tmp_path, spec)
     got = by_title(plan)
-    assert got["A"].bytes == 200 * 320 * 125 + planning.COVER_ALLOWANCE and got["A"].seconds == pytest.approx(200, abs=0.1)
+    assert got["A"].bytes == 200 * 320 * 125 + 150 * 1024 and got["A"].seconds == pytest.approx(200, abs=0.1)  # (a cover picture is allowed 150 KB)
     assert got["B"].action == "copy" and got["B"].bytes == (library.folder / "b.mp3").stat().st_size
     assert make(library, tmp_path, spec, cover=False).songs[0].bytes == 200 * 320 * 125
-    assert plan.bytes == got["A"].bytes + got["B"].bytes and plan.room_needed == int(plan.bytes * 1.05) + planning.SPARE_BYTES
+    assert plan.bytes == got["A"].bytes + got["B"].bytes and plan.room_needed == int(plan.bytes * 1.05) + 64 * 1024 * 1024  # (5% and 64 MB to spare)
+
+
+def test_the_estimate_of_a_song_whose_rate_changes_is_made_at_the_new_rate(library: Library, tmp_path: Path) -> None:
+    library.add("hires.flac", audio.music(96000, 10), 96000, subtype="PCM_24", title="Hires")
+    song = make(library, tmp_path, Spec("wav", max_rate=48000, depth="16"), cover=False).songs[0]
+    assert song.action == "convert" and song.bytes == 10 * 48000 * 2 * 2 + 44  # (ten seconds of 48 kHz, 16-bit stereo, and a header)
+
+
+def test_a_plan_is_good_only_with_something_to_write_and_no_problem() -> None:
+    spec = Spec("mp3")
+    writes = planning.PlannedSong(1, "/a.flac", "A", "X", action="convert")
+    left_out = planning.PlannedSong(2, "/b.flac", "B", "X", action="skip")
+    assert planning.ConvertPlan(spec, SCHEME, "/out", [writes], []).ok is True
+    assert planning.ConvertPlan(spec, SCHEME, "/out", [left_out], []).ok is False  # (nothing to write)
+    assert planning.ConvertPlan(spec, SCHEME, "/out", [], []).ok is False
+    assert planning.ConvertPlan(spec, SCHEME, "/out", [writes], ["There is not enough room."]).ok is False  # (a problem)
+    assert planning.ConvertPlan(spec, SCHEME, "/out", [left_out], []).room_needed == 0  # (nothing to write: no room to ask for, not even the spare)
 
 
 # ---------------------------------------------------------------------------------------- the names

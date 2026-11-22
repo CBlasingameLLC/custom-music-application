@@ -83,3 +83,17 @@ def test_how_big_the_files_will_be() -> None:
     assert formats.estimate_bytes("ogg", "160", 10, 2, 44100, 0) == 200_000
     assert formats.estimate_bytes("flac", None, 10, 2, 44100, 16) == int(10 * 44100 * 4 * 0.62)
     assert formats.estimate_bytes("flac", None, -5, 2, 44100, 16) == 0  # (a length that is not known is nothing)
+
+
+def test_the_default_quality_of_each_format() -> None:
+    assert {f.id: f.default for f in formats.FORMATS.values()} == {"mp3": "256", "ogg": "160", "opus": "128", "flac": "standard", "wav": "pcm"}
+    assert [formats.check_choice(fmt, None).id for fmt in formats.FORMATS] == ["256", "160", "128", "standard", "pcm"]
+
+
+@pytest.mark.parametrize("rate,expected", [
+    (8000, 32000), (11025, 44100), (12000, 48000), (14700, 44100), (16000, 32000), (22050, 44100), (24000, 48000), (7350, 44100),  # (raised by a whole number of times)
+    (40000, 44100), (44099, 44100), (46000, 48000), (47999, 48000),  # (no whole number reaches one: the nearer standard rate at or above)
+    (88200, 44100), (96000, 48000), (176400, 44100), (192000, 48000), (50000, 48000),  # (above what MP3 takes: the rate of the family it is in)
+])
+def test_the_rate_mp3_has_for_any_rate(rate: int, expected: int) -> None:
+    assert formats.target_rate("mp3", rate) == expected

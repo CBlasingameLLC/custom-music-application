@@ -17,6 +17,7 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.wave import WAVE
 from PIL import Image
 
+from musictoolkit.convert import tags as tags_module
 from musictoolkit.convert.tags import read_tags
 from musictoolkit.discs.tagging import ENCODER, FORMATS, SongTags, TagError, write_tags
 from musictoolkit.media import art
@@ -213,3 +214,31 @@ def test_a_vorbis_file_that_keeps_its_totals_in_the_other_fields_and_its_artists
     got = read_tags(path)
     assert (got.artist, got.track_number, got.track_total, got.disc_number, got.disc_total, got.year, got.label, got.comment, got.lyrics) == (
         "One; Two", 4, 10, 1, 3, 1999, "A Label", "Said", "Sung")
+
+
+def test_text_values_are_trimmed_and_blank_ones_are_dropped() -> None:
+    assert tags_module._strings(["  Aurora  ", "", "   ", b" bytes ", "Vale"]) == ["Aurora", "bytes", "Vale"]
+    assert tags_module._strings(None) == [] and tags_module._strings([]) == []
+
+
+def test_values_that_wrap_a_text_are_unwrapped() -> None:
+    class Wrapped:
+        value = "inside"
+
+        def __str__(self) -> str:
+            return "outside"
+
+    assert tags_module._strings([Wrapped()]) == ["inside"]
+
+
+def test_the_year_of_an_id3v2_3_file_is_read(tmp_path: Path) -> None:
+    from mutagen.id3 import ID3, TIT2, TYER
+
+    path = tmp_path / "old.mp3"
+    sf.write(str(path), audio.music(44100, 2), 44100, format="MP3", subtype="MPEG_LAYER_III")
+    old = ID3()
+    old.add(TIT2(encoding=3, text="Old"))
+    old.add(TYER(encoding=3, text="1999"))
+    old.save(str(path), v2_version=3)  # (a year is a TYER frame here, not TDRC)
+    got = read_tags(path)
+    assert (got.title, got.year, got.date) == ("Old", 1999, "1999")

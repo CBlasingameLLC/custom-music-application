@@ -8,7 +8,10 @@ import time
 from pathlib import Path
 
 import mutagen
+import numpy as np
 import soundfile as sf
+from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3NoHeaderError
 from playwright.sync_api import expect
 
 from musictoolkit.convert import engine, store
@@ -45,6 +48,36 @@ def song_files(folder: Path) -> list[str]:
 
 def source_song(live, title: str) -> Path:
     return next(live.library.rglob(f"*{title}*.mp3"))
+
+
+def convert_the_library(page, out: Path, *, format_label: str = "Opus", quality: str | None = "96") -> None:
+    """The whole way through the form for every song in the library: choose, preview, convert, and wait for the message that says it is done."""
+    open_convert(page)
+    choose_the_whole_library(page)
+    page.get_by_label("Format", exact=True).select_option(label=format_label)
+    if quality:
+        page.get_by_label("Quality", exact=True).select_option(value=quality)
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)
+    page.get_by_role("button", name=START).click()
+    expect(page.locator(".toast", has_text="Converted 9 songs")).to_be_visible(timeout=120_000)
+
+
+def add_a_song_mp3_can_copy(live) -> Path:
+    """A 44.1 kHz stereo 256 kbps MP3 in the live library (before it is scanned), in the genre Copies: what MP3 is asked for at its default quality,
+    so converting it to MP3 only copies it (the other songs are at 22.05 kHz, which MP3 as asked for here does not take)."""
+    path = live.library / "Extra" / "Copies" / "01 - Copy Me.mp3"
+    path.parent.mkdir(parents=True)
+    rate = 44100
+    tone = (0.3 * np.sin(2 * np.pi * 440 * np.arange(rate * 4) / rate)).astype("float32")
+    sf.write(str(path), np.column_stack([tone, tone]), rate, format="MP3", subtype="MPEG_LAYER_III", bitrate_mode="CONSTANT", compression_level=0.19)
+    try:
+        tags = EasyID3(str(path))
+    except ID3NoHeaderError:
+        tags = EasyID3()
+    tags.update({"title": "Copy Me", "artist": "Aurora Vale", "albumartist": "Aurora Vale", "album": "Copies", "tracknumber": "1", "genre": "Copies"})
+    tags.save(str(path))
+    return path
 
 
 def test_the_whole_way_from_the_tools_page_to_taking_the_conversion_back(page, live, tmp_path):
@@ -334,6 +367,219 @@ def test_only_one_conversion_runs_at_a_time(page, live, tmp_path, monkeypatch):
     for control in (page.get_by_role("button", name="Preview", exact=True), page.get_by_role("button", name="Browse…")):
         expect(control).to_be_disabled()
     expect(page.locator("#convert-folder")).to_be_disabled()
+    for control in page.locator(".organize-form select, .organize-form input, .organize-form button").all():
+        expect(control).to_be_disabled()  # (nothing in the form can be changed under a conversion that is running)
     release.set()
     expect(page.locator(".toast", has_text="Converted 9 songs")).to_be_visible(timeout=120_000)
     expect(page.get_by_role("button", name="Preview", exact=True)).to_be_enabled()
+
+
+def test_the_same_choice_is_not_added_twice_and_two_ratings_are_two_choices(page, live):
+    open_convert(page)
+    add = page.get_by_role("button", name="Add", exact=True)
+    page.get_by_label("Kind of music to add").select_option(label="Songs rated…")
+    page.get_by_label("Minimum rating").select_option("4")
+    add.click()
+    expect(page.locator(".source-chip", has_text="Rated 4+ stars")).to_be_visible()
+    expect(add).to_be_disabled()  # that very choice has been made
+    page.get_by_label("Minimum rating").select_option("2")
+    expect(add).to_be_enabled()
+    add.click()
+    expect(page.locator(".source-chip")).to_have_count(2)
+
+
+def test_preview_waits_for_a_folder_and_a_layout(page, live, tmp_path):
+    open_convert(page)
+    choose_the_whole_library(page)
+    button = page.get_by_role("button", name="Preview", exact=True)
+    folder, layout = page.locator("#convert-folder"), page.get_by_label("Folder and file name, built from these fields")
+    expect(button).to_be_enabled()
+    folder.fill("")
+    expect(button).to_be_disabled()
+    folder.fill(str(tmp_path / "somewhere"))
+    expect(button).to_be_enabled()
+    layout.fill("")
+    expect(button).to_be_disabled()
+    layout.fill("{title}.{ext}")
+    expect(button).to_be_enabled()
+
+
+def test_a_layout_preset_fills_in_the_layout(page, live):
+    open_convert(page)
+    presets = page.get_by_label("Layout preset")
+    chosen = presets.locator("option").nth(4).get_attribute("value")  # (the first option is "Custom")
+    assert chosen == "{album_artist}/{album}/{title}.{ext}"
+    presets.select_option(index=4)
+    expect(page.get_by_label("Folder and file name, built from these fields")).to_have_value(chosen)
+
+
+def test_the_folder_can_be_picked_in_the_dialog_a_browser_has_instead_of_the_desktop_picker(page, live, tmp_path):
+    open_convert(page)
+    page.get_by_role("button", name="Browse…").click()
+    dialog = page.get_by_role("dialog", name="Choose the folder for the converted songs")
+    dialog.get_by_label("Folder path").fill(str(tmp_path / "picked"))
+    dialog.get_by_role("button", name="Choose", exact=True).click()
+    expect(page.locator("#convert-folder")).to_have_value(str(tmp_path / "picked"))
+
+
+def test_a_remembered_lossy_quality_comes_back(page, live, tmp_path):
+    add_library(page, live)
+    convert_the_library(page, tmp_path / "opus", format_label="Opus", quality="64")
+    page.evaluate("location.hash = '#/songs'")
+    open_convert(page)
+    expect(page.get_by_label("Format", exact=True)).to_have_value("opus")
+    expect(page.get_by_label("Quality", exact=True)).to_have_value("64")
+
+
+def test_closing_the_question_before_taking_back_deletes_nothing(page, live, tmp_path):
+    add_library(page, live)
+    out = tmp_path / "converted"
+    convert_the_library(page, out)
+    made = song_files(out)
+    for opener in (page.locator(".toast").get_by_role("button", name="Undo"), page.locator(".batch-row").get_by_role("button", name="Undo")):
+        opener.click()  # (from the message that says it is done, and from the history)
+        dialog = page.get_by_role("dialog", name="Take back 9 converted songs?")
+        expect(dialog).to_be_visible()
+        dialog.get_by_role("button", name="Cancel").click()
+        expect(dialog).to_have_count(0)
+    page.wait_for_timeout(1500)  # (a request that was wrongly sent would have been answered by now)
+    assert song_files(out) == made
+    assert not any(job["kind"] == "convert-undo" for job in api(page, "/jobs")["jobs"])
+    expect(page.locator(".batch-row .chip")).to_have_text("Done")
+
+
+def test_a_converted_file_that_was_changed_since_is_left_alone_when_taking_back(page, live, tmp_path):
+    add_library(page, live)
+    out = tmp_path / "converted"
+    convert_the_library(page, out)
+    mine = out / "Aurora Vale" / "Northern Lights" / "01 - Glacier.opus"
+    mine.write_bytes(mine.read_bytes() + b"the person's own edit")
+    page.locator(".batch-row").get_by_role("button", name="Undo").click()
+    page.get_by_role("dialog").get_by_role("button", name="Delete the converted files").click()
+    taken = page.locator(".toast", has_text="Took back 8 converted songs")
+    expect(taken).to_contain_text("1 file had been changed since and was left alone")
+    assert song_files(out) == ["Aurora Vale/Northern Lights/01 - Glacier.opus"]
+
+
+def test_when_the_songs_changed_after_the_preview_the_result_says_so(page, live, tmp_path):
+    add_library(page, live)
+    out = tmp_path / "converted"
+    open_convert(page)
+    choose_the_whole_library(page)
+    page.get_by_label("Format", exact=True).select_option(label="Opus")
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)
+    next(live.library.rglob("*Gravel Dust*.mp3")).unlink()  # a song's file goes while the person is looking at the preview
+    page.get_by_role("button", name=START).click()
+    done = page.locator(".toast", has_text="Converted 8 songs")
+    expect(done).to_contain_text("The preview showed 9 songs: files changed in between.")
+    assert len(song_files(out)) == 8
+
+
+def test_a_song_that_fails_is_said_and_listed_and_the_others_are_made(page, live, tmp_path, monkeypatch):
+    real = engine.convert_file
+
+    def failing(source, target, info, spec, **kwargs):
+        if "Wires" in str(source):
+            raise engine.ConvertError("The song could not be converted (boom).")
+        return real(source, target, info, spec, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", failing)
+    add_library(page, live)
+    out = tmp_path / "converted"
+    open_convert(page)
+    choose_the_whole_library(page)
+    page.get_by_label("Format", exact=True).select_option(label="Opus")
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)
+    page.get_by_role("button", name=START).click()
+    done = page.locator(".toast", has_text="Converted 8 songs")
+    expect(done).to_contain_text("1 song could not be converted: the history says why.")
+    entry = page.locator(".batch-row")
+    expect(entry.locator(".chip")).to_have_text("Some failed")
+    entry.get_by_role("button", name="Details").click()
+    rows = page.locator(".batch-detail .convert-items .move-row")
+    expect(rows).to_have_count(1)  # (it opens on what went wrong)
+    expect(rows.first).to_contain_text("Wires")
+    expect(rows.first).to_contain_text("The song could not be converted (boom).")
+    expect(rows.first.locator(".chip")).to_have_text("Failed")
+    assert len(song_files(out)) == 8
+
+
+def test_a_conversion_that_made_nothing_has_nothing_to_take_back(page, live, tmp_path):
+    out = tmp_path / "converted"
+    with live.ctx.db() as conn:
+        conversion_id, ids = store.create_conversion(
+            conn, batch_id="nothing", title="1 song to MP3 (256 kbps)", fmt="mp3", quality="256", destination=str(out), scheme="{title}.{ext}", options={}, left_out=0,
+            items=[{"track_id": None, "title": "A", "source": "/m/A.flac", "target": str(out / "A.mp3"), "action": "convert"}],
+        )
+        store.set_item(conn, ids[0], status="failed", message="The song could not be converted (boom).")
+        store.finish_conversion(conn, conversion_id, "failed", "1 song could not be converted.")
+    open_convert(page)
+    entry = page.locator(".batch-row")
+    expect(entry.locator(".chip")).to_have_text("Failed")
+    expect(entry.get_by_role("button", name="Undo")).to_have_count(0)
+    entry.get_by_role("button", name="Details").click()
+    expect(page.locator(".batch-detail")).to_contain_text("The song could not be converted (boom).")
+
+
+def test_more_of_the_songs_of_a_long_conversion_are_shown_on_request(page, live, tmp_path):
+    out = tmp_path / "converted"
+    with live.ctx.db() as conn:
+        conversion_id, ids = store.create_conversion(
+            conn, batch_id="long", title="120 songs to MP3 (256 kbps)", fmt="mp3", quality="256", destination=str(out), scheme="{title}.{ext}", options={}, left_out=0,
+            items=[{"track_id": None, "title": f"Song {n:03d}", "source": f"/m/{n}.flac", "target": str(out / f"{n}.mp3"), "action": "convert"} for n in range(120)],
+        )
+        for item_id in ids:
+            store.set_item(conn, item_id, status="skipped", message="Stopped.")
+        store.finish_conversion(conn, conversion_id, "cancelled", "Stopped.")
+    open_convert(page)
+    page.locator(".batch-row").get_by_role("button", name="Details").click()
+    rows = page.locator(".batch-detail .convert-items .move-row")
+    expect(rows).to_have_count(100)
+    page.get_by_role("button", name=re.compile(r"^Show more \(20 left\)")).click()
+    expect(rows).to_have_count(120)
+    expect(page.get_by_role("button", name=re.compile(r"^Show more"))).to_have_count(0)
+
+
+def test_a_song_already_in_the_format_is_copied_and_the_page_says_how_many_of_each(page, live, tmp_path):
+    copy = add_a_song_mp3_can_copy(live)
+    add_library(page, live)
+    out = tmp_path / "converted"
+    open_convert(page)
+    choose_the_whole_library(page)
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)  # (MP3 at 256 kbps, the default)
+    expect(page.locator(".stat", has_text="will be converted")).to_contain_text("9")
+    expect(page.locator(".stat", has_text="copied as it is")).to_contain_text("1")
+    expect(page.get_by_role("tab")).to_have_count(2)  # (no tab for what does not happen)
+    expect(page.get_by_role("tab", name=re.compile("^Will be converted"))).to_have_attribute("aria-selected", "true")
+    page.get_by_role("tab", name=re.compile("^Copied as they are")).click()
+    row = page.locator(".convert-table .move-row")
+    expect(row).to_have_count(1)
+    expect(row).to_contain_text("Copy Me")
+    expect(row).to_contain_text("Already in this format: copied as it is.")
+    page.get_by_role("button", name="Convert 10 songs").click()  # (the nine that change and the one that is copied)
+    expect(page.locator(".toast", has_text="Converted 9 songs and copied 1 song as it was")).to_be_visible(timeout=120_000)
+    assert (out / "Aurora Vale" / "Copies" / "01 - Copy Me.mp3").read_bytes() == copy.read_bytes()  # a copy is the very file
+
+
+def test_a_preview_of_nothing_but_copies_opens_on_them_and_leaving_them_out_leaves_nothing_to_do(page, live, tmp_path):
+    add_a_song_mp3_can_copy(live)
+    add_library(page, live)
+    out = tmp_path / "converted"
+    open_convert(page)
+    page.get_by_label("Kind of music to add").select_option(label="A genre")
+    page.get_by_label("Genre", exact=True).select_option(label="Copies · 1 song")
+    page.get_by_role("button", name="Add", exact=True).click()
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)
+    expect(page.get_by_role("tab", name=re.compile("^Copied as they are"))).to_have_attribute("aria-selected", "true")  # (it opens on what there is)
+    expect(page.get_by_role("button", name="Convert 1 song")).to_be_visible()
+
+    page.get_by_label("Songs already in this format").select_option(label="Leave them out")
+    preview(page)
+    expect(page.locator(".callout.warn[role=alert]")).to_contain_text("There is nothing to convert")
+    expect(page.locator(".stat", has_text="left out")).to_contain_text("1")
+    expect(page.get_by_role("button", name=START)).to_have_count(0)
+    assert not out.exists()

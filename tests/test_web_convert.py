@@ -161,7 +161,10 @@ def test_nothing_starts_without_a_preview_of_the_same_choices(rig: SimpleNamespa
     first = rig.client.post("/api/tools/convert/start", json=body(rig))
     assert (first.status_code, first.json()["detail"]) == (409, wanted)
     look(rig)
-    for changes in ({"quality": "256"}, {"format": "flac", "quality": None}, {"destination": str(rig.tmp / "elsewhere")}, {"song_ids": [rig.ids["One"]]}, {"cover": False}, {"scheme": "{title}.{ext}"}):
+    for changes in (
+        {"quality": "256"}, {"format": "flac", "quality": None}, {"destination": str(rig.tmp / "elsewhere")}, {"song_ids": [rig.ids["One"]]}, {"cover": False},
+        {"scheme": "{title}.{ext}"}, {"max_rate": 48000}, {"depth": "keep"}, {"existing": "skip"}, {"sources": [{"kind": "all"}]},
+    ):
         assert rig.client.post("/api/tools/convert/start", json=body(rig, **changes)).status_code == 409, changes
     assert not rig.out.exists() and not (rig.tmp / "elsewhere").exists()
 
@@ -246,6 +249,64 @@ def test_a_start_is_refused_while_another_conversion_or_a_tidying_of_the_library
         rig.ctx.jobs.wait(moving.id)
     allowed = rig.client.post("/api/tools/convert/start", json=body(rig))  # (the preview was not used up by the refusals)
     assert finish(rig, allowed).status == "done"
+
+
+def test_the_choices_of_the_latest_conversion_are_the_ones_remembered(rig: SimpleNamespace) -> None:
+    convert(rig, format="opus", quality="96", existing="convert")
+    second = rig.tmp / "second"
+    convert(rig, format="ogg", quality="160", existing="skip", destination=str(second), cover=False)
+    last = rig.client.get("/api/tools/convert/info").json()["last"]
+    assert (last["format"], last["quality"], last["existing"], last["destination"], last["cover"]) == ("ogg", "160", "skip", str(second), False)
+
+
+def test_remembered_choices_that_are_damaged_are_ignored(rig: SimpleNamespace) -> None:
+    for damaged in ("not json at all", "[1, 2, 3]", '"a string"'):
+        with rig.ctx.db() as conn:
+            conn.execute("INSERT INTO kv (key, value) VALUES ('convert.last', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (damaged,))
+            conn.commit()
+        assert rig.client.get("/api/tools/convert/info").json()["last"] == {}, damaged
+
+
+@pytest.mark.parametrize("kind,lane,words", [("convert-undo", "convert", "already being converted"), ("organize-undo", "main", "being moved")])
+def test_nothing_starts_or_is_taken_back_while_an_undo_is_going(rig: SimpleNamespace, kind: str, lane: str, words: str) -> None:
+    import threading
+
+    conversion_id = convert(rig).result["conversion_id"]  # (something to take back)
+    elsewhere = str(rig.tmp / "second")
+    look(rig, destination=elsewhere)
+    release = threading.Event()
+    blocker = rig.ctx.jobs.submit(kind, "An undo", lambda handle: release.wait(10) and None, lane=lane)
+    try:
+        started = rig.client.post("/api/tools/convert/start", json=body(rig, destination=elsewhere))
+        undone = rig.client.post("/api/tools/convert/undo", json={"conversion_id": conversion_id})
+        for refused in (started, undone):
+            assert refused.status_code == 409 and words in refused.json()["detail"], refused.text
+    finally:
+        release.set()
+        rig.ctx.jobs.wait(blocker.id)
+    assert not (rig.tmp / "second").exists()
+
+
+def test_one_song_is_called_a_song(rig: SimpleNamespace) -> None:
+    done = convert(rig, song_ids=[rig.ids["One"]])
+    assert done.title == "Converting 1 song to MP3" and done.result["converted"] == 1
+    undone = finish(rig, rig.client.post("/api/tools/convert/undo", json={"conversion_id": done.result["conversion_id"]}))
+    assert undone.title == "Taking back 1 converted song"
+
+
+def test_decoded_copies_are_kept_where_a_restart_looks_for_leftovers(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    from musictoolkit.convert import job as job_module
+
+    seen: dict[str, Any] = {}
+    real = job_module.run_conversion
+
+    def spy(**kwargs: Any) -> dict[str, Any]:
+        seen["scratch"] = kwargs["scratch"]
+        return real(**kwargs)
+
+    monkeypatch.setattr(job_module, "run_conversion", spy)
+    convert(rig)
+    assert seen["scratch"] == rig.ctx.data_dir / "cache" / "convert"  # (the folder the app tidies when it starts again)
 
 
 # ---------------------------------------------------------------------------------------- the history

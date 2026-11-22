@@ -68,6 +68,18 @@ def song(family: str = "flac", rate: int = 44100, channels: int = 2, bits: int =
     (song("mp3", kbps=320), Spec("mp3", "128"), "convert", ["A lossy song converted to another lossy format loses a little more quality."]),
     (song("mp3", rate=48000, kbps=256), Spec("mp3", "320"), "copy", ["Already in this format: copied as it is."]),
     (song("opus", rate=48000, kbps=100), Spec("opus", "128"), "copy", ["Already in this format: copied as it is."]),
+    (song("opus", rate=48000, kbps=168), Spec("opus", "160"), "copy", ["Already in this format: copied as it is."]),  # (160 kbps and a twentieth: exactly 168)
+    (song("opus", rate=48000, kbps=169), Spec("opus", "160"), "convert", ["A lossy song converted to another lossy format loses a little more quality."]),
+    (song("mp3", kbps=336), Spec("mp3", "320"), "copy", ["Already in this format: copied as it is."]),
+    (song("mp3", kbps=337), Spec("mp3", "320"), "convert", ["A lossy song converted to another lossy format loses a little more quality."]),
+    # a song in the format is only as it is if it needs no change of rate: what MP3 is written at here, and a cap
+    (song("mp3", rate=22050, kbps=64), Spec("mp3", "256"), "convert", ["Resampled from 22.05 kHz to 44.1 kHz.", "A lossy song converted to another lossy format loses a little more quality."]),
+    (song("mp3", rate=48000, kbps=128), Spec("mp3", "256", max_rate=44100), "convert", ["Resampled from 48 kHz to 44.1 kHz.", "A lossy song converted to another lossy format loses a little more quality."]),
+    (song("flac", rate=96000), Spec("flac", max_rate=48000, existing="copy"), "convert", ["Resampled from 96 kHz to 48 kHz."]),
+    # a song that is not as asked for is converted, whatever is to be done with those that are
+    (song("flac", bits=24), Spec("flac", depth="16", existing="skip"), "convert", ["Reduced from 24 to 16 bits (with a little dither)."]),
+    (song("mp3", kbps=320), Spec("mp3", "128", existing="skip"), "convert", ["A lossy song converted to another lossy format loses a little more quality."]),
+    (song("flac", rate=96000), Spec("flac", max_rate=48000, existing="skip"), "convert", ["Resampled from 96 kHz to 48 kHz."]),
     # not in the format, or not as asked for
     (song("flac", bits=24), Spec("flac", depth="16"), "convert", ["Reduced from 24 to 16 bits (with a little dither)."]),
     (song("flac", bits=24), Spec("flac", depth="keep"), "copy", ["Already in this format: copied as it is."]),
@@ -82,6 +94,8 @@ def song(family: str = "flac", rate: int = 44100, channels: int = 2, bits: int =
     # a song only Windows decodes is never copied, whatever it is going to
     (song("m4a", kbps=256, via="windows"), Spec("mp3", "256"), "convert", ["Windows decodes this M4A song first.", "A lossy song converted to another lossy format loses a little more quality."]),
     (song("wma", kbps=128, via="windows"), Spec("flac"), "convert", ["Windows decodes this WMA song first.", "A lossy song does not get its quality back: the file only gets bigger."]),
+    (song("mp3", kbps=128, via="windows"), Spec("mp3", "256"), "convert", ["Windows decodes this MP3 song first.", "A lossy song converted to another lossy format loses a little more quality."]),
+    (song("flac", via="windows"), Spec("flac", existing="skip"), "convert", ["Windows decodes this FLAC song first."]),
 ])
 def test_what_becomes_of_a_song(info: SourceInfo, spec: Spec, action: str, notes: list[str]) -> None:
     treatment = engine.decide(info, spec)

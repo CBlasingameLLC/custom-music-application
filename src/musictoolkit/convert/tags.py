@@ -60,7 +60,7 @@ def _from_id3(frames: Any) -> SongTags:
     tags.track_number, tags.track_total = _pair((text("TRCK") or [""])[0])
     tags.disc_number, tags.disc_total = _pair((text("TPOS") or [""])[0])
     tags.date = (text("TDRC") or [""])[0]
-    tags.year = _year(tags.date) or _year((text("TYER") or [""])[0])
+    tags.year = _year(tags.date)  # (an ID3v2.3 year is a TYER frame on disk, but mutagen hands it over as TDRC)
     tags.genre, tags.composer = _joined(text("TCON")), _joined(text("TCOM"))
     comments = frames.getall("COMM")
     tags.comment = "\n".join(_strings(comments[0].text)) if comments else ""

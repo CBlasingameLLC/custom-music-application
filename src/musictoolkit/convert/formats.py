@@ -92,7 +92,7 @@ def _mp3_rate(rate: int) -> int:
         return rate
     if rate > 48000:
         return 44100 if rate % 44100 == 0 else 48000
-    for times in (2, 3, 4, 6):  # a lower rate is raised by a whole number of times when that reaches one MP3 has
+    for times in (2, 4):  # a lower rate is raised by a whole number of times when that reaches one MP3 has (3 and 6 times change no answer)
         if rate * times in MP3_RATES:
             return rate * times
     return 44100 if rate <= 44100 else 48000
