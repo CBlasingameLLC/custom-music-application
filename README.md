@@ -80,9 +80,10 @@ your music folders (a converted copy there would turn up in the library as a sec
      high-quality resampler, and the preview says so under the song. Mono and stereo are kept as they are; a song with more than two channels is listed as
      *cannot be converted*.
 3. **Songs that are already in the format.** *Copy them as they are* (the default: converting a lossy song to the same lossy format again only loses
-   quality; a song counts as already there when its format is the one asked for and its bitrate is at most about 5 % above the quality chosen, or, for
-   a lossless one, its rate and bit depth are the ones asked for), *convert them again anyway*, or *leave them out*. A song that only Windows can read is
-   never copied: it always goes through the converter.
+   quality), *convert them again anyway*, or *leave them out*. A song counts as already there when its format is the one asked for, it needs no change
+   of sample rate (a cap you set counts, and MP3 is written at 32, 44.1 or 48 kHz only, so an MP3 at 22.05 kHz is converted, not copied), and its
+   bitrate is at most about 5 % above the quality chosen (for a lossless song: its rate and bit depth are the ones asked for). A song that only Windows
+   can read is never copied: it always goes through the converter.
 4. **Where, and under which names.** The folder, and a layout built from the same fields as Organize files (with a live example); the new format's
    extension is filled in. Windows' rules are enforced (reserved names, 259-character paths). The cover picture can be left out.
 5. **Preview.** Every song is looked at (a job, with progress). The page then lists, under tabs, what will be converted, copied as it is, left out, already
