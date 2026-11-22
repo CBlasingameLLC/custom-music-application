@@ -9,7 +9,7 @@ the in-app player uses), the library tools (organize with undo, duplicates with
 the review folder and the Recycle Bin), device sync to a folder, the Spotify
 import (which needs pandas inside the bundle), listening statistics, mixes and
 song radio, the release radar, lyrics from a stand-in for lrclib.net, the
-scrobbler status and diagnostics, internet radio and podcasts (against stand-ins for a
+scrobbler status and diagnostics, converting songs to another format, internet radio and podcasts (against stand-ins for a
 station, the Radio Browser and Apple's directories and a podcast host), settings and
 backup all work from the frozen binary, and that nothing leaks into the working directory.
 
@@ -660,6 +660,46 @@ def radio_and_podcasts(client: Client, urls: dict[str, str], tone: bytes) -> Non
     check(status == 200 and plays["total_plays"] == plays_before, f"listening to radio and podcasts adds nothing to the music history ({plays_before} plays before, {plays.get('total_plays')} after)")
 
 
+def converting(client: Client, scratch: Path) -> None:
+    """Every song of the library converted to Opus inside the frozen backend, into a folder outside the library, and the conversion taken back. That proves
+    what only the frozen exe can: that the converter and the audio libraries it needs were bundled. Opus is written at 48 kHz, so no song that is not at that
+    rate can be converted without the resampler (soxr, a compiled extension), and the songs are tagged by the tag writer on the way."""
+    out = scratch / "converted"
+    status, info = client.json("/api/tools/convert/info")
+    offered = [f["id"] for f in info.get("formats", [])]
+    check(status == 200 and offered == ["mp3", "ogg", "opus", "flac", "wav"], f"Convert offers its formats ({offered})")
+    status, library = client.json("/api/tracks?limit=1")
+    before = library["total"]
+    asked = {"format": "opus", "quality": "96", "destination": str(out), "sources": [{"kind": "all"}]}
+
+    _, started = client.json("/api/tools/convert/preview", "POST", asked)
+    previewed = wait_job(client, started["job"]["id"])
+    plan = previewed.get("result") or {}
+    check(previewed["status"] == "done" and plan.get("ok") and plan["counts"]["convert"] == before, f"every song is previewed for conversion ({plan or previewed.get('error')})")
+    check(not out.exists(), "looking at what would be converted writes nothing")
+    status, begun = client.json("/api/tools/convert/start", "POST", asked)
+    check(status == 200, f"the conversion starts (HTTP {status} {begun})")
+    finished = wait_job(client, begun["job"]["id"]) if status == 200 else {"status": "error"}
+    result = finished.get("result") or {}
+    check(finished["status"] == "done" and result.get("converted") == before and not result.get("failed"), f"every song is converted ({result or finished.get('error')})")
+
+    songs = sorted(out.rglob("*.opus"))
+    check(len(songs) == before, f"a file for every song is in the folder ({len(songs)} of {before})")
+    heads = [song.read_bytes()[:128] for song in songs]
+    check(heads and all(head[:4] == b"OggS" and b"OpusHead" in head for head in heads), "the files are Opus streams (the resampler and the encoder ran)")
+    status, library = client.json("/api/tracks?limit=1")
+    check(library["total"] == before, f"the library holds what it held ({library['total']})")
+
+    status, history = client.json("/api/tools/convert/batches")
+    saved = (history.get("batches") or [{}])[0]
+    check(status == 200 and (saved.get("status"), saved.get("converted")) == ("done", before), f"the history has the conversion ({saved})")
+    _, undo = client.json("/api/tools/convert/undo", "POST", {"conversion_id": saved.get("id", 0)})
+    taken = wait_job(client, undo["job"]["id"]) if "job" in undo else {"status": "error", "error": undo}
+    check(taken["status"] == "done" and not list(out.rglob("*.opus")), f"taking the conversion back removes its songs ({taken.get('result') or taken.get('error')})")
+    left = [p.name for p in out.rglob("*.part")] + [p.name for p in (scratch / "profile" / ".musictoolkit" / "cache" / "convert").glob("*")]
+    check(not left, f"no half-written song or temporary copy is left ({left})")
+
+
 def run(exe: Path, fixtures: Path) -> None:
     scratch = Path(tempfile.mkdtemp(prefix="mtk-smoke-"))
     profile, elsewhere, music = scratch / "profile", scratch / "elsewhere", scratch / "music"
@@ -770,6 +810,7 @@ def run(exe: Path, fixtures: Path) -> None:
         if fake_disc.exists():
             discs(client, scratch, music)
             burning(client, scratch, music)
+        converting(client, scratch)
         check(client.request("/api/home")[0] == 200, "Home data")
         status, settings = client.json("/api/settings")
         check(status == 200 and "library" in settings, "settings")

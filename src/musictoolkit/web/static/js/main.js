@@ -20,6 +20,7 @@ import { DiscsView } from './views/discs.js';
 import { ImportView } from './views/importer.js';
 import { EnrichView, ToolsView } from './views/tools.js';
 import { OrganizeView } from './views/organize.js';
+import { ConvertView } from './views/convert.js';
 import { DuplicatesView } from './views/duplicates.js';
 import { MissingView } from './views/missing.js';
 import { RadioView } from './views/radio.js';
@@ -54,6 +55,7 @@ function View() {
     case 'tools':
       if (second === 'enrich') return html`<${EnrichView} />`;
       if (second === 'organize') return html`<${OrganizeView} />`;
+      if (second === 'convert') return html`<${ConvertView} />`;
       if (second === 'duplicates') return html`<${DuplicatesView} />`;
       if (second === 'missing') return html`<${MissingView} />`;
       return html`<${ToolsView} />`;

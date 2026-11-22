@@ -11,6 +11,7 @@ What no test here can say is what a screen reader reads aloud, or how the app fe
 
 from __future__ import annotations
 
+import re
 import warnings
 from pathlib import Path
 from typing import Callable
@@ -237,6 +238,27 @@ class Tour:
             page.get_by_role("button", name="Genre").click()
             expect(page.locator(".popover")).to_be_visible()
 
+        def convert_previewed() -> None:
+            page.evaluate("location.hash = '#/tools'")  # (from the tools page: the form is drawn afresh, with nothing chosen)
+            settled(page)
+            page.evaluate("location.hash = '#/tools/convert'")
+            settled(page)
+            page.get_by_label("Kind of music to add").select_option(label="Whole library")
+            page.get_by_role("button", name="Add", exact=True).click()
+            page.get_by_label("Format", exact=True).select_option(label="Opus")
+            page.locator("#convert-folder").fill(str(self.device_folder.parent.parent / "converted"))
+            page.get_by_role("button", name="Preview", exact=True).click()
+            expect(page.locator(".convert-table .move-row").first).to_be_visible()
+            settled(page)
+
+        def convert_finished() -> None:
+            convert_previewed()
+            page.get_by_role("button", name=re.compile(r"^Convert \d+ songs?$")).click()
+            expect(page.locator(".batch-row")).to_be_visible(timeout=60_000)
+            page.locator(".batch-row").get_by_role("button", name="Details").click()
+            expect(page.locator(".batch-detail .convert-items .move-row").first).to_be_visible()
+            settled(page)
+
         return [
             ("home", self.at("#/")),
             ("songs", self.at("#/songs")),
@@ -259,6 +281,9 @@ class Tour:
             ("library tools", self.at("#/tools")),
             ("fix missing tags", self.at("#/tools/enrich")),
             ("organize files", self.at("#/tools/organize")),
+            ("convert songs", self.at("#/tools/convert")),
+            ("convert songs, previewed", convert_previewed),
+            ("convert songs, after a conversion", convert_finished),
             ("find duplicates", self.at("#/tools/duplicates")),
             ("missing files", self.at("#/tools/missing")),
             ("devices", self.at("#/devices")),
