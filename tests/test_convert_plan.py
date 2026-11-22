@@ -368,6 +368,31 @@ def test_a_song_that_cannot_be_converted_does_not_take_the_name_of_one_that_can(
     assert [(s.action, s.relative, s.target) for s in plan.songs] == [("cannot", "", ""), ("convert", "Aurora Vale/Northern Lights/01 - Same.mp3", str(tmp_path / "out" / "Aurora Vale/Northern Lights/01 - Same.mp3"))]
 
 
+@pytest.mark.parametrize("slip,said", [
+    (ValueError("template result '/x' is not a path inside the library"), "template result '/x' is not a path inside the library"),
+    (KeyError("genre"), "'genre'"), (IndexError("string index out of range"), "string index out of range"),
+])
+def test_a_layout_that_slips_on_one_song_says_so_of_that_song_and_goes_on(library: Library, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slip: Exception, said: str) -> None:
+    library.add("a.flac", audio.music(44100, 3), title="A")
+    library.add("b.flac", audio.music(44100, 3, seed=2), title="B")
+    real = planning.organizer.render_relative
+
+    def render(row: Any, scheme: str, *args: Any) -> str:
+        if row["title"] == "A":
+            raise slip
+        return real(row, scheme, *args)
+
+    monkeypatch.setattr(planning.organizer, "render_relative", render)
+    got = by_title(make(library, tmp_path, Spec("mp3")))
+    assert (got["A"].action, got["A"].notes) == ("cannot", [f"The layout does not give this song a place ({said})."])
+    assert (got["B"].action, got["B"].relative) == ("convert", "Aurora Vale/Northern Lights/02 - B.mp3")
+
+
+def test_a_bad_folder_and_nothing_to_convert_are_one_problem_not_two(library: Library, tmp_path: Path) -> None:
+    plan = planning.build_plan(library.rows, Spec("mp3"), str(library.folder / "mp3s"), SCHEME, [str(library.folder)], ask_windows=lambda paths: {})  # (no songs at all)
+    assert len(plan.problems) == 1 and "outside your library folders" in plan.problems[0]
+
+
 def test_a_failed_inspection_in_words_does_not_stop_the_other_songs(library: Library, tmp_path: Path) -> None:
     library.add("a.flac", audio.music(44100, 3), title="A")
     library.add("b.flac", audio.music(44100, 3), title="B")
