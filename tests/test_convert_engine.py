@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
@@ -537,8 +538,11 @@ def test_a_stopped_copy_and_a_copy_of_nothing_leave_no_file_behind(tmp_path: Pat
     with pytest.raises(Stop):
         engine.copy_file(src, tmp_path / "copy.part", check=check)
     assert not (tmp_path / "copy.part").exists()
-    with pytest.raises(ConvertError, match=r"^The song could not be copied \(No such file or directory\)\.$"):
-        engine.copy_file(tmp_path / "Outer Space" / "gone.mp3", tmp_path / "copy2.part")  # (a folder with "space" in its name is not a full drive)
+    gone = tmp_path / "Outer Space" / "gone.mp3"  # (a folder with "space" in its name is not a full drive)
+    with pytest.raises(OSError) as asked:
+        gone.stat()  # (the words are the system's own: Windows says "The system cannot find the path specified", Linux "No such file or directory")
+    with pytest.raises(ConvertError, match=rf"^The song could not be copied \({re.escape(asked.value.strerror)}\)\.$"):
+        engine.copy_file(gone, tmp_path / "copy2.part")
     assert not (tmp_path / "copy2.part").exists()
 
 
