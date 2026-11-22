@@ -247,6 +247,29 @@ def test_a_folder_that_cannot_be_made_is_said_so(rig: SimpleNamespace, monkeypat
         assert store.list_conversions(conn) == []
 
 
+def test_a_song_is_written_beside_its_place_under_a_temporary_name_and_only_then_takes_its_own(rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    song_file(rig, "a.flac", title="A", track_number=1)
+    rig.library.add("b.mp3", audio.music(44100, 4), fmt="MP3", subtype="MPEG_LAYER_III", title="B", track_number=2)  # (256 kbps: only copied)
+    album = rig.out / "Aurora Vale" / "Northern Lights"
+    seen: list[tuple[str, str, bool]] = []
+    real_convert, real_copy = engine.convert_file, engine.copy_file
+
+    def convert(source, target, info, spec, **kwargs):
+        seen.append(("convert", Path(target).relative_to(album).as_posix(), (album / "01 - A.mp3").exists()))
+        return real_convert(source, target, info, spec, **kwargs)
+
+    def copy(source, target, **kwargs):
+        seen.append(("copy", Path(target).relative_to(album).as_posix(), (album / "02 - B.mp3").exists()))
+        return real_copy(source, target, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", convert)
+    monkeypatch.setattr(engine, "copy_file", copy)
+    result, _ = run(rig)
+    assert (result["converted"], result["copied"]) == (1, 1)
+    assert seen == [("convert", "01 - A.mp3.part", False), ("copy", "02 - B.mp3.part", False)]  # (nothing under its own name until it is whole)
+    assert sorted(p.name for p in album.iterdir()) == ["01 - A.mp3", "02 - B.mp3"]
+
+
 # ---------------------------------------------------------------------------------------- something goes wrong half way
 
 
