@@ -25,6 +25,7 @@ COPY_CHUNK = 1 << 20
 DITHER_SEED = 0x4D544B  # the same song is always converted to the same bytes
 RESAMPLE_QUALITY = "VHQ"
 FIT_TOLERANCE = 1.05  # a lossy song averaging 5% over the bitrate asked for still counts as being at it
+NO_ROOM = "There is not enough room on the drive for the converted songs."
 FILE_FORMATS = {"mp3": ("MP3", "MPEG_LAYER_III"), "ogg": ("OGG", "VORBIS"), "opus": ("OGG", "OPUS"), "flac": ("FLAC", None), "wav": ("WAV", None)}
 
 
@@ -231,7 +232,7 @@ def convert_file(
         with contextlib.suppress(OSError):
             target.unlink(missing_ok=True)
         if _no_room(exc):
-            raise ConvertError("There is not enough room on the drive for the converted songs.") from None
+            raise ConvertError(NO_ROOM) from None
         raise ConvertError(f"The song could not be converted ({str(exc).strip() or type(exc).__name__}).") from None
     except BaseException:
         with contextlib.suppress(OSError):
@@ -262,7 +263,7 @@ def copy_file(source: str | Path, target: Path, *, check: Callable[[], None] | N
         with contextlib.suppress(OSError):
             target.unlink(missing_ok=True)
         if _no_room(exc):
-            raise ConvertError("There is not enough room on the drive for the converted songs.") from None
+            raise ConvertError(NO_ROOM) from None
         raise ConvertError(f"The song could not be copied ({exc.strerror or exc}).") from None
     except BaseException:
         with contextlib.suppress(OSError):
