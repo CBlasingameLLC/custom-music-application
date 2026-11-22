@@ -257,7 +257,7 @@ def run_conversion(
     return {
         "conversion_id": conversion_id, "batch_id": batch_id, "status": status, "message": message, "destination": plan.destination, "songs": header.get("songs", 0),
         "converted": header.get("converted", 0), "copied": header.get("copied", 0), "failed": header.get("failed", 0), "left_out": header.get("left_out", 0),
-        "bytes": header.get("bytes", 0), "previewed": request.previewed,
+        "bytes": header.get("bytes", 0), "previewed": request.previewed, "ended": fatal,  # (why the batch was ended before its last song, if it was: no room)
     }
 
 

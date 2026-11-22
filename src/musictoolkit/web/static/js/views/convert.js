@@ -73,7 +73,8 @@ function summaryText(r) {
   if (r.converted) made.push(`Converted ${fmt.plural(r.converted, 'song')}`);
   if (r.copied) made.push(`${made.length ? 'copied' : 'Copied'} ${fmt.plural(r.copied, 'song')} as ${r.copied === 1 ? 'it was' : 'they were'}`);
   let text = `${made.join(' and ') || 'Nothing was made'} in ${r.destination}.`;
-  if (r.failed) text += ` ${fmt.plural(r.failed, 'song')} could not be converted: the history says why.`;
+  if (r.ended) text += ` ${r.ended} The conversion was stopped there: the history says which songs are left.`;
+  else if (r.failed) text += ` ${fmt.plural(r.failed, 'song')} could not be converted: the history says why.`;
   if (r.previewed !== r.songs) text += ` The preview showed ${fmt.plural(r.previewed, 'song')}: files changed in between.`;
   return text;
 }

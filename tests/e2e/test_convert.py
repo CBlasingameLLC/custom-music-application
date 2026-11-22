@@ -537,6 +537,41 @@ def test_a_song_that_fails_is_said_and_listed_and_the_others_are_made(page, live
     assert len(song_files(out)) == 8
 
 
+def test_running_out_of_room_ends_the_batch_and_the_message_says_so(page, live, tmp_path, monkeypatch):
+    real = engine.convert_file
+    calls: list[str] = []
+    room = "There is not enough room on the drive for the converted songs."
+
+    def full(source, target, info, spec, **kwargs):
+        calls.append(str(source))
+        if len(calls) > 3:  # the drive takes three songs
+            raise engine.ConvertError(room)
+        return real(source, target, info, spec, **kwargs)
+
+    monkeypatch.setattr(engine, "convert_file", full)
+    add_library(page, live)
+    out = tmp_path / "converted"
+    open_convert(page)
+    choose_the_whole_library(page)
+    page.get_by_label("Format", exact=True).select_option(label="Opus")
+    page.locator("#convert-folder").fill(str(out))
+    preview(page)
+    page.get_by_role("button", name=START).click()
+    done = page.locator(".toast", has_text="Converted 3 songs")
+    expect(done).to_contain_text(room)
+    expect(done).to_contain_text("The conversion was stopped there: the history says which songs are left.")
+    assert len(calls) == 4 and len(song_files(out)) == 3 and not list(out.rglob("*.part"))  # (the songs after the one that met the wall were not even tried)
+    entry = page.locator(".batch-row")
+    expect(entry.locator(".chip")).to_have_text("Some failed")
+    entry.get_by_role("button", name="Details").click()
+    expect(page.locator(".batch-detail")).to_contain_text(room)
+    rows = page.locator(".batch-detail .convert-items .move-row")
+    expect(rows).to_have_count(6)  # (opens on what was not made: the song that met the wall, and the five after it)
+    expect(rows.first.locator(".chip")).to_have_text("Failed")
+    expect(rows.last.locator(".chip")).to_have_text("Not made")
+    expect(rows.last).to_contain_text(room)
+
+
 def test_a_conversion_that_made_nothing_has_nothing_to_take_back(page, live, tmp_path):
     out = tmp_path / "converted"
     with live.ctx.db() as conn:

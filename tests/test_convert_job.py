@@ -376,7 +376,7 @@ def test_a_song_that_fails_is_said_so_and_the_others_go_on(rig: SimpleNamespace,
         song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
     monkeypatch.setattr(engine, "convert_file", failing(engine.convert_file, lambda name: name == "b.flac", ConvertError("The song could not be converted (boom).")))
     result, _ = run(rig)
-    assert (result["status"], result["converted"], result["failed"]) == ("partial", 2, 1) and result["message"] == "1 song could not be converted."
+    assert (result["status"], result["converted"], result["failed"]) == ("partial", 2, 1) and result["message"] == "1 song could not be converted." and result["ended"] is None
     items = header(rig)["items"]
     assert [(i["title"], i["status"], i["message"]) for i in items] == [("A", "done", None), ("B", "failed", "The song could not be converted (boom)."), ("C", "done", None)]
     assert sorted(p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()) == ["01 - A.mp3", "03 - C.mp3"]
@@ -396,7 +396,7 @@ def test_running_out_of_room_ends_the_batch_and_leaves_the_songs_that_were_done(
         song_file(rig, f"{title.lower()}.flac", seed=n, title=title, track_number=n)
     monkeypatch.setattr(engine, "convert_file", failing(engine.convert_file, lambda name: name == "b.flac", ConvertError(engine.NO_ROOM)))
     result, _ = run(rig)
-    assert (result["status"], result["converted"], result["failed"], result["message"]) == ("partial", 1, 1, engine.NO_ROOM)
+    assert (result["status"], result["converted"], result["failed"], result["message"], result["ended"]) == ("partial", 1, 1, engine.NO_ROOM, engine.NO_ROOM)
     assert [(i["title"], i["status"]) for i in header(rig)["items"]] == [("A", "done"), ("B", "failed"), ("C", "skipped"), ("D", "skipped")]
     assert header(rig)["items"][2]["message"] == engine.NO_ROOM and [p.name for p in (rig.out / "Aurora Vale/Northern Lights").iterdir()] == ["01 - A.mp3"]
 
@@ -414,7 +414,7 @@ def test_a_drive_too_full_to_make_a_folder_ends_the_batch_like_one_too_full_to_w
 
     monkeypatch.setattr(job, "_make_folders", make)
     result, _ = run(rig)
-    assert (result["status"], result["converted"], result["failed"], result["message"]) == ("partial", 1, 1, engine.NO_ROOM)
+    assert (result["status"], result["converted"], result["failed"], result["message"], result["ended"]) == ("partial", 1, 1, engine.NO_ROOM, engine.NO_ROOM)
     assert [(i["title"], i["status"], i["message"]) for i in header(rig)["items"]] == [("A", "done", None), ("B", "failed", engine.NO_ROOM), ("C", "skipped", engine.NO_ROOM)]
 
 
