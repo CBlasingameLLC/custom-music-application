@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.8.2)
+## What it does (v0.9.0)
 
 | Area | Features |
 |---|---|
@@ -42,6 +42,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Podcasts** | Find shows in Apple's free podcast directory or follow any RSS feed. New episodes are looked for by themselves about every six hours (switch it off in Settings) or with a button, and **New episodes** lists what you have not heard. Episodes start a few seconds before where you stopped, skip back 15 s and forward 30 s, play at 0.75 to 2 times speed, and count as heard near the end. See below |
 | **Devices** | Copy music to a Walkman, phone, SD card or USB stick, whether it shows up as a drive or not (phones and players in MTP mode, experimental): choose what goes on it, preview, copy only what changed. See below |
 | **Discs** | **Rip an audio CD** into the library as FLAC (exactly what is on the disc) or MP3 (320, 256, 192 or 128 kbps): the album is found on MusicBrainz from the disc itself, every song is read twice and compared, and it lands in your library with names, tags, cover and a history you can undo. **Burn** songs onto a music CD (with no gap between the songs if you like, and M4A, AAC and WMA songs too), a data disc (CD, DVD or Blu-ray) or into an ISO file, and erase a rewritable disc. Both are experimental until they have met your drive. See below |
+| **Convert** | Make copies of songs in another format, for a car, a phone or a player that wants one: **MP3** (320, 256, 192 or 128 kbps), **Ogg Vorbis**, **Opus**, **FLAC** or **WAV**. Choose the music as for a device (the whole library, favorites, a playlist, a genre, a rating, recently added), preview what happens to every song, and the copies go to a folder of your own, never into the library. Tags and cover come along, a song that is already in the format is copied as it is, and a whole batch can be undone. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
@@ -57,8 +58,59 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Edit tags** (right-click a song, or select several) | Write title, artist, album artist, album, genre, year and track/disc numbers into MP3, FLAC, M4A, Ogg and Opus files, for one song, a selection or a whole album. Every save is one batch; **Undo** puts the old tags back |
 | **Fix missing tags** | Songs with no title, artist or album are looked up on MusicBrainz in the background (about one per second, survives a restart). You review the matches (confidence shown), apply the ones you trust, or "Apply all 90%+". Fills empty tags by default; replacing existing ones is an explicit switch |
 | **Organize files** | Pick a folder and a layout (presets or your own, with live examples), preview every move, apply as one batch. Lyrics (`.lrc`) follow the song, folder art is copied so albums keep covers, emptied folders are removed, nothing is overwritten (name clashes are listed), Windows rules are enforced (reserved names, 260-character paths). **Undo** restores files, lyrics and covers |
+| **Convert songs** | Change songs to MP3, Ogg Vorbis, Opus, FLAC or WAV, into a folder of your own outside the library (so nothing turns up twice). You see what happens to every song first (converted, copied as it is, left out, and why), then it runs as a job with progress and a Cancel button. Tags, lyrics and the cover come along; nothing is overwritten. **Undo** deletes the files a conversion made, unless you have changed them since |
 | **Find duplicates** | Finds the same song by MusicBrainz ID, by artist + title + length, and optionally by file content. You pick the copy to keep (best quality is suggested). The rest move to a `_duplicates_review` folder inside your library folder, hidden from the library; their plays, playlist entries, rating and favorite go to the copy you keep, and come back if you restore. Emptying the review folder sends files to the Recycle Bin after you type DELETE |
 | **Missing files** | Songs whose files cannot be found (usually an unplugged drive), grouped by folder. They keep their plays and playlists until you choose to forget them |
+
+### Convert songs (Library tools, Convert songs)
+
+Makes copies of songs in another format. **Your library is never changed**: the copies go to a folder you choose, and the app refuses a folder inside
+your music folders (a converted copy there would turn up in the library as a second song).
+
+1. **What to convert.** Any mix of the whole library, favorites, playlists (manual or smart), a genre, songs rated at least N stars, or recently added
+   music: the same choices as for a device. (Picking single songs or albums from the song lists is not offered yet: a playlist does that.)
+2. **Format and quality.**
+   - *MP3*: constant bitrate, 320, 256, 192 or 128 kbps.
+   - *Ogg Vorbis*: variable bitrate, about 320, 256, 192, 160, 128 or 96 kbps.
+   - *Opus*: variable bitrate, about 192, 160, 128, 96 or 64 kbps.
+   - *FLAC* and *WAV*: lossless. **Bit depth**: 16 (a 24-bit song is reduced with a little dither) or *keep the original* (a song with more than 16 bits is
+     written at 24; the others at 16). A 16-bit song stays bit-for-bit what it was.
+   - **Sample rate**: a song keeps its own rate unless the format cannot hold it (MP3 takes 32, 44.1 and 48 kHz; Opus takes 8, 12, 16, 24 and 48 kHz, and a
+     song at any other rate is written at 48 kHz) or you capped it (*at most 48 kHz* or *44.1 kHz*). Whatever has to change is resampled with a
+     high-quality resampler, and the preview says so under the song. Mono and stereo are kept as they are; a song with more than two channels is listed as
+     *cannot be converted*.
+3. **Songs that are already in the format.** *Copy them as they are* (the default: converting a lossy song to the same lossy format again only loses
+   quality; a song counts as already there when its format is the one asked for and its bitrate is at most about 5 % above the quality chosen, or, for
+   a lossless one, its rate and bit depth are the ones asked for), *convert them again anyway*, or *leave them out*. A song that only Windows can read is
+   never copied: it always goes through the converter.
+4. **Where, and under which names.** The folder, and a layout built from the same fields as Organize files (with a live example); the new format's
+   extension is filled in. Windows' rules are enforced (reserved names, 259-character paths). The cover picture can be left out.
+5. **Preview.** Every song is looked at (a job, with progress). The page then lists, under tabs, what will be converted, copied as it is, left out, already
+   in the folder (never overwritten), given the same name as another song of this batch (only the first is converted), and what *cannot be converted*,
+   each in words ("This song has 6 channels; Convert handles mono and stereo."). It shows about how much will be written and how much room there is, and
+   a conversion that would not fit is not offered. The **Convert** button waits for a preview of exactly these choices, and the app refuses to start one
+   that was not shown (the files may have changed since: the batch is worked out again when it starts, and the result says when it differs from the preview).
+6. **Convert.** A job with progress for the whole batch (counted in minutes of music, not in songs), and a Cancel button; only one runs at a time, and not
+   while Organize files is moving files. Every song is written under a temporary name (`.part`) and renamed when it is whole, so no half-written song is
+   ever where a player could find it; a file that is already there is never replaced; a song that fails is reported and the rest go on; running out of
+   room ends the batch. If the app is closed in the middle, the next start marks the conversion *interrupted* and removes what was half written.
+7. **History and undo.** The page lists every conversion under *Recent conversions*, with what happened to every song (the ones that were not made first), and
+   what you chose is remembered for next time (not *what* to convert). **Undo** deletes the files the conversion made and the folders that leaves empty; a file whose size
+   or time is not what the conversion left (you have edited it) is left alone, and so is everything else in the folder.
+
+What comes along: title, artist, album artist, album, track and disc numbers and totals, year or date, genre, composer, comment, lyrics, the MusicBrainz
+IDs, barcode and label, ReplayGain values, and the cover picture (embedded in the song, or `cover.jpg` and the like in its folder), read from ID3 tags,
+Vorbis comments, MP4 atoms or WMA attributes and written in the new format's own kind (ID3v2.3 for MP3 and WAV, Vorbis comments for the others).
+
+**How the sound is made.** The audio libraries that come with the app do the encoding (MP3 with LAME, Ogg Vorbis, Opus and FLAC): no program to install.
+Songs are decoded to floating point, resampled only when they have to be, and written with a little dither whenever they end up at 16 bits; 16-bit and
+24-bit lossless songs that keep their rate and depth are passed through bit for bit. M4A, AAC and WMA songs are decoded by Windows, as the music CD
+burn does it (the Windows-only part: on another system they are listed as *cannot be converted*). The tests check the result by decoding it again:
+the pitch and the length are right, a lossless copy is exact, and the lossy ones are within what the format allows.
+
+**What it does not do.** No M4A/AAC output (the bundled encoders cannot write it); no more than two channels; no `.lrc` lyrics files or folder pictures
+copied beside the songs (the lyrics and the cover are in each song's tags); no loudness change (ReplayGain values are copied, not applied); no converting
+while syncing to a device (convert to a folder, then sync that folder); a lossy song does not get its quality back by being converted to FLAC or WAV.
 
 ### Devices (Devices in the sidebar)
 
@@ -319,6 +371,7 @@ defaults to a dry run; pass `--apply` to execute.
 - `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
 - `cache/art/`, `cache/radio/`, `cache/podcasts/`: cached pictures (safe to delete)
 - `cache/discs/`: the temporary copy of the song being ripped, and the converted songs of a music CD being burned (empty unless a rip or a burn is running or was cut short)
+- `cache/convert/`: the temporary WAV of a song Windows decoded for a conversion, removed as soon as that song is done (empty unless a conversion is running or was cut short)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
 
 ## Security model
