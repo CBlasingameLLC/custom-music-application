@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.9.0)
+## What it does (v0.10.0)
 
 | Area | Features |
 |---|---|
@@ -50,6 +50,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Library tools** | Everything that changes your files shows a preview first, runs as a job with progress and a Cancel button, and can be undone. See below |
 | **Desktop** | A tray icon by the clock with Play/Pause, Next, Previous and Quit; closing the window keeps the music playing from the tray (or quits: your choice in Settings, Window and tray); the window opens where you left it; **Open with** in Explorer, and files or folders dropped on the window, are added to the library and played |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |
+| **Server** | Run the same app on a Raspberry Pi or any Linux computer (`mtk serve`) and use it from every device at home, and from outside through a private network such as Tailscale. It answers only to the names you list, one token signs a device in for 90 days, a library folder that is not mounted is never taken for deleted songs, new songs are found by themselves every few hours, and `mtk library reroot` carries a Windows library over with its ratings, plays and playlists. **No accounts yet** (next round), so reach it only from your own network. See below |
 
 ### Library tools (Library tools in the sidebar)
 
@@ -354,7 +355,10 @@ defaults to a dry run; pass `--apply` to execute.
 | Command | Purpose |
 |---|---|
 | `mtk dashboard [--port N]` | Start the UI (what the desktop app runs). Prints a URL that includes the per-launch token |
-| `mtk scan <path>` | Scan a folder into the library database |
+| `mtk serve [--host H] [--port N]` | Run the app as a server for other devices until stopped (see Server mode). Needs `[server] allowed_hosts` to listen beyond this computer |
+| `mtk token [--url https://NAME]` | Show the server's token, or the link to open once on each device |
+| `mtk library reroot --from D:\Music --to /srv/music/library [--apply] [--update-config]` | Tell the database where the library is now after it was copied (dry run unless `--apply`; a copy of the database is kept) |
+| `mtk scan <path> [--force]` | Scan a folder into the library database. A folder that is not there, or is empty while the library has songs in it (a drive that is not mounted), is refused unless `--force` |
 | `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz (the app's Fix missing tags page does this with review and undo) |
 | `mtk organize <path> [--apply]` | Move/rename into the canonical folder scheme (the app's Organize files page adds preview and undo) |
 | `mtk dedupe [--apply] [--content-hash]` | Detect and quarantine likely duplicates, keeping the best copy of each |
@@ -376,6 +380,27 @@ defaults to a dry run; pass `--apply` to execute.
 - `cache/convert/`: the temporary WAV of a song Windows decoded for a conversion, removed as soon as that song is done (empty unless a conversion is running or was cut short)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
 
+## Server mode (a Raspberry Pi, or any Linux computer)
+
+`mtk serve` runs the same app without a window, so that the phone, the tablet and the PC all use one library that lives on a small computer with a
+drive attached. The step-by-step guide, the systemd service and an example config are in [`packaging/linux/`](packaging/linux/README.md). In short:
+
+- **Where it listens** is `[server] host` and `port` in `config.toml` (`127.0.0.1:4533` unless you say otherwise). It **refuses to start** on any
+  other address unless `[server] allowed_hosts` lists the names the devices reach it by (`musicpi.local`, a Tailscale name, an IP address): a request
+  that names anything else gets `403 forbidden host`, which is what stops a web page on another site from using the app through your browser.
+- **The token** is `MTK_TOKEN` or the file `server.token` next to `config.toml` (made at the first start, readable by its owner only, never printed).
+  `mtk token --url https://NAME` shows the link to open once on each device; the device then stays signed in for `[server] login_days` (90), and the
+  cookie is marked Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`).
+- **`/healthz`** answers without a token with the version and whether the library folders are there (`ok` or `degraded`), for a monitor.
+- **A drive that is not mounted** is never taken for "every song was deleted": a scan skips a library folder that is not there, or is empty while the
+  library has songs in it, and playing a song whose drive is gone answers *503* and keeps the song. `[server] rescan_hours` makes the server look
+  for new songs by itself.
+- **Moving a library over** from a Windows PC: copy the music with `robocopy ... /COPY:DAT` (it keeps the dates), copy `library.db`, and run
+  `mtk library reroot --from D:\Music --to /srv/music/library --apply --update-config`. Every song keeps its number, rating, plays and playlists, and
+  the next scan finds the songs unchanged and reads no tags.
+- **Not yet**: accounts and roles (everyone with the token can do everything, including moving and deleting files), transcoding for a phone on
+  mobile data, an app for the home screen, and apps that speak the Subsonic protocol. Never forward a port from the internet to it.
+
 ## Security model
 
 The backend only listens on `127.0.0.1`. Because it can read your files and
@@ -385,6 +410,11 @@ refuses requests without it, requests whose `Host` is not a loopback name are
 rejected (DNS rebinding), and a Content-Security-Policy confines the page to its
 own origin. The window itself can't navigate away or open other sites; links
 open in your default browser.
+
+A server (`mtk serve`) listens where you tell it and answers only to the host names you list; its token is the same at every start (kept in a file only its
+account can read, or in the environment), its cookie lasts `login_days` and is Secure over https, the service runs as an account of its own that can
+write only the music and its data folder, and `/healthz` is the only thing that answers without the token. Until accounts arrive the token is the
+whole of the protection: keep the app on your own network or a private one.
 
 ## Development
 

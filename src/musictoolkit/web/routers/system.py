@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from musictoolkit import __version__
 from musictoolkit.discs import helper as disc_helper
+from musictoolkit.ingest.scanner import unavailable_reason
 from musictoolkit.sync import device_detect, mtp
 from musictoolkit.web.context import AppContext, get_ctx
 
@@ -113,16 +114,17 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
 
     def library() -> list[dict]:
         out = []
-        for root in ctx.config.library.roots:
-            folder = Path(root)
-            info: dict[str, Any] = {"path": root, "available": folder.is_dir(), "free": None, "total": None}
-            if info["available"]:
-                try:
-                    usage = shutil.disk_usage(folder)
-                    info["free"], info["total"] = usage.free, usage.total
-                except OSError:
-                    pass
-            out.append(info)
+        with ctx.db() as conn:
+            for root in ctx.config.library.roots:
+                folder = Path(root)
+                info: dict[str, Any] = {"path": root, "available": unavailable_reason(conn, folder) is None, "free": None, "total": None}
+                if info["available"]:
+                    try:
+                        usage = shutil.disk_usage(folder)
+                        info["free"], info["total"] = usage.free, usage.total
+                    except OSError:
+                        pass
+                out.append(info)
         return out
 
     def drives() -> list[dict]:

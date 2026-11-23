@@ -29,7 +29,7 @@
      "no_gapless": true,                              the recorder cannot write a music CD without gaps (a drive.json with "gapless": false says the same for one drive)
      "corrupt_burn": true,                            a data disc is written with its first file changed in its last byte (a bad burn that looked fine)
      "no_root": true,                                 a disc with files does not say where they can be read (Windows has not shown them yet)
-     "burn_slow": 0.002,                              seconds a burn takes per sector (cancel can interrupt it)
+     "burn_slow": 0.002,                              seconds a burn takes per sector, and an image per sector of each file (cancel can interrupt it)
      "no_decoder": true,                              this Windows cannot decode songs (the Media Foundation parts are missing)
      "decode_slow": 0.01}                             seconds a decode takes per quarter of a song (cancel can interrupt it)
 Commands: drives, toc, read, flush, eject, media, burn_audio, burn_data, build_iso, erase, inspect, decode, ticks {n} (n progress events), hang (never
@@ -423,6 +423,8 @@ class Fake:
                 raise Refusal("failed", f"{path.name or 'A file'} is not there.")
             names = self.parts(item.get("dest"))
             data = path.read_bytes()
+            if self.control().get("burn_slow"):  # (as a data burn is: slow enough for a test to look at the job while it works, and a Stop ends it)
+                self.pause(float(self.control()["burn_slow"]) * max(len(data) // 2048, 1))
             listing.append({"dest": "/".join(names), "size": len(data)})
             blocks.append(data + b"\0" * (-len(data) % 2048))
         header = json.dumps({"label": str(request.get("label") or ""), "files": listing}).encode()

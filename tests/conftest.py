@@ -76,14 +76,15 @@ def music_dir(tmp_path: Path) -> Path:
     return build_music_dir(tmp_path / "music")
 
 
-def build_web(tmp_path: Path, music_dir: Path | None, token: str | None = None) -> SimpleNamespace:
+def build_web(tmp_path: Path, music_dir: Path | None, token: str | None = None, **options: object) -> SimpleNamespace:
+    """`options` go to create_app as they are (allowed_hosts, login_days, rescan_hours ...)."""
     config = Config()
     config.database.path = str(tmp_path / "data" / "library.db")
     config.logging.dir = str(tmp_path / "logs")
     if music_dir is not None:
         config.library.roots = [str(music_dir)]
     app = create_app(
-        db_path=Path(config.database.path), config_path=tmp_path / "config.toml", config=config, token=token
+        db_path=Path(config.database.path), config_path=tmp_path / "config.toml", config=config, token=token, **options
     )
     client = TestClient(app, raise_server_exceptions=False)
     return SimpleNamespace(app=app, client=client, ctx=app.state.ctx, config=config)

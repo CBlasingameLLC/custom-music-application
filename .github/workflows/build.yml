@@ -79,6 +79,31 @@ jobs:
       - name: Run browser tests
         run: python -m pytest tests/e2e -q
 
+  # The backend where a server runs it: Linux on x86-64 and on arm64 (a Raspberry Pi 5 is arm64), with the Python of Debian 12
+  # (Raspberry Pi OS "Bookworm") and of Debian 13 ("Trixie"). Everything that needs Windows skips itself.
+  linux:
+    name: linux (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        python: ['3.11', '3.13']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -q --ignore=tests/e2e
+
   build:
     needs: version
     runs-on: windows-latest
@@ -343,7 +368,7 @@ jobs:
           python scripts\smoke_desktop.py --music tests\fixtures --skip-external --expect-tray --expect-updater --expect-mtp-helper --expect-disc-helper -- (Join-Path $dir 'Music Toolkit.exe')
 
   release:
-    needs: [version, test, e2e, build, upgrade, update]
+    needs: [version, test, e2e, linux, build, upgrade, update]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.version.outputs.tag_exists == 'false'
     runs-on: ubuntu-latest
     permissions:

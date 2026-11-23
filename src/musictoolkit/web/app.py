@@ -1,16 +1,20 @@
-"""The local web app: a JSON API plus the single-page UI, bound to 127.0.0.1.
+"""The web app: a JSON API plus the single-page UI. The desktop app binds it to 127.0.0.1; `mtk serve` can bind it further.
 
 Access control (the API can move files and write tags, so a random web page
 must not be able to drive it):
-  * every request's Host header must be a loopback name (blocks DNS rebinding);
-  * /api/* needs the per-launch token, delivered once via /?token=... and kept
-    in a SameSite=Strict cookie (so <audio>/<img> requests carry it too).
+  * every request's Host header must be a loopback name, or one of the exact names
+    a server was told it is reached by (blocks DNS rebinding);
+  * /api/* needs the token, delivered once via /?token=... and kept in a
+    SameSite=Strict cookie (so <audio>/<img> requests carry it too). The desktop
+    app's token is new at every launch and its cookie ends with the window; a
+    server's token is the same every time and its cookie lasts `login_days`.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,6 +28,7 @@ from musictoolkit.config import Config
 from musictoolkit.convert import store as convert_store
 from musictoolkit.db.connection import connect
 from musictoolkit.discs import store as disc_store
+from musictoolkit.ingest.scanner import unavailable_reason
 from musictoolkit.web.context import AppContext
 from musictoolkit.web.routers import (
     convert,
@@ -51,15 +56,16 @@ from musictoolkit.web.routers import (
 )
 from musictoolkit.net.proxy import Slots
 from musictoolkit.radio.hub import RadioHub
+from musictoolkit.web.hosts import LOOPBACK_HOSTS, clean_names, hostname_of
 from musictoolkit.web.podcast_job import PodcastSchedule
 from musictoolkit.web.radar_job import RadarSchedule
+from musictoolkit.web.rescan_job import RescanSchedule
 from musictoolkit.web.scrobbler import Scrobbler
 
 logger = logging.getLogger("musictoolkit")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 COOKIE_NAME = "mtk_session"
-LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]", "testserver"}
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https: http:; "
@@ -72,14 +78,6 @@ LOCKED_PAGE = """<!doctype html><meta charset="utf-8"><title>Music Toolkit</titl
 <h1>Open Music Toolkit from the app</h1>
 <p>This page is protected. Launch the Music Toolkit desktop app, or use the full address
 (including <code>?token=...</code>) that <code>mtk dashboard</code> prints.</p></body>"""
-
-
-def _hostname(header: str) -> str:
-    """Host header without its port: '127.0.0.1:4533' -> '127.0.0.1', '[::1]:4533' -> '[::1]'."""
-    header = header.strip().lower()
-    if header.startswith("["):
-        return header.split("]")[0] + "]"
-    return header.rsplit(":", 1)[0] if ":" in header else header
 
 
 class _Static(StaticFiles):
@@ -98,7 +96,13 @@ def create_app(
     config: Config,
     token: str | None = None,
     rescan_on_start: bool = False,
+    allowed_hosts: Iterable[str] = (),
+    login_days: int = 0,
+    rescan_hours: float = 0,
 ) -> FastAPI:
+    """`allowed_hosts`: the names besides the loopback ones that this app answers to (a server's). `login_days`: how long the cookie
+    that the token buys lasts (0: until the browser window is closed). `rescan_hours`: look for new songs by itself this often (0: never)."""
+    answers_to = LOOPBACK_HOSTS | set(clean_names(allowed_hosts))
     ctx = AppContext(
         db_path=Path(db_path).absolute(), config_path=Path(config_path).absolute(), config=config, token=token
     )
@@ -115,6 +119,7 @@ def create_app(
     ctx.radio = RadioHub()
     ctx.podcast_slots = Slots(6)
     ctx.podcasts = PodcastSchedule(ctx)
+    ctx.rescan = RescanSchedule(ctx, rescan_hours)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -123,9 +128,11 @@ def create_app(
         ctx.scrobbler.start()
         ctx.radar.start()
         ctx.podcasts.start()
+        ctx.rescan.start()
         try:
             yield
         finally:
+            ctx.rescan.stop()
             ctx.podcasts.stop()
             ctx.radar.stop()
             ctx.scrobbler.stop()
@@ -135,7 +142,7 @@ def create_app(
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
-        if _hostname(request.headers.get("host", "")) not in LOOPBACK_HOSTS:
+        if hostname_of(request.headers.get("host", "")) not in answers_to:
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         if ctx.token and request.url.path.startswith("/api/"):
             supplied = request.cookies.get(COOKIE_NAME) or request.headers.get("x-mtk-token") or ""
@@ -160,10 +167,25 @@ def create_app(
         response = FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
         if ctx.token:
             if token and hmac.compare_digest(token, ctx.token):
-                response.set_cookie(COOKIE_NAME, ctx.token, httponly=True, samesite="strict", path="/")
+                response.set_cookie(
+                    COOKIE_NAME, ctx.token, httponly=True, samesite="strict", path="/",
+                    secure=request.url.scheme == "https",  # (a browser keeps a Secure cookie only from an https page: uvicorn reports https when a proxy on this machine says so)
+                    max_age=login_days * 86400 if login_days > 0 else None,
+                )
             elif not hmac.compare_digest(request.cookies.get(COOKIE_NAME, ""), ctx.token):
                 return HTMLResponse(LOCKED_PAGE, status_code=401)
         return response
+
+    @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
+    def healthz() -> dict:
+        """For a monitor: the app is up, and whether the library folders are there. No token (a monitor has none), no paths."""
+        with ctx.db() as conn:
+            there = [unavailable_reason(conn, Path(root)) is None for root in ctx.config.library.roots]
+        return {
+            "status": "ok" if all(there) else "degraded",
+            "version": __version__,
+            "library": {"folders": len(there), "available": sum(there)},
+        }
 
     app.mount("/static", _Static(directory=STATIC_DIR), name="static")
     return app

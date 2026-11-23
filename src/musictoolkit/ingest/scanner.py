@@ -31,6 +31,48 @@ class ScanResult:
     errors: int = 0
 
 
+class LibraryUnavailable(RuntimeError):
+    """A library folder that cannot be scanned now: it is not there, or it is there but has nothing in it while the library knows
+    songs in it, which is what a drive that is not mounted looks like. Scanning it would mark every one of those songs missing."""
+
+
+def looks_unmounted(folder: Path | str) -> bool:
+    """Is this not a folder, or a folder with nothing in it at all (the empty place a drive is mounted on while it is not)?"""
+    try:
+        with os.scandir(folder) as entries:
+            return next(entries, None) is None
+    except OSError:
+        return True
+
+
+def folder_unavailable_for(path: Path | str, folders: list[str]) -> bool:
+    """Is `path` inside one of these library folders that looks unmounted? Then a song that is not found there is not gone, its drive is."""
+    where = Path(path)
+    return any(where.is_relative_to(Path(folder)) and looks_unmounted(folder) for folder in folders)
+
+
+def unavailable_reason(conn: sqlite3.Connection, root: Path) -> str | None:
+    """Why this library folder cannot be used now, in words, or None when it can: it is not there, or it is there but has nothing in
+    it while the library has songs in it (what a drive that is not mounted looks like). One rule for the scan, the health check and the
+    diagnostics; a song that cannot be found uses the same idea in folder_unavailable_for."""
+    if not root.is_dir():
+        return f"{root} is not there (is the drive connected?)"
+    if looks_unmounted(root) and any(
+        Path(row["file_path"]).is_relative_to(root)
+        for row in conn.execute("SELECT file_path FROM tracks WHERE is_missing = 0")
+    ):
+        return (
+            f"{root} is empty, but the library has songs in it. A drive that is not mounted looks like that, and scanning would mark "
+            "every one of those songs missing."
+        )
+    return None
+
+
+def _refuse_unavailable(conn: sqlite3.Connection, root: Path) -> None:
+    if (reason := unavailable_reason(conn, root)) is not None:
+        raise LibraryUnavailable(reason)
+
+
 def in_quarantine(path: Path, root: Path) -> bool:
     try:
         return any(part.lower() == QUARANTINE_DIR for part in path.relative_to(root).parts[:-1])
@@ -160,10 +202,16 @@ def scan_library(
     conn: sqlite3.Connection,
     root: Path,
     on_progress: Callable[[int, int], None] | None = None,
+    force: bool = False,
 ) -> ScanResult:
     """`on_progress(done, total)` is called before each file and once more at
-    the end with done == total, so a UI can show "N of M files"."""
+    the end with done == total, so a UI can show "N of M files".
+
+    Raises LibraryUnavailable for a folder that is not there, or is empty while the library has songs in it, unless `force`
+    (then every song that is not found is marked missing)."""
     root = root.resolve()
+    if not force:
+        _refuse_unavailable(conn, root)
     result = ScanResult()
     now = datetime.now(timezone.utc).isoformat()
     seen_paths: set[str] = set()

@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 import tempfile
@@ -6,11 +7,12 @@ from typing import Optional
 
 import typer
 
-from musictoolkit.config import Config, bootstrap_if_missing, load_config, resolve_config_path
+from musictoolkit import server as server_ops
+from musictoolkit.config import Config, bootstrap_if_missing, load_config, resolve_config_path, save_config
 from musictoolkit.db.connection import connect
 from musictoolkit.history import spotify_import
 from musictoolkit.ingest import dedupe as dedupe_ops
-from musictoolkit.ingest import organizer, scanner, tagger
+from musictoolkit.ingest import organizer, reroot, scanner, tagger
 from musictoolkit.integrations import lastfm_client, musicbrainz_client
 from musictoolkit.logging_setup import setup_logging
 from musictoolkit.recommend import review_queue
@@ -68,11 +70,21 @@ def _configure_musicbrainz() -> None:
 
 
 @app.command()
-def scan(path: str = typer.Argument(..., help="Library root to scan")) -> None:
+def scan(
+    path: str = typer.Argument(..., help="Library root to scan"),
+    force: bool = typer.Option(
+        False, "--force", help="Scan even when the folder is missing or empty while the library knows songs in it (every one of them is then marked missing)"
+    ),
+) -> None:
     """Scan a library root and populate the tracks table."""
     conn = _connection()
-    result = scanner.scan_library(conn, Path(path))
-    conn.close()
+    try:
+        result = scanner.scan_library(conn, Path(path), force=force)
+    except scanner.LibraryUnavailable as error:
+        typer.echo(f"Not scanned: {error}", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        conn.close()
     typer.echo(
         f"Added: {result.added}  Updated: {result.updated}  Unchanged: {result.unchanged}  "
         f"Missing: {result.missing}  Errors: {result.errors}"
@@ -350,6 +362,131 @@ def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127
     )
     typer.echo(f"Music Toolkit is running at http://127.0.0.1:{port}/?token={token}  (Ctrl+C to stop)")
     uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+
+
+def _data_dir() -> Path:
+    """The folder the config file is in: the token file, the database (unless told otherwise), the logs and the caches live there."""
+    return Path(str(state["config_path"])).absolute().parent
+
+
+@app.command()
+def serve(
+    host: Optional[str] = typer.Option(None, "--host", help="Address to listen on (default: [server] host in config.toml, 127.0.0.1)"),
+    port: Optional[int] = typer.Option(None, "--port", help="Port to listen on (default: [server] port, 4533)"),
+) -> None:
+    """Run the app as a server that other devices use (a Raspberry Pi at home, say), until it is stopped.
+
+    It refuses to listen beyond this computer unless [server] allowed_hosts in config.toml names every name the devices reach it by.
+    The token is MTK_TOKEN, or the file server.token next to config.toml (made at the first start); `mtk token` shows it."""
+    import uvicorn
+
+    from musictoolkit.web.app import create_app
+
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    settings = cfg.server
+    bind = (host or settings.host).strip()
+    try:
+        number = server_ops.check_port(port if port is not None else settings.port)
+        names = server_ops.allowed_names(bind, settings.allowed_hosts)
+        token, source = server_ops.server_token(_data_dir(), os.environ)
+    except server_ops.ServeError as error:
+        typer.echo(f"Cannot start the server: {error}", err=True)
+        raise typer.Exit(2) from None
+    db_path = state["db_path"] or cfg.database.path
+    web_app = create_app(
+        db_path=Path(str(db_path)),
+        config_path=Path(str(state["config_path"])),
+        config=cfg,
+        token=token,
+        rescan_on_start=True,
+        allowed_hosts=names,
+        login_days=settings.login_days,
+        rescan_hours=settings.rescan_hours,
+    )
+    typer.echo(f"Music Toolkit server listening on {bind}:{number}")
+    typer.echo(f"  answers to the names: {', '.join(['127.0.0.1', 'localhost', *names])}")
+    typer.echo(f"  token: {source}  (the link that signs a device in: mtk token --url https://NAME)")
+    typer.echo(f"  data folder: {_data_dir()}")
+    if (warning := server_ops.token_file_warning(_data_dir())) and source != "the MTK_TOKEN environment variable":
+        typer.echo(f"  WARNING: {warning}", err=True)
+    if not server_ops.is_loopback_bind(bind):
+        typer.echo(
+            "  WARNING: anyone on this network who has the token can use everything in the app, and there are no accounts yet. "
+            "Never forward a port from the internet to it; reach it from outside through a private network such as Tailscale.",
+            err=True,
+        )
+    uvicorn.run(web_app, host=bind, port=number, log_level="warning", proxy_headers=True, forwarded_allow_ips="127.0.0.1")
+
+
+@app.command()
+def token(
+    url: Optional[str] = typer.Option(
+        None, "--url", help="How devices reach this server (https://musicpi.example.ts.net): print the link that signs a device in instead of the bare token"
+    ),
+) -> None:
+    """Show the server's token, or with --url the link to open once on each device. Anyone who has it can use the app."""
+    try:
+        value, _ = server_ops.server_token(_data_dir(), os.environ, create=False)
+        typer.echo(server_ops.sign_in_link(url, value) if url else value)
+    except server_ops.ServeError as error:
+        typer.echo(f"{error}", err=True)
+        raise typer.Exit(1) from None
+
+
+library_app = typer.Typer(name="library", help="Look after the library's database.", no_args_is_help=True)
+app.add_typer(library_app, name="library")
+
+
+@library_app.command("reroot")
+def library_reroot(
+    from_prefix: str = typer.Option(..., "--from", help=r"The folder the library was in, as the database has it (D:\Music)"),
+    to_prefix: str = typer.Option(..., "--to", help="The folder it is in now (/srv/music/library)"),
+    apply: bool = typer.Option(False, "--apply", help="Change the database; default is a dry run that only says what would change"),
+    skip_conflicts: bool = typer.Option(False, "--skip-conflicts", help="Leave alone the songs whose new path another song already has, instead of stopping"),
+    update_config: bool = typer.Option(False, "--update-config", help="Also change the library folders (and the rip folder) in config.toml"),
+) -> None:
+    """Tell the database where the library is now, after it was copied somewhere else (a Windows PC's D:\\Music to /srv/music/library).
+
+    Every song keeps its number, rating, plays and playlists. Stop the app first. A copy of the database is kept before anything changes."""
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    try:
+        mapping = reroot.Mapping.of(from_prefix, to_prefix)
+    except reroot.RerootError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from None
+    conn = _connection()
+    try:
+        plan = reroot.plan_reroot(conn, mapping)
+    finally:
+        conn.close()
+    typer.echo(f"{'Re-rooting' if apply else 'Dry run of re-rooting'} {mapping.source} -> {mapping.target}")
+    for (table, column), count in plan.counts.items():
+        typer.echo(f"  {table}.{column}: {count:,}")
+    typer.echo(f"  songs under the old folder: {plan.counts.get(('tracks', 'file_path'), 0) + len(plan.conflicts):,} of {plan.songs:,}  (outside it, left alone: {plan.songs_outside:,})")
+    for old, new in plan.examples():
+        typer.echo(f"  e.g. {old}  ->  {new}")
+    folders = reroot.map_folders([*cfg.library.roots, cfg.disc.rip_root], mapping)
+    for old, new in folders:
+        typer.echo(f"  config folder: {old}  ->  {new}" + ("" if update_config else "   (use --update-config, or Settings, to change it)"))
+    if plan.conflicts:
+        typer.echo(f"  {len(plan.conflicts):,} songs would get a path that another song already has, for example {plan.conflicts[0][0]} -> {plan.conflicts[0][1]}", err=True)
+    if not apply:
+        typer.echo("Nothing was changed. Add --apply to make the change (a copy of the database is kept first).")
+        raise typer.Exit(1 if plan.conflicts and not skip_conflicts else 0)
+    db_path = Path(str(state["db_path"] or cfg.database.path))
+    try:
+        copy = reroot.apply_reroot(db_path, plan, skip_conflicts=skip_conflicts)
+    except reroot.RerootConflict as error:
+        typer.echo(f"Nothing was changed: {error} Look at them, or use --skip-conflicts to leave exactly those songs as they are.", err=True)
+        raise typer.Exit(1) from None
+    if update_config and folders:
+        mapped = dict(folders)
+        cfg.library.roots = [mapped.get(root, root) for root in cfg.library.roots]
+        cfg.disc.rip_root = mapped.get(cfg.disc.rip_root, cfg.disc.rip_root)
+        save_config(str(state["config_path"]), cfg)
+        typer.echo("  config.toml now names the new folders (comments in it were not kept).")
+    typer.echo(f"Done: {len(plan.changes):,} paths now point to {mapping.target}. The database as it was is kept in {copy}.")
+    typer.echo(f"Next: make sure [library] roots names {mapping.target}, then run `mtk scan {mapping.target}`: songs whose size and time are unchanged are reported as Unchanged.")
 
 
 if __name__ == "__main__":

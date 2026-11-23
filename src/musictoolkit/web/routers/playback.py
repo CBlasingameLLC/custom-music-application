@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from musictoolkit.ingest.scanner import folder_unavailable_for
 from musictoolkit.media import art, info, lrclib, lyrics
 from musictoolkit.web.context import AppContext, get_ctx
 from musictoolkit.web.queries import (
@@ -45,6 +46,8 @@ def _track_file(ctx: AppContext, track_id: int) -> Path:
             raise HTTPException(status_code=404, detail="track not found")
         path = Path(row["file_path"])
         if not path.is_file():
+            if folder_unavailable_for(path, ctx.config.library.roots):  # (the whole drive is gone, not this song: do not forget the song)
+                raise HTTPException(status_code=503, detail="The library's drive is not available right now. Is it connected?")
             conn.execute("UPDATE tracks SET is_missing = 1 WHERE id = ?", (track_id,))
             conn.commit()
             raise HTTPException(status_code=404, detail="the file is missing from disk")

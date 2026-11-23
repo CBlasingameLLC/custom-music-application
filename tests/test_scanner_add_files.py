@@ -146,6 +146,7 @@ def test_later_scans_leave_a_song_outside_their_folders_alone_and_adopt_it_when_
 
     assert conn.execute("SELECT is_missing FROM tracks WHERE id = ?", (track_id,)).fetchone()["is_missing"] == 0
     song.unlink()
+    make_track(elsewhere, "stays.mp3", title="Stays")  # (a folder with nothing in it is not scanned: it looks like a drive that is not mounted)
     scanner.scan_library(conn, elsewhere)  # now its own folder is scanned, and the song is gone from it
     assert conn.execute("SELECT is_missing FROM tracks WHERE id = ?", (track_id,)).fetchone()["is_missing"] == 1
 
