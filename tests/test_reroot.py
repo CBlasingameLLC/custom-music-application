@@ -154,6 +154,13 @@ def test_a_database_from_before_a_feature_has_no_table_for_it_and_is_planned_all
     assert ("conversion_items", "source") not in counts and counts[("tracks", "file_path")] == 3
 
 
+def test_a_database_that_lacks_a_column_of_a_newer_feature_is_planned_all_the_same(conn) -> None:
+    _windows_library(conn)
+    conn.execute("ALTER TABLE disc_rips DROP COLUMN cover_path")
+    counts = plan_reroot(conn, Mapping.of("D:\\Music", "/srv/music/library")).counts
+    assert ("disc_rips", "cover_path") not in counts and counts[("disc_rips", "folder")] == 1 and counts[("tracks", "file_path")] == 3
+
+
 def test_a_library_that_is_empty_or_elsewhere_has_nothing_to_change(conn) -> None:
     plan = plan_reroot(conn, Mapping.of("D:\\Music", "/srv/music"))
     assert (plan.changes, plan.songs, plan.songs_outside) == ([], 0, 0)

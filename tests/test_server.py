@@ -314,6 +314,67 @@ def test_serve_refuses_a_short_token_from_the_environment(tmp_path: Path, monkey
     assert result.exit_code == 2 and "MTK_TOKEN is too short" in result.output
 
 
+@pytest.fixture
+def listening(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """`mtk serve` without really listening: what it asks uvicorn to run, and what it makes the app from."""
+    import uvicorn
+
+    import musictoolkit.web.app as web_app
+
+    seen: dict = {"app_options": {}, "run": None}
+    real = web_app.create_app
+
+    def spy(**options):
+        seen["app_options"] = options
+        return real(**options)
+
+    monkeypatch.setattr(web_app, "create_app", spy)
+    monkeypatch.setattr(uvicorn, "run", lambda app, **options: seen.update(run={"app": app, **options}))
+    monkeypatch.delenv("MTK_TOKEN", raising=False)
+    return seen
+
+
+def test_serve_makes_the_app_as_the_config_says_and_listens_as_told(tmp_path: Path, listening: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MTK_TOKEN", TOKEN)
+    body = '[server]\nhost = "0.0.0.0"\nport = 8123\nallowed_hosts = ["MusicPi.local", "192.168.1.50"]\nrescan_hours = 3\nlogin_days = 30\n'
+    result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path, body)), "serve"])
+    assert result.exit_code == 0, result.output
+    options = listening["app_options"]
+    assert (options["token"], options["allowed_hosts"], options["login_days"], options["rescan_hours"], options["rescan_on_start"]) == (TOKEN, ["musicpi.local", "192.168.1.50"], 30, 3, True)
+    assert options["config_path"] == tmp_path / "config.toml" and options["db_path"] == Path(load_config(tmp_path / "config.toml").database.path)
+    run = listening["run"]
+    assert (run["host"], run["port"], run["log_level"], run["proxy_headers"], run["forwarded_allow_ips"]) == ("0.0.0.0", 8123, "warning", True, "127.0.0.1")
+    assert "Music Toolkit server listening on 0.0.0.0:8123" in result.output
+    assert "answers to the names: 127.0.0.1, localhost, musicpi.local, 192.168.1.50" in result.output
+    assert "token: the MTK_TOKEN environment variable" in result.output and f"data folder: {tmp_path}" in result.output
+    assert "WARNING: anyone on this network who has the token can use everything" in result.output
+    assert "Never forward a port from the internet to it" in result.output
+    assert TOKEN not in result.output
+
+
+def test_serve_on_this_computer_only_does_not_warn_about_the_network_and_the_command_line_overrides_the_config(tmp_path: Path, listening: dict) -> None:
+    body = '[server]\nhost = "0.0.0.0"\nport = 8123\nallowed_hosts = ["musicpi.local"]\n'
+    result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path, body)), "serve", "--host", "127.0.0.1", "--port", "9"])
+    assert result.exit_code == 0, result.output
+    assert (listening["run"]["host"], listening["run"]["port"]) == ("127.0.0.1", 9)
+    assert "anyone on this network" not in result.output and "Music Toolkit server listening on 127.0.0.1:9" in result.output
+    assert "token: " + str(tmp_path / "server.token") in result.output  # (made now: it is where the token came from)
+    assert (tmp_path / "server.token").is_file()
+    assert listening["app_options"]["login_days"] == 90 and listening["app_options"]["rescan_hours"] == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file permissions")
+def test_serve_warns_when_the_token_file_can_be_read_by_others_but_not_when_the_token_comes_from_the_environment(tmp_path: Path, listening: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    server_ops.server_token(tmp_path, {})
+    (tmp_path / "server.token").chmod(0o644)
+    config = str(_config(tmp_path))
+    warned = CliRunner().invoke(cli_app, ["--config", config, "serve"])
+    assert f"WARNING: {tmp_path / 'server.token'} can be read by other users of this computer; chmod 600 it." in warned.output
+    monkeypatch.setenv("MTK_TOKEN", TOKEN)
+    quiet = CliRunner().invoke(cli_app, ["--config", config, "serve"])
+    assert "can be read by other users" not in quiet.output
+
+
 def test_token_shows_the_token_or_the_link_and_makes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MTK_TOKEN", raising=False)
     config = str(_config(tmp_path))
