@@ -51,17 +51,26 @@ def folder_unavailable_for(path: Path | str, folders: list[str]) -> bool:
     return any(where.is_relative_to(Path(folder)) and looks_unmounted(folder) for folder in folders)
 
 
-def _refuse_unavailable(conn: sqlite3.Connection, root: Path) -> None:
+def unavailable_reason(conn: sqlite3.Connection, root: Path) -> str | None:
+    """Why this library folder cannot be used now, in words, or None when it can: it is not there, or it is there but has nothing in
+    it while the library has songs in it (what a drive that is not mounted looks like). One rule for the scan, the health check and the
+    diagnostics; a song that cannot be found uses the same idea in folder_unavailable_for."""
     if not root.is_dir():
-        raise LibraryUnavailable(f"{root} is not there (is the drive connected?)")
+        return f"{root} is not there (is the drive connected?)"
     if looks_unmounted(root) and any(
         Path(row["file_path"]).is_relative_to(root)
         for row in conn.execute("SELECT file_path FROM tracks WHERE is_missing = 0")
     ):
-        raise LibraryUnavailable(
+        return (
             f"{root} is empty, but the library has songs in it. A drive that is not mounted looks like that, and scanning would mark "
             "every one of those songs missing."
         )
+    return None
+
+
+def _refuse_unavailable(conn: sqlite3.Connection, root: Path) -> None:
+    if (reason := unavailable_reason(conn, root)) is not None:
+        raise LibraryUnavailable(reason)
 
 
 def in_quarantine(path: Path, root: Path) -> bool:

@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from musictoolkit import __version__
 from musictoolkit.cli import app as cli_app
 from musictoolkit.db.connection import connect
 from musictoolkit.ingest import scanner
@@ -194,6 +195,40 @@ def test_a_song_opened_from_outside_every_library_folder_that_is_gone_is_forgott
         track = db.execute("SELECT id FROM tracks WHERE title = 'Outside'").fetchone()[0]
     outside.unlink()
     assert web.client.get(f"/api/tracks/{track}/stream").status_code == 404
+
+
+def test_the_health_check_and_the_diagnostics_call_a_folder_that_looks_unmounted_unavailable(web, music_dir: Path) -> None:
+    assert web.client.get("/healthz").json()["status"] == "ok"
+    assert next(f for f in web.client.get("/api/system/diagnostics").json()["library"] if f["path"] == str(music_dir))["available"] is True
+    _empty(music_dir)  # (the mount point of a drive that is not mounted: there, and empty)
+    assert web.client.get("/healthz").json()["library"] == {"folders": 1, "available": 0}
+    assert web.client.get("/healthz").json()["status"] == "degraded"
+    folder = next(f for f in web.client.get("/api/system/diagnostics").json()["library"] if f["path"] == str(music_dir))
+    assert folder == {"path": str(music_dir), "available": False, "free": None, "total": None}
+
+
+def test_a_new_library_folder_with_nothing_in_it_yet_is_available(tmp_path: Path) -> None:
+    fresh = tmp_path / "music"
+    fresh.mkdir()
+    web = build_web(tmp_path, fresh)
+    assert web.client.get("/healthz").json() == {"status": "ok", "version": __version__, "library": {"folders": 1, "available": 1}}
+    assert next(iter(web.client.get("/api/system/diagnostics").json()["library"]))["available"] is True
+
+
+def test_the_reason_a_folder_cannot_be_used_is_in_words_and_none_when_it_can(conn, tmp_path: Path) -> None:
+    from musictoolkit.ingest.scanner import unavailable_reason
+
+    library = tmp_path / "music"
+    assert unavailable_reason(conn, library) == f"{library} is not there (is the drive connected?)"
+    library.mkdir()
+    assert unavailable_reason(conn, library) is None
+    make_track(library, "a.mp3", title="A")
+    scan_library(conn, library)
+    assert unavailable_reason(conn, library) is None
+    _empty(library)
+    assert unavailable_reason(conn, library) == (
+        f"{library} is empty, but the library has songs in it. A drive that is not mounted looks like that, and scanning would mark every one of those songs missing."
+    )
 
 
 # ---------------------------------------------------------------------------------------------------- the command line

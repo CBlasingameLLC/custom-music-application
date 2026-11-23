@@ -28,6 +28,7 @@ from musictoolkit.config import Config
 from musictoolkit.convert import store as convert_store
 from musictoolkit.db.connection import connect
 from musictoolkit.discs import store as disc_store
+from musictoolkit.ingest.scanner import unavailable_reason
 from musictoolkit.web.context import AppContext
 from musictoolkit.web.routers import (
     convert,
@@ -178,7 +179,8 @@ def create_app(
     @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     def healthz() -> dict:
         """For a monitor: the app is up, and whether the library folders are there. No token (a monitor has none), no paths."""
-        there = [Path(root).is_dir() for root in ctx.config.library.roots]
+        with ctx.db() as conn:
+            there = [unavailable_reason(conn, Path(root)) is None for root in ctx.config.library.roots]
         return {
             "status": "ok" if all(there) else "degraded",
             "version": __version__,
