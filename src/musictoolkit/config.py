@@ -92,6 +92,17 @@ class DiscConfig:
 
 
 @dataclass
+class ServerConfig:
+    """How `mtk serve` listens. The desktop app never reads this: it always listens on 127.0.0.1 and answers to the loopback names."""
+
+    host: str = "127.0.0.1"  # the address to listen on ("0.0.0.0" for every network interface)
+    port: int = 4533
+    allowed_hosts: list[str] = field(default_factory=list)  # the names this server is reached by besides the loopback ones, e.g. "musicpi.local"
+    rescan_hours: int = 0  # look for new songs by itself every this many hours (0: only at the start, and when asked)
+    login_days: int = 90  # how long a device that opened the link with the token stays signed in
+
+
+@dataclass
 class Config:
     library: LibraryConfig = field(default_factory=LibraryConfig)
     musicbrainz: MusicBrainzConfig = field(default_factory=MusicBrainzConfig)
@@ -102,6 +113,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     app: AppConfig = field(default_factory=AppConfig)
     disc: DiscConfig = field(default_factory=DiscConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
 
 
 def resolve_config_path(explicit: str | Path | None) -> Path:
@@ -191,6 +203,7 @@ def load_config(path: Path | str | None = None) -> Config:
         logging=logging_cfg,
         app=_section(AppConfig, raw.get("app", {})),
         disc=_section(DiscConfig, raw.get("disc", {})),
+        server=_section(ServerConfig, raw.get("server", {})),
     )
 
 

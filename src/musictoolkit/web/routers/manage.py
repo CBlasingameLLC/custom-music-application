@@ -43,7 +43,12 @@ def submit_scan(ctx: AppContext, roots: list[str], title: str = "Scanning librar
                     handle.update(done=done, total=total, message=f"{Path(root).name or root}: {done} of {total} files")
                     handle.check()
 
-                result = scanner.scan_library(conn, Path(root), on_progress=progress)
+                try:
+                    result = scanner.scan_library(conn, Path(root), on_progress=progress)
+                except scanner.LibraryUnavailable as error:
+                    offline.append(root)
+                    handle.log(f"Skipped {root}: {error}")
+                    continue
                 for key, value in asdict(result).items():
                     setattr(totals, key, getattr(totals, key) + value)
                 handle.log(f"{root}: {result}")
