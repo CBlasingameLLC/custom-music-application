@@ -66,6 +66,8 @@ def test_allowed_names_are_lower_case_each_once_in_the_order_given() -> None:
     ("trailing.dot.", "not a host name"),
     ("é.local", "not a host name"),
     ("fd00::g", "not a host name"),
+    ("[evil.example]", "in brackets"),
+    ("[zz]", "in brackets"),
 ])
 def test_an_entry_that_is_not_a_plain_name_or_address_is_refused_and_named(entry: str, hint: str) -> None:
     with pytest.raises(ValueError) as refused:
@@ -166,9 +168,32 @@ def test_the_token_file_can_be_read_by_its_owner_only(tmp_path: Path) -> None:
     server_ops.server_token(tmp_path, {})
     assert (tmp_path / "server.token").stat().st_mode & 0o777 == 0o600
     assert server_ops.token_file_warning(tmp_path) is None
-    (tmp_path / "server.token").chmod(0o644)
-    assert server_ops.token_file_warning(tmp_path) == f"{tmp_path / 'server.token'} can be read by other users of this computer; chmod 600 it."
     assert server_ops.token_file_warning(tmp_path / "nowhere") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file permissions")
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o620, 0o602, 0o660, 0o666, 0o700])
+def test_a_token_file_that_the_group_or_others_can_use_is_warned_about(tmp_path: Path, mode: int) -> None:
+    server_ops.server_token(tmp_path, {})
+    (tmp_path / "server.token").chmod(mode)
+    expected = None if mode == 0o700 else f"{tmp_path / 'server.token'} can be read by other users of this computer; chmod 600 it."
+    assert server_ops.token_file_warning(tmp_path) == expected  # (the owner may do anything; nobody else anything)
+
+
+def test_two_first_starts_at_once_end_with_the_token_of_the_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    winner = "w" * 43
+    real_exists, looked = Path.exists, []
+
+    def exists(self: Path) -> bool:
+        if self.name == "server.token" and not looked:  # (we look and see nothing; then the other start makes it)
+            looked.append(1)
+            (tmp_path / "server.token").write_text(winner + "\n", encoding="utf-8")
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    assert server_ops.server_token(tmp_path, {}) == (winner, str(tmp_path / "server.token"))
+    assert (tmp_path / "server.token").read_text(encoding="utf-8") == winner + "\n"
 
 
 @pytest.mark.parametrize("content", ["", "\n", "short"])
@@ -204,6 +229,13 @@ def test_a_server_answers_to_the_names_it_was_given_and_no_others(tmp_path: Path
     for host in ("evil.example", "musicpi.local.evil.example", "xmusicpi.local", "tail1.ts.net", "192.168.1.50:4533", ""):
         refused = web.client.get("/api/about", headers={"host": host})
         assert (refused.status_code, refused.json()) == (403, {"detail": "forbidden host"}), host
+
+
+def test_a_host_header_with_two_colons_is_not_a_name_and_a_port(tmp_path: Path) -> None:
+    assert hostname_of("a:b:c") == "a:b"
+    web = build_web(tmp_path, None, allowed_hosts=["musicpi.local"])
+    for host in ("musicpi.local:80:90", "musicpi.local:x:y"):
+        assert web.client.get("/api/about", headers={"host": host}).status_code == 403, host
 
 
 def test_without_names_only_the_loopback_ones_are_answered_as_before(empty_web) -> None:
@@ -282,14 +314,14 @@ def _config(tmp_path: Path, body: str = "") -> Path:
     return path
 
 
-def test_serve_refuses_to_listen_beyond_this_computer_without_names(tmp_path: Path) -> None:
+def test_serve_refuses_to_listen_beyond_this_computer_without_names(tmp_path: Path, listening: dict) -> None:
     result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path)), "serve", "--host", "0.0.0.0"])
-    assert result.exit_code == 2
+    assert result.exit_code == 2 and listening["run"] is None  # (nothing was run: with a fake uvicorn a refusal that did not happen would show here, not hang)
     assert "Cannot start the server: it would listen on 0.0.0.0" in result.output and 'allowed_hosts = ["musicpi.local"]' in result.output
     assert not (tmp_path / "server.token").exists()  # (nothing was made on the way to refusing)
 
 
-def test_serve_reads_the_host_from_the_config_too(tmp_path: Path) -> None:
+def test_serve_reads_the_host_from_the_config_too(tmp_path: Path, listening: dict) -> None:
     result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path, '[server]\nhost = "::"')), "serve"])
     assert result.exit_code == 2 and "it would listen on ::" in result.output
 
@@ -298,17 +330,17 @@ def test_serve_reads_the_host_from_the_config_too(tmp_path: Path) -> None:
     (["--port", "70000"], "70000 is not a port number"),
     (["--port", "0"], "0 is not a port number"),
 ])
-def test_serve_refuses_a_port_that_is_not_one(tmp_path: Path, args: list[str], words: str) -> None:
+def test_serve_refuses_a_port_that_is_not_one(tmp_path: Path, args: list[str], words: str, listening: dict) -> None:
     result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path)), "serve", *args])
     assert result.exit_code == 2 and words in result.output
 
 
-def test_serve_refuses_a_name_that_is_not_a_plain_name(tmp_path: Path) -> None:
+def test_serve_refuses_a_name_that_is_not_a_plain_name(tmp_path: Path, listening: dict) -> None:
     result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path, '[server]\nallowed_hosts = ["*.local"]')), "serve"])
     assert result.exit_code == 2 and "[server] allowed_hosts: '*.local': wildcards are not accepted" in result.output
 
 
-def test_serve_refuses_a_short_token_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_serve_refuses_a_short_token_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, listening: dict) -> None:
     monkeypatch.setenv("MTK_TOKEN", "short")
     result = CliRunner().invoke(cli_app, ["--config", str(_config(tmp_path)), "serve"])
     assert result.exit_code == 2 and "MTK_TOKEN is too short" in result.output

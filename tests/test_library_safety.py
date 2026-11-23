@@ -316,16 +316,37 @@ def test_the_thread_looks_again_and_again_and_stops_when_asked(asked, monkeypatc
     schedule = RescanSchedule(_ctx("/a"), hours=1, clock=clock)
     schedule.start()
     thread = schedule._thread
-    assert thread is not None and thread.is_alive() and thread.daemon and thread.name == "library-rescan"
-    schedule.start()
-    assert schedule._thread is thread  # (a second start is no second thread)
-    clock.now += 3600
-    deadline = time.monotonic() + 10
-    while not asked and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert len(asked) == 1
-    schedule.stop()
+    try:
+        assert thread is not None and thread.is_alive() and thread.daemon and thread.name == "library-rescan"
+        schedule.start()
+        assert schedule._thread is thread  # (a second start is no second thread)
+        clock.now += 3600
+        deadline = time.monotonic() + 10
+        while not asked and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(asked) == 1
+    finally:
+        schedule.stop()  # (also when an assertion failed: a thread left running could keep the whole test run from ending)
     assert not thread.is_alive() and schedule._thread is None
+
+
+def test_a_stopped_schedule_can_be_started_again(asked, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(rescan_job, "CHECK_EVERY", 0.01)
+    clock = _Clock()
+    schedule = RescanSchedule(_ctx("/a"), hours=1, clock=clock)
+    schedule.start()
+    schedule.stop()
+    schedule.start()
+    try:
+        thread = schedule._thread
+        assert thread is not None and thread.is_alive()
+        clock.now += 3600
+        deadline = time.monotonic() + 10
+        while not asked and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(asked) == 1
+    finally:
+        schedule.stop()
 
 
 def test_a_scan_that_cannot_be_asked_for_is_logged_and_the_thread_goes_on(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -341,13 +362,15 @@ def test_a_scan_that_cannot_be_asked_for_is_logged_and_the_thread_goes_on(monkey
     schedule = RescanSchedule(_ctx("/a"), hours=1, clock=clock)
     with caplog.at_level("WARNING", logger="musictoolkit"):
         schedule.start()
-        clock.now += 3600
-        assert seen.wait(10)
-        deadline = time.monotonic() + 10
-        while "The scheduled look for new songs failed" not in caplog.text and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert schedule._thread is not None and schedule._thread.is_alive()
-        schedule.stop()
+        try:
+            clock.now += 3600
+            assert seen.wait(10)
+            deadline = time.monotonic() + 10
+            while "The scheduled look for new songs failed" not in caplog.text and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert schedule._thread is not None and schedule._thread.is_alive()
+        finally:
+            schedule.stop()
     assert "The scheduled look for new songs failed" in caplog.text
 
 

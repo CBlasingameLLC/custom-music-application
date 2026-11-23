@@ -55,6 +55,7 @@ def test_two_folders_that_cannot_be_used_are_refused_in_words(source: str, targe
     # a Pi library to a Windows PC, and one folder of a Pi to another
     ("/mnt/music", "D:\\Music", "/mnt/music/a/b.flac", "D:\\Music\\a\\b.flac"),
     ("/home/me/Music", "/srv/music/library", "/home/me/Music/a/b.flac", "/srv/music/library/a/b.flac"),
+    ("/home/me/Music", "/srv/music/library", "/home/me/Music", "/srv/music/library"),
     ("/home/me/Music", "/srv/music/library", "/home/me/Music/a\\b.flac", "/srv/music/library/a\\b.flac"),  # (a backslash in a name there is part of the name)
     ("/", "/srv/data", "/a/b.flac", "/srv/data/a/b.flac"),
 ])
@@ -159,6 +160,16 @@ def test_a_database_that_lacks_a_column_of_a_newer_feature_is_planned_all_the_sa
     conn.execute("ALTER TABLE disc_rips DROP COLUMN cover_path")
     counts = plan_reroot(conn, Mapping.of("D:\\Music", "/srv/music/library")).counts
     assert ("disc_rips", "cover_path") not in counts and counts[("disc_rips", "folder")] == 1 and counts[("tracks", "file_path")] == 3
+
+
+def test_an_empty_path_is_nobodys_even_when_the_old_folder_is_the_whole_disk(conn) -> None:
+    assert Mapping.of("/", "/srv/data").map("") is None
+    _song(conn, "/a/b.flac")
+    conn.execute("INSERT INTO disc_rips (batch_id, album, artist, format, quality, accuracy, root, folder, cover_path, started_at) "
+                 "VALUES ('r1', 'Alb', 'Art', 'flac', 'lossless', 'verified', '/a', '', '', 'now')")
+    plan = plan_reroot(conn, Mapping.of("/", "/srv/data"))
+    assert ("disc_rips", "folder") not in plan.counts and ("disc_rips", "cover_path") not in plan.counts
+    assert plan.counts[("disc_rips", "root")] == 1 and plan.counts[("tracks", "file_path")] == 1
 
 
 def test_a_library_that_is_empty_or_elsewhere_has_nothing_to_change(conn) -> None:

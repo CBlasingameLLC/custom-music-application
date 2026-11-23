@@ -75,7 +75,10 @@ def server_token(data_dir: Path, environ: Mapping[str, str], *, create: bool = T
         raise ServeError(f"there is no token yet ({path} does not exist). Start the server once and it makes one, or set MTK_TOKEN.")
     path.parent.mkdir(parents=True, exist_ok=True)
     made = secrets.token_urlsafe(32)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # (exclusive: two first starts cannot both make one)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # (another first start made it a moment ago: two starts must end up with the same token, the first one's)
+        return server_token(data_dir, environ, create=False)
     with os.fdopen(descriptor, "w", encoding="utf-8") as out:
         out.write(made + "\n")
     return made, str(path)

@@ -110,13 +110,11 @@ class Plan:
 
 def _columns(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """The path columns this database has (an older one may lack the tables of a newer feature)."""
-    found = []
-    for table, column in PATH_COLUMNS:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is None:
-            continue
-        if any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})")):
-            found.append((table, column))
-    return found
+    return [
+        (table, column)
+        for table, column in PATH_COLUMNS
+        if any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))  # (no rows for a table that is not there)
+    ]
 
 
 def plan_reroot(conn: sqlite3.Connection, mapping: Mapping) -> Plan:
@@ -131,8 +129,8 @@ def plan_reroot(conn: sqlite3.Connection, mapping: Mapping) -> Plan:
             if new is None:
                 continue
             if (table, column) == ("tracks", "file_path"):
-                holder = taken.get(new)
-                if (holder is not None and holder != row_id) or new_song_paths.get(new, row_id) != row_id:
+                # (no song has the path it is about to get: the two folders differ, so a path under the old one never equals one under the new)
+                if new in taken or new_song_paths.get(new, row_id) != row_id:
                     plan.conflicts.append((old, new))
                     continue
                 new_song_paths[new] = row_id
@@ -163,8 +161,7 @@ def apply_reroot(db_path: Path, plan: Plan, *, skip_conflicts: bool = False) -> 
     copy = backup_database(db_path)
     conn = sqlite3.connect(db_path, timeout=30)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        for table, column, row_id, _old, new in plan.changes:
+        for table, column, row_id, _old, new in plan.changes:  # (one transaction: sqlite3 opens it at the first UPDATE, and nothing is final before the commit)
             conn.execute(f"UPDATE {table} SET {column} = ? WHERE rowid = ?", (new, row_id))
         conn.commit()
     except BaseException:
