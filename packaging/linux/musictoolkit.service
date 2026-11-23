@@ -1,0 +1,37 @@
+# Music Toolkit as a service on Raspberry Pi OS / Debian / Ubuntu. Install: see packaging/linux/README.md
+#   sudo cp musictoolkit.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now musictoolkit
+[Unit]
+Description=Music Toolkit (a music server for the devices at home)
+Documentation=https://github.com/CBlasingameLLC/custom-music-application
+After=network-online.target
+Wants=network-online.target
+# The music is on a drive mounted at /srv/music. Do not start before it is there: a library folder that is not there is skipped
+# (never taken for "every song was deleted"), but the service should not be up with nothing to play.
+RequiresMountsFor=/srv/music
+
+[Service]
+Type=simple
+User=mtk
+Group=mtk
+# The group the files of the library belong to (the share that copies music over has it too), and files made group-writable.
+SupplementaryGroups=music
+UMask=0002
+# MTK_TOKEN=... (openssl rand -hex 32), file mode 0600, owned by root, if you want to choose the token yourself. The leading "-" makes the file
+# optional: without it the server makes server.token in its data folder at the first start.
+EnvironmentFile=-/etc/musictoolkit.env
+ExecStart=/opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml serve
+Restart=on-failure
+RestartSec=5
+
+# What the service can touch: the music, its own data folder, and nothing else of the system.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/srv/music /var/lib/musictoolkit
+
+[Install]
+WantedBy=multi-user.target
