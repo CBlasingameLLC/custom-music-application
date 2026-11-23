@@ -379,6 +379,25 @@ def test_the_command_can_change_the_folders_in_the_config_too(tmp_path: Path) ->
     assert "config.toml now names the new folders" in result.output
 
 
+def test_the_rip_folder_is_changed_too_when_it_is_inside_the_old_place_without_being_a_library_folder_itself(tmp_path: Path) -> None:
+    config, db = _command_setup(tmp_path)
+    config.write_text(config.read_text(encoding="utf-8").replace('rip_root = "D:\\\\Music"', 'rip_root = "D:\\\\Music\\\\Rips"'), encoding="utf-8")
+    result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library", "--apply", "--update-config"])
+    assert result.exit_code == 0, result.output
+    assert "config folder: D:\\Music\\Rips  ->  /srv/music/library/Rips" in result.output
+    assert load_config(config).disc.rip_root == "/srv/music/library/Rips"
+
+
+def test_the_config_is_left_exactly_as_it_was_when_none_of_its_folders_is_under_the_old_place(tmp_path: Path) -> None:
+    config, db = _command_setup(tmp_path)
+    config.write_text('# my notes stay\n[library]\nroots = ["E:\\\\Elsewhere"]\n[disc]\nrip_root = "E:\\\\Elsewhere"\n[database]\npath = "./data/library.db"\n[logging]\ndir = "./logs"\n', encoding="utf-8")
+    before = config.read_bytes()
+    result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library", "--apply", "--update-config"])
+    assert result.exit_code == 0, result.output
+    assert config.read_bytes() == before and "config.toml now names the new folders" not in result.output
+    assert "config folder:" not in result.output
+
+
 def test_the_command_stops_at_a_conflict_and_leaves_exactly_those_songs_when_told_to(tmp_path: Path) -> None:
     config, db = _command_setup(tmp_path)
     conn = connect(db)
