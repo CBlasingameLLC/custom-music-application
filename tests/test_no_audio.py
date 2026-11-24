@@ -83,9 +83,10 @@ def _only_tags_plus(directory: Path, name: str, extra: bytes = b"", *, twice: bo
     pytest.param(lambda d: _only_tags_plus(d, "a.mp3", v1=True), id="a tag at each end"),
     pytest.param(lambda d: _only_tags_plus(d, "a.mp3", twice=True), id="two tags"),
     pytest.param(lambda d: _only_tags_plus(d, "a.mp3", twice=True, v1=True), id="two tags and one at the end"),
-    pytest.param(lambda d: _only_tags_plus(d, "a.mp3", PADDING[: NO_AUDIO_BELOW - 1]), id="a tag and almost nothing"),
+    pytest.param(lambda d: _only_tags_plus(d, "a.mp3", PADDING[:4095]), id="a tag and almost nothing"),
     pytest.param(lambda d: (d.mkdir(parents=True, exist_ok=True), (d / "a.mp3").write_bytes(b""), d / "a.mp3")[2], id="an empty file"),
-    pytest.param(lambda d: (d.mkdir(parents=True, exist_ok=True), (d / "a.mp3").write_bytes(PADDING[: NO_AUDIO_BELOW - 1]), d / "a.mp3")[2], id="almost nothing"),
+    pytest.param(lambda d: (d.mkdir(parents=True, exist_ok=True), (d / "a.mp3").write_bytes(PADDING[:4095]), d / "a.mp3")[2], id="almost nothing"),
+    pytest.param(lambda d: _only_tags_plus(d, "A.MP3", PADDING[:300]), id="capitals in the extension"),
     pytest.param(lambda d: (d.mkdir(parents=True, exist_ok=True), (d / "a.flac").write_bytes(b""), d / "a.flac")[2], id="an empty flac"),
 ])
 def test_what_has_no_audio_in_it(tmp_path: Path, build) -> None:
@@ -100,7 +101,7 @@ def test_what_has_no_audio_in_it(tmp_path: Path, build) -> None:
 
 def test_a_file_with_more_than_a_tag_that_cannot_be_read_is_an_error_but_not_a_file_without_audio(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     library = tmp_path / "library"
-    _only_tags_plus(library, "a.mp3", PADDING[:NO_AUDIO_BELOW])  # (exactly the least that is not "nothing": it might be damaged audio, so it is not called empty)
+    _only_tags_plus(library, "a.mp3", PADDING[:4096])  # (exactly the least that is not "nothing": it might be damaged audio, so it is not called empty)
     conn = connect(tmp_path / "test.db")
     with caplog.at_level(logging.INFO, logger="musictoolkit"):
         result = scan_library(conn, library)
@@ -139,7 +140,11 @@ def test_a_file_of_a_kind_nothing_knows_is_an_error_with_one_line_of_log_and_a_f
 
 
 def test_the_least_that_is_a_tag_and_nothing_else_is_counted_by_the_bytes_of_each_part(tmp_path: Path) -> None:
+    assert NO_AUDIO_BELOW == 4096  # (a second of MP3 is 4000 bytes at the lowest bitrate, 16000 at the usual one)
     audio_bytes = scanner._audio_bytes
+    capitals = make_stub(tmp_path / "caps", "A.MP3")
+    capitals.write_bytes(capitals.read_bytes() + PADDING[:300])
+    assert audio_bytes(capitals, capitals.stat().st_size) == 300  # (an extension in capitals is an MP3's all the same)
     stub = make_stub(tmp_path)
     size = stub.stat().st_size
     assert audio_bytes(stub, size) == 0
@@ -185,6 +190,8 @@ def test_the_least_that_is_a_tag_and_nothing_else_is_counted_by_the_bytes_of_eac
     cut.write_bytes(b"ID3\x04\x00\x00" + syncsafe(1000) + bytes(40))
     assert audio_bytes(cut, 50) == 0
     assert scanner._id3v2_length(b"ID3\x04\x00\x00" + syncsafe(7)) == 17 and scanner._id3v2_length(b"ID3") == 0 and scanner._id3v2_length(b"XYZ" + bytes(7)) == 0
+    assert scanner._id3v2_length((b"ID3\x04\x00\x00" + syncsafe(7))[:9]) == 0  # (a header is ten bytes: nine are not one)
+    assert scanner._id3v2_length(b"") == 0
 
 
 def test_a_file_that_is_only_tags_is_read_again_when_it_changes_and_not_otherwise(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -376,4 +383,53 @@ def test_a_file_without_audio_does_not_make_a_mix_worth_a_card_and_is_not_in_a_s
     conn.execute("UPDATE tracks SET no_audio = 0 WHERE id = ?", (stub,))
     conn.commit()
     assert stub in {t["id"] for t in web.client.get(f"/api/radio/track/{seed}", params={"size": 40}, headers={}).json()["tracks"]}  # (and with sound it is)
+    conn.close()
+
+
+def test_a_file_of_another_kind_that_is_only_an_id3_tag_is_a_file_without_audio_with_its_tags(tmp_path: Path) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    stub = make_stub(library, "song.flac", title="In A Flac", artist="Someone")  # (an ID3 tag in a file that says it is a FLAC)
+    conn = connect(tmp_path / "test.db")
+    result = scan_library(conn, library)
+    assert (result.added, result.no_audio, result.errors) == (1, 1, 0)
+    row = rows(conn)[stub.name]
+    assert (row["no_audio"], row["title"], row["artist"], row["format"]) == (1, "In A Flac", "Someone", "flac")
+    conn.close()
+
+
+def test_a_song_that_is_gone_is_no_longer_counted_among_the_files_without_audio(stubbed, music_dir: Path) -> None:
+    assert stubbed.client.get("/api/system/diagnostics").json()["database"]["no_audio"] == 1
+    next(music_dir.rglob("01 - Hidden Song.mp3")).unlink()
+    scan(stubbed)
+    database = stubbed.client.get("/api/system/diagnostics").json()["database"]
+    assert (database["no_audio"], database["missing"]) == (0, 1)
+
+
+@pytest.mark.parametrize("name", ["song.wma", "song.ape"])
+def test_a_kind_of_file_a_browser_cannot_play_is_not_playable_and_is_not_said_to_have_no_audio(stubbed, music_dir: Path, name: str) -> None:
+    (music_dir / name).write_bytes(PADDING[:6000])
+    scan(stubbed)
+    found = stubbed.client.get("/api/tracks", params={"limit": 100}).json()["items"]
+    track = next(t for t in found if t["format"] == name.split(".")[1])
+    info = stubbed.client.get(f"/api/tracks/{track['id']}/info").json()
+    assert (info["playable"], info["no_audio"]) == (False, False)
+
+
+def test_a_genre_or_a_decade_of_files_without_audio_does_not_take_the_place_of_one_with_songs_in_it(tmp_path: Path, music_dir: Path) -> None:
+    from musictoolkit.web import mixes
+
+    folder = music_dir / "Many"
+    for genre in range(6):  # (six genres of nine songs, over four decades: each a card)
+        for number in range(9):
+            make_track(folder / f"g{genre}", f"{number}.mp3", title=f"G{genre} {number}", artist=f"Artist {genre}", album=f"Album {genre}", genre=f"Genre{genre}", date=str(1963 + 10 * (number % 4)), tracknumber=number + 1)
+    for number in range(7):  # (a seventh genre and a fifth decade: seven songs, too few for a card, and seven files without audio, which would make it the biggest)
+        make_track(folder / "seven", f"{number}.mp3", title=f"S {number}", artist="Artist 7", album="Album 7", genre="Genre6", date="2005", tracknumber=number + 1)
+        make_stub(folder / "seven", f"stub{number}.mp3", title=f"Stub {number}", artist="Artist 7", album="Album 7", genre="Genre6", year="2005")
+    web = build_web(tmp_path, music_dir)
+    scan(web)
+    conn = connect(web.config.database.path)
+    offered = {mix["id"] for mix in mixes.available(conn, size=50)}
+    assert {mixes.genre_id(f"Genre{n}") for n in range(6)} <= offered and mixes.genre_id("Genre6") not in offered
+    assert {"decade-1960", "decade-1970", "decade-1980", "decade-1990"} <= offered and "decade-2000" not in offered
     conn.close()

@@ -330,7 +330,7 @@ def track_dict(row: sqlite3.Row) -> dict[str, Any]:
         "duration": row["duration_seconds"] or 0,
         "rating": row["rating"] or 0,
         "favorite": bool(row["favorite"]),
-        "no_audio": bool(row["no_audio"]) if "no_audio" in keys else False,  # (a file that is only tags: it is listed, and there is nothing to play)
+        "no_audio": bool(row["no_audio"]),  # (a file that is only tags: it is listed, and there is nothing to play)
         "format": row["format"],
         "bitrate": row["bitrate"],
         "added": row["date_added"],

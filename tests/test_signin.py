@@ -153,7 +153,8 @@ def test_a_wrong_token_in_the_link_shows_the_page_and_a_signed_in_device_that_op
     assert web.client.get("/", params={"token": ""}).status_code == 401 and "That is not the token." not in web.client.get("/", params={"token": ""}).text
     web.client.post("/signin", data={"token": TOKEN})
     for _ in range(20):
-        assert web.client.get("/", params={"token": "old"}).status_code == 200
+        old_link = web.client.get("/", params={"token": "old"}, headers={"sec-fetch-mode": "navigate"}, follow_redirects=False)
+        assert old_link.status_code == 200 and "set-cookie" not in old_link.headers  # (the app, as it is: no new cookie, no redirect)
     assert web.app.state.limiter.wait() == 0
     renewed = web.client.get("/", params={"token": TOKEN}, follow_redirects=False)
     assert renewed.status_code == 200 and "mtk_session=" in renewed.headers["set-cookie"]  # (a right link renews the cookie)
@@ -212,7 +213,7 @@ def test_the_cookie_of_an_old_token_is_dropped_and_never_counted(tmp_path: Path)
     web = _web(tmp_path)
     for _ in range(30):
         stale = web.client.get("/api/about", headers={"cookie": "mtk_session=the-old-token"})
-        assert stale.status_code == 401 and stale.json() == {"detail": "unauthorized"}
+        assert stale.status_code == 401 and stale.json() == {"detail": "unauthorized"} and "retry-after" not in stale.headers  # (nothing to wait for)
         assert stale.headers["set-cookie"].lower().startswith('mtk_session="";') and "max-age=0" in stale.headers["set-cookie"].lower()
     assert web.app.state.limiter.wait() == 0
     assert web.client.post("/signin", data={"token": TOKEN}, follow_redirects=False).status_code == 303
@@ -238,10 +239,14 @@ def test_a_token_with_characters_that_are_not_ascii_is_wrong_and_not_an_error(tm
 def test_a_token_is_the_token_only_letter_for_letter(tmp_path: Path) -> None:
     assert not same_token("ABC", "abc") and not same_token(TOKEN.upper(), TOKEN) and not same_token(" " + TOKEN, TOKEN) and not same_token(TOKEN + " ", TOKEN)
     assert same_token("\ud800", "\ud800") and not same_token("\ud800", TOKEN)  # (not a character a request can carry, and not an error either)
+    assert not same_token(TOKEN[:-1], TOKEN) and not same_token(TOKEN[:5], TOKEN) and not same_token("", TOKEN)  # (the start of the token is not the token)
     web = _web(tmp_path)
     assert web.client.post("/signin", data={"token": TOKEN.upper()}).status_code == 401
     assert web.client.post("/signin", data={"token": " " + TOKEN}).status_code == 401
+    assert web.client.post("/signin", data={"token": TOKEN[:-1]}).status_code == 401
+    assert web.client.get("/", params={"token": TOKEN[:-1]}).status_code == 401
     assert web.client.get("/api/about", headers={"x-mtk-token": TOKEN.upper()}).status_code == 401
+    assert web.client.get("/api/about", headers={"x-mtk-token": TOKEN[:-1]}).status_code == 401
 
 
 def test_the_limiter_forgets_a_wrong_token_when_it_is_exactly_a_window_old() -> None:
@@ -448,3 +453,27 @@ def test_a_real_dashboard_writes_the_token_nowhere_a_log_could_keep_it(tmp_path:
         assert "nobody can sign in" in err
     log = tmp_path / "logs" / "musictoolkit.log"
     assert not log.exists() or (given is None or given not in log.read_text(encoding="utf-8"))
+
+
+def test_every_router_of_the_app_is_in_the_list_the_app_includes_and_none_twice() -> None:
+    import importlib
+    import pkgutil
+
+    import musictoolkit.web.routers as package
+
+    found = [module for info in pkgutil.iter_modules(package.__path__) if hasattr(module := importlib.import_module(f"{package.__name__}.{info.name}"), "router")]
+    assert len(found) > 20 and set(found) == set(ROUTERS) and len(ROUTERS) == len(set(ROUTERS))
+
+
+def test_the_output_is_a_terminal_when_the_standard_output_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Out:
+        def __init__(self, terminal: bool) -> None:
+            self.terminal = terminal
+
+        def isatty(self) -> bool:
+            return self.terminal
+
+    monkeypatch.setattr(cli.sys, "stdout", Out(True))
+    assert cli._is_terminal() is True
+    monkeypatch.setattr(cli.sys, "stdout", Out(False))
+    assert cli._is_terminal() is False

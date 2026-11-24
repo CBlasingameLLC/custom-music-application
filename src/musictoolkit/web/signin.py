@@ -83,5 +83,5 @@ def sign_in_page(*, problem: str = "", login_days: int = 0) -> str:
     stays = f" The device then stays signed in for {login_days} days." if login_days > 0 else ""
     return PAGE.format(
         problem=f'<p class="problem" role="alert">{escape(problem)}</p>' if problem else "",
-        where="On the computer that runs the server, <code>mtk token</code> shows the token." + escape(stays),
+        where="On the computer that runs the server, <code>mtk token</code> shows the token." + stays,
     )

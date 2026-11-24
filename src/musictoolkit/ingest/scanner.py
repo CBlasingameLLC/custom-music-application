@@ -177,11 +177,10 @@ def _read_basic_tags(path: Path) -> dict:
     try:
         audio = mutagen.File(path, easy=True)
     except mutagen.MutagenError as error:  # (it is the kind of file it says it is, but the audio in it could not be read)
-        if path.suffix.lower() == ".mp3":  # (its tags can be read all the same: they say what the song is)
-            try:
-                _fields_from_tags(EasyID3(path), fields)
-            except mutagen.MutagenError:
-                pass  # (not even a tag: an empty file)
+        try:  # (its tags can be read all the same, whatever the kind of file: they say what the song is)
+            _fields_from_tags(EasyID3(path), fields)
+        except mutagen.MutagenError:
+            pass  # (no ID3 tag: an empty file, or a kind of file whose tags are not ID3)
         try:
             size = path.stat().st_size
         except OSError:

@@ -157,7 +157,7 @@ def create_app(
     limiter = app.state.limiter = GuessLimiter()
 
     def signed_in(request: Request) -> bool:
-        return bool(ctx.token) and same_token(request.cookies.get(COOKIE_NAME, ""), ctx.token)
+        return same_token(request.cookies.get(COOKIE_NAME, ""), ctx.token)  # (only asked where there is a token)
 
     def try_token(candidate: str) -> tuple[bool, int]:
         """(is it the token, seconds before the next try). A wrong one is counted; while too many have been wrong none is looked at."""

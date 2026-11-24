@@ -600,3 +600,31 @@ def test_a_database_with_no_songs_at_all_is_told_there_is_nothing_to_change_with
     result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library"])
     assert result.exit_code == 1 and "No song is in D:\\Music, so there is nothing to change." in result.output
     assert "Use one of the folders" not in result.output and "the database has its songs in" not in result.output
+
+
+def test_a_doubled_separator_is_one_separator_on_every_kind_of_path(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "D:\\Music\\\\Rock\\a.mp3", "D:\\Music\\Rock\\b.mp3", "D:/Music//Rock/c.mp3") == [("D:\\Music\\Rock", 3)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "\\\\nas3\\share\\\\a\\1.mp3", "\\\\nas3\\share\\a\\2.mp3") == [("\\\\nas3\\share\\a", 2)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "/srv//music/a.mp3", "/srv/music//b.mp3") == [("/srv/music", 2)]
+
+
+def test_a_share_with_one_song_is_the_folder_of_the_song_and_not_the_song(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "\\\\nas2\\share\\x\\only.mp3") == [("\\\\nas2\\share\\x", 1)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "D:\\Music\\only.mp3") == [("D:\\Music", 1)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "/srv/music/only.mp3") == [("/srv/music", 1)]
+
+
+def test_linux_folders_are_told_apart_by_case_and_joined_with_slashes(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "/srv/Music/a/1.mp3", "/srv/music/b/2.mp3") == [("/srv", 2)]  # (two folders: Linux names do not ignore case)
+    (tmp_path / "lib.db").unlink()
+    deep = [f"/srv/music/library/Artist {n}/Album/{n}.mp3" for n in range(5)]
+    assert _folders(tmp_path, *deep) == [("/srv/music/library", 5)]
+
+
+def test_the_folder_that_nearly_all_go_through_is_followed_with_those_songs_only(tmp_path: Path) -> None:
+    rock = [f"D:\\Music\\Rock\\Metal\\{n}.mp3" for n in range(9)] + ["D:\\Music\\Rock\\Punk\\x.mp3"]
+    assert _folders(tmp_path, *rock, "D:\\Music\\Jazz\\Bebop\\y.mp3") == [("D:\\Music\\Rock\\Metal", 11)]  # (ten of eleven are Rock: and nine of those ten are Metal)
