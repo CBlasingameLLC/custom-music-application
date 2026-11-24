@@ -107,6 +107,7 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
                 "schema_version": count("PRAGMA user_version"),
                 "songs": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 0"),
                 "missing": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 1"),
+                "no_audio": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 0 AND no_audio = 1"),
                 "in_review_folder": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 2"),
                 "plays": count("SELECT COUNT(*) FROM play_history"),
                 "playlists": count("SELECT COUNT(*) FROM playlists"),

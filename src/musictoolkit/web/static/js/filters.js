@@ -46,6 +46,7 @@ const FIELDS = [
   { key: 'favorite', label: 'Is a favorite', type: 'bool' },
   { key: 'unplayed', label: 'Has never been played', type: 'bool' },
   { key: 'missing_tags', label: 'Is missing title, artist or album', type: 'bool' },
+  { key: 'no_audio', label: 'Has tags but no audio (nothing to play)', type: 'bool' },
 ];
 const FIELD = Object.fromEntries(FIELDS.map((f) => [f.key, f]));
 const TEXT_OPS = [['is', 'is'], ['is_not', 'is not'], ['contains', 'contains'], ['not_contains', 'does not contain'], ['starts_with', 'starts with'], ['empty', 'is empty'], ['not_empty', 'is not empty']];

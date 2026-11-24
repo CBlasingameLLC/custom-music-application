@@ -43,14 +43,14 @@ def refresh_from_file(conn: sqlite3.Connection, track_id: int, path: Path, tag_s
         """
         UPDATE tracks SET file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?, bitrate = ?,
             title = ?, artist = ?, album_artist = ?, album = ?, track_number = ?, disc_number = ?,
-            year = ?, genre = ?, tag_source = ?, date_last_scanned = ?
+            year = ?, genre = ?, tag_source = ?, date_last_scanned = ?, no_audio = ?
         WHERE id = ?
         """,
         (
             stat.st_size, stat.st_mtime, tags["duration_seconds"], tags["bitrate"],
             tags["title"], tags["artist"], tags["album_artist"], tags["album"],
             tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
-            tag_source, datetime.now(timezone.utc).isoformat(), track_id,
+            tag_source, datetime.now(timezone.utc).isoformat(), int(tags["no_audio"]), track_id,
         ),
     )
 

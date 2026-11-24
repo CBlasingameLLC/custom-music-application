@@ -395,6 +395,9 @@ p a:not([class]), li a:not([class]), dd a:not([class]), .subtle a:not([class]), 
 .trow.selected { background: var(--accent-soft); }
 .tgrid:focus-visible .trow.cursor { outline: 2px solid var(--accent); outline-offset: -2px; }
 .trow.current .t1 { color: var(--accent); }
+/* a file that is only tags: listed, but there is nothing in it to play */
+.trow.no-audio .t1, .trow.no-audio .t2, .trow.no-audio .tcell.dim, .trow.no-audio .tcell.artist, .trow.no-audio .tcell.album { opacity: 0.55; }
+.trow.no-audio .t1 .badge { opacity: 1; }
 .trow.drop-before { box-shadow: 0 -2px 0 var(--accent); }
 .tcell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 12px; color: var(--text-dim); display: flex; align-items: center; }
 .tcell.title { gap: 12px; color: var(--text); }

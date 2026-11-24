@@ -39,9 +39,13 @@ MEDIA_TYPES = {
 UNPLAYABLE_FORMATS = {"wma", "ape"}
 
 
-def _track_file(ctx: AppContext, track_id: int) -> Path:
+NO_AUDIO_MESSAGE = "This file has tags but no audio in it, so there is nothing to play."
+
+
+def _track(ctx: AppContext, track_id: int) -> tuple[Path, bool]:
+    """The song's file, and whether it is only tags (a file the scan found no audio in)."""
     with ctx.db() as conn:
-        row = conn.execute("SELECT file_path FROM tracks WHERE id = ? AND is_missing = 0", (track_id,)).fetchone()
+        row = conn.execute("SELECT file_path, no_audio FROM tracks WHERE id = ? AND is_missing = 0", (track_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="track not found")
         path = Path(row["file_path"])
@@ -51,13 +55,19 @@ def _track_file(ctx: AppContext, track_id: int) -> Path:
             conn.execute("UPDATE tracks SET is_missing = 1 WHERE id = ?", (track_id,))
             conn.commit()
             raise HTTPException(status_code=404, detail="the file is missing from disk")
-    return path
+    return path, bool(row["no_audio"])
+
+
+def _track_file(ctx: AppContext, track_id: int) -> Path:
+    return _track(ctx, track_id)[0]
 
 
 @router.get("/tracks/{track_id}/stream")
 def stream(track_id: int, ctx: AppContext = Depends(get_ctx)) -> FileResponse:
     """The audio file itself; FileResponse answers Range requests, which is what seeking needs."""
-    path = _track_file(ctx, track_id)
+    path, no_audio = _track(ctx, track_id)
+    if no_audio:
+        raise HTTPException(status_code=422, detail=NO_AUDIO_MESSAGE)
     return FileResponse(
         path,
         media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
@@ -67,14 +77,15 @@ def stream(track_id: int, ctx: AppContext = Depends(get_ctx)) -> FileResponse:
 
 @router.get("/tracks/{track_id}/info")
 def track_info(track_id: int, ctx: AppContext = Depends(get_ctx)) -> dict:
-    path = _track_file(ctx, track_id)
+    path, no_audio = _track(ctx, track_id)
     details = info.file_info(path)
     gain = info.replaygain(path)
     return {
         **details,
         "replaygain_track_db": gain["track_db"],
         "replaygain_album_db": gain["album_db"],
-        "playable": path.suffix.lower().lstrip(".") not in UNPLAYABLE_FORMATS,
+        "playable": path.suffix.lower().lstrip(".") not in UNPLAYABLE_FORMATS and not no_audio,
+        "no_audio": no_audio,
         "has_art": art.cached_art(path, 64, ctx.art_cache_dir) is not None,
     }
 

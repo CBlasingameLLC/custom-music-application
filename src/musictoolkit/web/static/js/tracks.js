@@ -421,7 +421,7 @@ export function TrackTable({
       title: html`<div role="gridcell" class="tcell title">
         ${thumbs && html`<${Cover} trackId=${track.id} name=${track.album} size=40 />`}
         <div class="title-text">
-          <span class="t1">${track.title}</span>
+          <span class="t1">${track.title}${track.no_audio && html`<span class="badge warn" title="This file has tags but no audio in it, so there is nothing to play.">No audio</span>`}</span>
           ${!cols.includes('artist') && html`<span class="t2">${track.artist}</span>`}
         </div>
       </div>`,
@@ -445,7 +445,7 @@ export function TrackTable({
       }}><${Icon} name="more" size=${16} /></button></div>`,
     };
     return html`<div
-      class="trow ${isCurrent ? 'current' : ''} ${isSelected ? 'selected' : ''} ${cursor === index ? 'cursor' : ''} ${dropAt === index ? 'drop-before' : ''}"
+      class="trow ${isCurrent ? 'current' : ''} ${isSelected ? 'selected' : ''} ${cursor === index ? 'cursor' : ''} ${dropAt === index ? 'drop-before' : ''} ${track.no_audio ? 'no-audio' : ''}"
       role="row"
       id=${rowId(index)}
       aria-rowindex=${index + 2}
