@@ -426,3 +426,205 @@ def test_the_command_refuses_folders_that_cannot_be_used(tmp_path: Path, args: l
     result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", *args, "--apply"])
     assert result.exit_code == 2 and words in result.output
     assert _paths(db, "tracks", "file_path")[0].startswith("D:\\Music")
+
+
+# ---------------------------------------------------------------------------------------------------- a Windows user folder (not D:\Music)
+
+USER_MUSIC = "C:\\Users\\you\\Music"
+
+
+@pytest.mark.parametrize("source", [USER_MUSIC, USER_MUSIC + "\\", USER_MUSIC + "\\\\", "C:/Users/you/Music", "c:\\USERS\\You\\music", " C:\\Users\\you\\Music "])
+def test_a_windows_user_folder_is_the_place_however_it_is_written(source: str) -> None:
+    mapping = Mapping.of(source, "/srv/music/library")
+    inside = {
+        "C:\\Users\\you\\Music\\Beyoncé\\Lemonade\\01 - Pray You Catch Me.mp3": "/srv/music/library/Beyoncé/Lemonade/01 - Pray You Catch Me.mp3",
+        "c:/users/YOU/music/Sigur Rós/( )/01 Untitled #1.mp3": "/srv/music/library/Sigur Rós/( )/01 Untitled #1.mp3",  # (the rest keeps the spelling the database has)
+        "C:\\Users\\you\\Music\\Guns N' Roses\\Appetite & Destruction\\01 - It's So Easy.flac": "/srv/music/library/Guns N' Roses/Appetite & Destruction/01 - It's So Easy.flac",
+        "C:\\Users\\you\\Music\\song.mp3": "/srv/music/library/song.mp3",
+        "C:\\Users\\you\\Music": "/srv/music/library",
+    }
+    for old, new in inside.items():
+        assert mapping.map(old) == new, old
+    for outside in (
+        "C:\\Users\\you\\Music2\\a.mp3", "C:\\Users\\you\\Musical\\a.mp3", "C:\\Users\\you\\MusicOld\\a.mp3", "C:\\Users\\you\\Documents\\Music\\a.mp3",
+        "D:\\Users\\you\\Music\\a.mp3", "C:\\Users\\you2\\Music\\a.mp3", "C:\\Users\\you\\Music.mp3", "/srv/music/library/a.mp3", "", None,
+    ):
+        assert mapping.map(outside) is None, outside
+
+
+def _user_folder_library(conn) -> list[str]:
+    paths = [
+        "C:\\Users\\you\\Music\\Beyoncé\\Lemonade\\01 - Pray You Catch Me.mp3",
+        "C:\\Users\\you\\Music\\Sigur Rós\\( )\\01 Untitled #1.mp3",
+        "C:\\Users\\you\\Music\\Guns N' Roses\\Appetite & Destruction\\01 - It's So Easy.mp3",
+    ]
+    for path in paths:
+        _song(conn, path)
+    conn.commit()
+    return paths
+
+
+def test_every_song_of_a_library_in_a_windows_user_folder_lands_in_the_new_library_and_the_scan_finds_it_unchanged(tmp_path: Path) -> None:
+    here = tmp_path / "srv" / "music" / "library"
+    relative = ["Beyoncé/Lemonade/01 - Pray You Catch Me.mp3", "Sigur Rós/( )/01 Untitled #1.mp3", "Guns N' Roses/Appetite & Destruction/01 - It's So Easy.mp3"]
+    db = tmp_path / "pc.db"
+    conn = connect(db)
+    conn.row_factory = sqlite3.Row
+    ids = []
+    for name in relative:
+        song = make_track(here / Path(name).parent, Path(name).name, title=Path(name).stem)
+        stat = song.stat()
+        ids.append(_song(conn, "C:\\Users\\you\\Music\\" + name.replace("/", "\\"), file_size=stat.st_size, file_mtime=stat.st_mtime, title=Path(name).stem))
+    conn.commit()
+    plan = plan_reroot(conn, Mapping.of(USER_MUSIC, str(here)))
+    assert (len(plan.changes), plan.conflicts, plan.songs_outside) == (3, [], 0)
+    conn.close()
+    apply_reroot(db, plan)
+    conn = connect(db)
+    conn.row_factory = sqlite3.Row
+    result = scan_library(conn, here)
+    assert (result.unchanged, result.added, result.updated, result.missing) == (3, 0, 0, 0)
+    assert [r["id"] for r in conn.execute("SELECT id FROM tracks ORDER BY id")] == ids
+    assert {Path(r["file_path"]).relative_to(here).as_posix() for r in conn.execute("SELECT file_path FROM tracks")} == set(relative)
+    conn.close()
+
+
+# ---------------------------------------------------------------------------------------------------- where the database has its songs
+
+
+def _folders(tmp_path: Path, *paths: str, missing: tuple[str, ...] = ()) -> list[tuple[str, int]]:
+    conn = connect(tmp_path / "lib.db")
+    conn.row_factory = sqlite3.Row
+    for path in paths:
+        _song(conn, path)
+    for path in missing:
+        _song(conn, path, is_missing=1)
+    conn.commit()
+    try:
+        return reroot.song_folders(conn)
+    finally:
+        conn.close()
+
+
+def test_the_folders_that_hold_the_songs_are_the_deepest_ones_that_hold_nearly_all_of_them(tmp_path: Path) -> None:
+    songs = [f"C:\\Users\\you\\Music\\Artist {n % 20}\\Album {n % 3}\\{n:02d}.mp3" for n in range(40)]
+    assert _folders(tmp_path, *songs) == [("C:\\Users\\you\\Music", 40)]
+
+
+def test_a_folder_that_holds_less_than_nine_in_ten_is_where_it_stops(tmp_path: Path) -> None:
+    nine = [f"D:\\Music\\Rock\\a{n}.mp3" for n in range(9)] + ["D:\\Music\\Jazz\\b.mp3"]
+    assert _folders(tmp_path, *nine) == [("D:\\Music\\Rock", 10)]  # (nine of ten: the one that is not is not enough to stop it)
+    (tmp_path / "lib.db").unlink()
+    eight = [f"D:\\Music\\Rock\\a{n}.mp3" for n in range(8)] + ["D:\\Music\\Jazz\\b.mp3", "D:\\Music\\Jazz\\c.mp3"]
+    assert _folders(tmp_path, *eight) == [("D:\\Music", 10)]  # (eight of ten: two ways, so this is the folder)
+
+
+def test_songs_that_sit_in_the_folder_itself_count_against_going_deeper(tmp_path: Path) -> None:
+    songs = ["D:\\Music\\loose1.mp3", "D:\\Music\\loose2.mp3"] + [f"D:\\Music\\Album\\{n}.mp3" for n in range(8)]
+    assert _folders(tmp_path, *songs) == [("D:\\Music", 10)]  # (eight of ten go one way: not enough, because two are here)
+
+
+def test_one_drive_is_one_place_however_its_letter_and_folders_were_cased_and_the_first_spelling_is_shown(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "C:\\Users\\You\\Music\\a\\1.mp3", "c:/users/you/music/b/2.mp3", "C:\\USERS\\YOU\\MUSIC\\c\\3.mp3") == [("C:\\Users\\You\\Music", 3)]
+
+
+def test_each_drive_share_and_linux_root_is_a_place_of_its_own_the_biggest_first_and_at_most_four(tmp_path: Path) -> None:
+    found = _folders(
+        tmp_path,
+        *[f"C:\\Users\\you\\Music\\x{n}.mp3" for n in range(5)],
+        "E:\\Rips\\A\\1.flac", "E:\\Rips\\B\\2.flac",
+        *[f"\\\\nas\\media\\music\\A\\{n}.mp3" for n in range(3)],
+        "/srv/music/library/a/1.mp3", "/srv/music/library/b/2.mp3", "/srv/music/library/b/3.mp3", "/srv/other/x.mp3",
+        "Z:\\Odd\\1.mp3",
+    )
+    assert found == [("C:\\Users\\you\\Music", 5), ("/srv", 4), ("\\\\nas\\media\\music\\A", 3), ("E:\\Rips", 2)]
+    # (the four Linux songs are one place, "/", and not nine in ten go the same way past /srv, so that is its folder; the fifth place, one song on Z:, is cut off by the limit)
+
+
+def test_missing_songs_and_an_empty_database_say_nothing(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "D:\\Music\\a.mp3", missing=("E:\\Gone\\b.mp3",)) == [("D:\\Music", 1)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path) == []
+
+
+def test_a_song_directly_in_the_root_of_a_drive_or_of_the_disk_is_found_too(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "D:\\a.mp3", "/b.mp3") == [("/", 1), ("D:\\", 1)]
+
+
+# ---------------------------------------------------------------------------------------------------- the command, when --from is not what the database has
+
+
+def test_the_command_says_where_the_songs_are_when_some_of_them_are_elsewhere(tmp_path: Path) -> None:
+    config, db = _command_setup(tmp_path)
+    result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library"])
+    assert result.exit_code == 0, result.output
+    assert "the database has its songs in: D:\\Music (3), E:\\Elsewhere (1)" in result.output
+
+
+def test_the_command_says_nothing_of_where_the_songs_are_when_all_of_them_are_in_the_folder(tmp_path: Path) -> None:
+    config, db = _command_setup(tmp_path)
+    conn = connect(db)
+    conn.execute("DELETE FROM tracks WHERE file_path LIKE 'E:%'")
+    conn.commit()
+    conn.close()
+    result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library"])
+    assert result.exit_code == 0 and "the database has its songs in" not in result.output
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_a_folder_that_holds_no_song_is_an_error_that_names_the_folders_that_do_and_changes_nothing(tmp_path: Path, apply: bool) -> None:
+    config, db = _command_setup(tmp_path)
+    conn = connect(db)
+    conn.execute("DELETE FROM tracks WHERE file_path NOT LIKE 'D:%' AND file_path NOT LIKE 'd:%'")
+    conn.execute("UPDATE tracks SET file_path = REPLACE(REPLACE(file_path, 'D:\\Music', 'C:\\Users\\you\\Music'), 'd:\\music', 'C:\\Users\\you\\Music')")
+    conn.commit()
+    conn.close()
+    before = _paths(db, "tracks", "file_path")
+    args = ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library", *(["--apply"] if apply else [])]
+    result = CliRunner().invoke(cli_app, args)
+    assert result.exit_code == 1, result.output
+    assert "the database has its songs in: C:\\Users\\you\\Music (3)" in result.output
+    assert "No song is in D:\\Music, so there is nothing to change. Use one of the folders above as --from." in result.output
+    assert "Nothing was changed" not in result.output and "Done:" not in result.output
+    assert _paths(db, "tracks", "file_path") == before
+    assert not [p for p in db.parent.iterdir() if "before-reroot" in p.name]  # (no copy of the database either: nothing was going to be done)
+    fixed = CliRunner().invoke(cli_app, [*args[:5], "C:\\Users\\you\\Music", *args[6:]])
+    assert fixed.exit_code == 0, fixed.output
+    assert "songs under the old folder: 3 of 3" in fixed.output
+
+
+def test_a_database_with_no_songs_at_all_is_told_there_is_nothing_to_change_without_a_hint(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text('[database]\npath = "./data/library.db"\n[logging]\ndir = "./logs"\n', encoding="utf-8")
+    connect(tmp_path / "data" / "library.db").close()
+    result = CliRunner().invoke(cli_app, ["--config", str(config), "library", "reroot", "--from", "D:\\Music", "--to", "/srv/music/library"])
+    assert result.exit_code == 1 and "No song is in D:\\Music, so there is nothing to change." in result.output
+    assert "Use one of the folders" not in result.output and "the database has its songs in" not in result.output
+
+
+def test_a_doubled_separator_is_one_separator_on_every_kind_of_path(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "D:\\Music\\\\Rock\\a.mp3", "D:\\Music\\Rock\\b.mp3", "D:/Music//Rock/c.mp3") == [("D:\\Music\\Rock", 3)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "\\\\nas3\\share\\\\a\\1.mp3", "\\\\nas3\\share\\a\\2.mp3") == [("\\\\nas3\\share\\a", 2)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "/srv//music/a.mp3", "/srv/music//b.mp3") == [("/srv/music", 2)]
+
+
+def test_a_share_with_one_song_is_the_folder_of_the_song_and_not_the_song(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "\\\\nas2\\share\\x\\only.mp3") == [("\\\\nas2\\share\\x", 1)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "D:\\Music\\only.mp3") == [("D:\\Music", 1)]
+    (tmp_path / "lib.db").unlink()
+    assert _folders(tmp_path, "/srv/music/only.mp3") == [("/srv/music", 1)]
+
+
+def test_linux_folders_are_told_apart_by_case_and_joined_with_slashes(tmp_path: Path) -> None:
+    assert _folders(tmp_path, "/srv/Music/a/1.mp3", "/srv/music/b/2.mp3") == [("/srv", 2)]  # (two folders: Linux names do not ignore case)
+    (tmp_path / "lib.db").unlink()
+    deep = [f"/srv/music/library/Artist {n}/Album/{n}.mp3" for n in range(5)]
+    assert _folders(tmp_path, *deep) == [("/srv/music/library", 5)]
+
+
+def test_the_folder_that_nearly_all_go_through_is_followed_with_those_songs_only(tmp_path: Path) -> None:
+    rock = [f"D:\\Music\\Rock\\Metal\\{n}.mp3" for n in range(9)] + ["D:\\Music\\Rock\\Punk\\x.mp3"]
+    assert _folders(tmp_path, *rock, "D:\\Music\\Jazz\\Bebop\\y.mp3") == [("D:\\Music\\Rock\\Metal", 11)]  # (ten of eleven are Rock: and nine of those ten are Metal)

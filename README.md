@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.10.0)
+## What it does (v0.10.1)
 
 | Area | Features |
 |---|---|
@@ -354,7 +354,7 @@ defaults to a dry run; pass `--apply` to execute.
 
 | Command | Purpose |
 |---|---|
-| `mtk dashboard [--port N]` | Start the UI (what the desktop app runs). Prints a URL that includes the per-launch token |
+| `mtk dashboard [--port N]` | Start the UI (what the desktop app runs). At a terminal it prints the link that includes the per-launch token; anywhere else (a log, a service's journal) it prints no token |
 | `mtk serve [--host H] [--port N]` | Run the app as a server for other devices until stopped (see Server mode). Needs `[server] allowed_hosts` to listen beyond this computer |
 | `mtk token [--url https://NAME]` | Show the server's token, or the link to open once on each device |
 | `mtk library reroot --from D:\Music --to /srv/music/library [--apply] [--update-config]` | Tell the database where the library is now after it was copied (dry run unless `--apply`; a copy of the database is kept) |
@@ -390,14 +390,20 @@ drive attached. The step-by-step guide, the systemd service and an example confi
   that names anything else gets `403 forbidden host`, which is what stops a web page on another site from using the app through your browser.
 - **The token** is `MTK_TOKEN` or the file `server.token` next to `config.toml` (made at the first start, readable by its owner only, never printed).
   `mtk token --url https://NAME` shows the link to open once on each device; the device then stays signed in for `[server] login_days` (90), and the
-  cookie is marked Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`).
-- **`/healthz`** answers without a token with the version and whether the library folders are there (`ok` or `degraded`), for a monitor.
+  cookie is marked Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`). A browser that has only the address (or
+  whose cookie ended) gets a page with a box for the token (`mtk token` prints it); eight wrong tokens in a minute make the server refuse all tokens for the
+  rest of the minute. Neither the token nor the link is ever written to a log.
+- **`/healthz`** answers without a token with the version and whether the library folders are there (`ok` or `degraded`), for a monitor (`HEAD` works too,
+  here and on every page and song).
+- **A file that is only tags** (an MP3 with no audio frames, an empty file) is found by the scan, listed with a **No audio** mark and counted apart from errors,
+  and is left out of queues, mixes and what is copied to a device, instead of being a traceback in the log and a "can't play" at every shuffle.
 - **A drive that is not mounted** is never taken for "every song was deleted": a scan skips a library folder that is not there, or is empty while the
   library has songs in it, and playing a song whose drive is gone answers *503* and keeps the song. `[server] rescan_hours` makes the server look
   for new songs by itself.
 - **Moving a library over** from a Windows PC: copy the music with `robocopy ... /COPY:DAT` (it keeps the dates), copy `library.db`, and run
-  `mtk library reroot --from D:\Music --to /srv/music/library --apply --update-config`. Every song keeps its number, rating, plays and playlists, and
-  the next scan finds the songs unchanged and reads no tags.
+  `mtk library reroot --from C:\Users\you\Music --to /srv/music/library --apply --update-config` (`--from` is the folder as the database has it; if no song
+  is in it the command says where the songs are). Every song keeps its number, rating, plays and playlists, and the next scan finds the songs unchanged and
+  reads no tags.
 - **Not yet**: accounts and roles (everyone with the token can do everything, including moving and deleting files), transcoding for a phone on
   mobile data, an app for the home screen, and apps that speak the Subsonic protocol. Never forward a port from the internet to it.
 
@@ -413,8 +419,10 @@ open in your default browser.
 
 A server (`mtk serve`) listens where you tell it and answers only to the host names you list; its token is the same at every start (kept in a file only its
 account can read, or in the environment), its cookie lasts `login_days` and is Secure over https, the service runs as an account of its own that can
-write only the music and its data folder, and `/healthz` is the only thing that answers without the token. Until accounts arrive the token is the
-whole of the protection: keep the app on your own network or a private one.
+write only the music and its data folder, and `/healthz` is the only thing that answers without the token. The token is never printed or logged (the access
+log is off; `mtk dashboard` shows its link only to a terminal), a token that was shown anywhere should be replaced as `packaging/linux/README.md` says, and wrong
+tokens are counted and, after eight in a minute, refused for the rest of it. Until accounts arrive the token is the whole of the protection: keep the app on
+your own network or a private one.
 
 ## Development
 

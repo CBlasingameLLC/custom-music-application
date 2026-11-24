@@ -563,17 +563,30 @@ function stopTick() {
 
 // -- queue operations ---------------------------------------------------
 
-export function playQueue(tracks, startIndex = 0, { shuffle, source = '' } = {}) {
-  if (!tracks.length) return;
+const NO_AUDIO = 'it has tags but no audio in it';
+
+/** What of a list there is to play: a file that is only tags stays in the list (dimmed, marked) but is left out of the queue, so that
+ *  playing a whole album, or a shuffle of everything, never stops at it. */
+const withSound = (items) => items.filter((item) => !item.no_audio);
+
+export function playQueue(allTracks, startIndex = 0, { shuffle, source = '' } = {}) {
+  if (!allTracks.length) return;
+  const asked = allTracks[Math.min(Math.max(startIndex, 0), allTracks.length - 1)];
+  if (asked.no_audio) {
+    player.set({ error: `Can't play "${asked.title}": ${NO_AUDIO}.` });
+    return;
+  }
+  const tracks = withSound(allTracks);
   const wantShuffle = shuffle ?? player.get().shuffle;
-  const first = Math.min(Math.max(startIndex, 0), tracks.length - 1);
+  const first = tracks.indexOf(asked);
   const order = wantShuffle ? shuffledOrder(tracks.length, first) : tracks.map((_, i) => i);
   consecutiveErrors = 0;
-  player.set({ items: tracks.slice(), order, pos: wantShuffle ? 0 : first, shuffle: wantShuffle, source });
+  player.set({ items: tracks, order, pos: wantShuffle ? 0 : first, shuffle: wantShuffle, source, error: null });
   return loadCurrent(true);
 }
 
-export function addToQueue(tracks, { next = false } = {}) {
+export function addToQueue(all, { next = false } = {}) {
+  const tracks = withSound(all);
   if (!tracks.length) return;
   const s = player.get();
   if (!s.items.length) {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +139,51 @@ def plan_reroot(conn: sqlite3.Connection, mapping: Mapping) -> Plan:
             plan.counts[(table, column)] = plan.counts.get((table, column), 0) + 1
     plan.songs_outside = plan.songs - plan.counts.get(("tracks", "file_path"), 0) - len(plan.conflicts)
     return plan
+
+
+def _folders_of(path: str) -> tuple[str, str, list[str]]:
+    """(the style, the root, the folders) of a song's path: `C:\\Users\\you\\Music\\Artist\\song.mp3` is ("windows", "C:", ["Users", "you", "Music", "Artist"]);
+    a network share's root is `\\\\server\\share`; a Linux path's root is "/"."""
+    if style_of(path) == "windows":
+        text = path.strip().replace("/", "\\")
+        if text.startswith("\\\\"):
+            pieces = text[2:].split("\\")
+            return "windows", "\\\\" + "\\".join(pieces[:2]), [piece for piece in pieces[2:-1] if piece]
+        pieces = text.split("\\")
+        return "windows", pieces[0], [piece for piece in pieces[1:-1] if piece]
+    return "posix", "/", [piece for piece in path.split("/")[:-1] if piece]
+
+
+def song_folders(conn: sqlite3.Connection, limit: int = 4) -> list[tuple[str, int]]:
+    """Where the database has its songs, as (the folder that holds nearly all of those on one drive, how many songs are on it), the biggest
+    first: a hint for `--from`, which has to be written the way the database has it (the Windows user folder, not the folder it was
+    expected to be in). A folder is "holding nearly all" while nine in ten of the songs go through the same next folder."""
+    groups: dict[tuple[str, str], list[list[str]]] = {}
+    spelled: dict[tuple[str, str], tuple[str, str]] = {}
+    for (path,) in conn.execute("SELECT file_path FROM tracks WHERE is_missing = 0"):
+        style, root, folders = _folders_of(path)
+        key = (style, root.lower() if style == "windows" else root)
+        spelled.setdefault(key, (style, root))
+        groups.setdefault(key, []).append(folders)
+    found: list[tuple[str, int]] = []
+    for key, listed in groups.items():
+        style, root = spelled[key]
+        fold = str.lower if style == "windows" else str  # (Windows names ignore case)
+        pool, prefix = listed, []
+        while True:
+            depth = len(prefix)
+            deeper = [folders for folders in pool if len(folders) > depth]
+            if not deeper:
+                break
+            heads = Counter(fold(folders[depth]) for folders in deeper)
+            head, count = heads.most_common(1)[0]
+            if count * 10 < len(pool) * 9:  # (fewer than nine in ten go the same way: this is the folder)
+                break
+            prefix.append(next(folders[depth] for folders in deeper if fold(folders[depth]) == head))
+            pool = [folders for folders in deeper if fold(folders[depth]) == head]
+        found.append(((root + "\\" + "\\".join(prefix)) if style == "windows" else "/" + "/".join(prefix), len(listed)))
+    found.sort(key=lambda item: (-item[1], item[0]))
+    return found[:limit]
 
 
 def backup_database(db_path: Path, when: datetime | None = None) -> Path:

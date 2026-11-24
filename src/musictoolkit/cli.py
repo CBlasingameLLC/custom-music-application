@@ -336,6 +336,11 @@ def review() -> None:
     conn.close()
 
 
+def _is_terminal() -> bool:
+    """Is this command's output being read by a person at a terminal (and not written to a file, a pipe or a service's journal)?"""
+    return sys.stdout.isatty()
+
+
 @app.command()
 def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127.0.0.1")) -> None:
     """Run the Music Toolkit app's local server (127.0.0.1 only) and print its address."""
@@ -350,9 +355,9 @@ def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127
 
     cfg: Config = state["config"]  # type: ignore[assignment]
     db_path = state["db_path"] or cfg.database.path
-    # The desktop app supplies its own token so it can open the window; a bare
-    # `mtk dashboard` makes one and prints the address that includes it.
-    token = os.environ.get("MTK_TOKEN") or secrets.token_urlsafe(24)
+    # The desktop app supplies its own token (MTK_TOKEN) so it can open the window; a bare `mtk dashboard` makes one.
+    given = os.environ.get("MTK_TOKEN")
+    token = given or secrets.token_urlsafe(24)
     web_app = create_app(
         db_path=Path(str(db_path)),
         config_path=Path(str(state["config_path"])),
@@ -360,8 +365,19 @@ def dashboard(port: int = typer.Option(4533, "--port", help="Port to bind on 127
         token=token,
         rescan_on_start=True,
     )
-    typer.echo(f"Music Toolkit is running at http://127.0.0.1:{port}/?token={token}  (Ctrl+C to stop)")
-    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+    # The link that signs in holds the token, so it goes to a person at a terminal and nowhere else: output that is not a terminal is a
+    # log (the desktop app's log file, a service's journal), and a token written to a log has leaked.
+    if given:
+        typer.echo(f"Music Toolkit is running on 127.0.0.1:{port}  (sign in with the token in MTK_TOKEN)")
+    elif _is_terminal():
+        typer.echo(f"Music Toolkit is running at http://127.0.0.1:{port}/?token={token}  (Ctrl+C to stop)")
+    else:
+        typer.echo(
+            f"Music Toolkit is running on 127.0.0.1:{port}, but nobody can sign in: it made its own token, which is shown only at a terminal. "
+            "Set MTK_TOKEN to a token of your own, or use `mtk serve`.",
+            err=True,
+        )
+    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
 
 
 def _data_dir() -> Path:
@@ -415,7 +431,7 @@ def serve(
             "Never forward a port from the internet to it; reach it from outside through a private network such as Tailscale.",
             err=True,
         )
-    uvicorn.run(web_app, host=bind, port=number, log_level="warning", proxy_headers=True, forwarded_allow_ips="127.0.0.1")
+    uvicorn.run(web_app, host=bind, port=number, log_level="warning", access_log=False, proxy_headers=True, forwarded_allow_ips="127.0.0.1")
 
 
 @app.command()
@@ -457,12 +473,19 @@ def library_reroot(
     conn = _connection()
     try:
         plan = reroot.plan_reroot(conn, mapping)
+        where = reroot.song_folders(conn) if plan.songs_outside else []
     finally:
         conn.close()
     typer.echo(f"{'Re-rooting' if apply else 'Dry run of re-rooting'} {mapping.source} -> {mapping.target}")
     for (table, column), count in plan.counts.items():
         typer.echo(f"  {table}.{column}: {count:,}")
-    typer.echo(f"  songs under the old folder: {plan.counts.get(('tracks', 'file_path'), 0) + len(plan.conflicts):,} of {plan.songs:,}  (outside it, left alone: {plan.songs_outside:,})")
+    songs_there = plan.counts.get(("tracks", "file_path"), 0) + len(plan.conflicts)
+    typer.echo(f"  songs under the old folder: {songs_there:,} of {plan.songs:,}  (outside it, left alone: {plan.songs_outside:,})")
+    if where:  # (--from has to be written the way the database has it, which is not always the way a person remembers it)
+        typer.echo("  the database has its songs in: " + ", ".join(f"{folder} ({count:,})" for folder, count in where))
+    if not songs_there:  # (the histories of a library with no song in the folder are not what anyone means to move)
+        typer.echo(f"No song is in {mapping.source}, so there is nothing to change." + (" Use one of the folders above as --from." if where else ""), err=True)
+        raise typer.Exit(1)
     for old, new in plan.examples():
         typer.echo(f"  e.g. {old}  ->  {new}")
     folders = reroot.map_folders([*cfg.library.roots, cfg.disc.rip_root], mapping)

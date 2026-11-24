@@ -17,7 +17,7 @@ def resolve_selection(
         raise ValueError("Specify exactly one of: playlist, tag_filter, min_rating, or select_all")
 
     if select_all:
-        return conn.execute("SELECT * FROM tracks WHERE is_missing = 0").fetchall()
+        return conn.execute("SELECT * FROM tracks WHERE is_missing = 0 AND no_audio = 0").fetchall()
 
     if playlist_name:
         return conn.execute(
@@ -25,13 +25,13 @@ def resolve_selection(
             SELECT t.* FROM tracks t
             JOIN playlist_tracks pt ON pt.track_id = t.id
             JOIN playlists p ON p.id = pt.playlist_id
-            WHERE p.name = ? AND t.is_missing = 0
+            WHERE p.name = ? AND t.is_missing = 0 AND t.no_audio = 0
             ORDER BY pt.position
             """,
             (playlist_name,),
         ).fetchall()
 
     if tag_filter:
-        return conn.execute("SELECT * FROM tracks WHERE is_missing = 0 AND genre = ?", (tag_filter,)).fetchall()
+        return conn.execute("SELECT * FROM tracks WHERE is_missing = 0 AND no_audio = 0 AND genre = ?", (tag_filter,)).fetchall()
 
-    return conn.execute("SELECT * FROM tracks WHERE is_missing = 0 AND rating >= ?", (min_rating,)).fetchall()
+    return conn.execute("SELECT * FROM tracks WHERE is_missing = 0 AND no_audio = 0 AND rating >= ?", (min_rating,)).fetchall()

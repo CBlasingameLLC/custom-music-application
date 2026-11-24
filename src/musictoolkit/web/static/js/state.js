@@ -161,7 +161,8 @@ onJobFinished((job) => {
   if (job.status === 'error') toast(`${job.title} failed: ${job.error}`, 'error', 10000);
   else if (job.status === 'done' && job.kind === 'scan') {
     const r = job.result || {};
-    toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing`, 'success');
+    const bare = r.no_audio ? ` ${r.no_audio.toLocaleString()} ${r.no_audio === 1 ? 'file has' : 'files have'} tags but no audio.` : '';
+    toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing.${bare}`, r.no_audio ? 'info' : 'success');
   } else if (job.status === 'done' && job.kind === 'sync') {
     const r = job.result || {};
     const note = r.errors_total ? ` ${r.errors_total} could not be copied.` : '';

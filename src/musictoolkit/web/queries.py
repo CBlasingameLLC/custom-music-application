@@ -35,7 +35,7 @@ LEFT JOIN track_plays h ON h.track_id = t.id
 
 TRACK_COLUMNS = """
   t.id, t.title, t.artist, t.album_artist, t.album, t.track_number, t.disc_number, t.year, t.genre,
-  t.duration_seconds, t.rating, t.favorite, t.format, t.bitrate, t.date_added, t.file_path,
+  t.duration_seconds, t.rating, t.favorite, t.format, t.bitrate, t.date_added, t.file_path, t.no_audio,
   COALESCE(h.plays, 0) AS plays, h.last_played
 """
 
@@ -82,6 +82,7 @@ BOOL_FIELDS = {
     "missing_tags": (
         "(COALESCE(t.title, '') = '' OR COALESCE(t.artist, '') = '' OR COALESCE(t.album, '') = '')"
     ),
+    "no_audio": "t.no_audio = 1",  # a file that is only tags
 }
 
 TEXT_OPS = {"is", "is_not", "is_any", "contains", "not_contains", "starts_with", "empty", "not_empty"}
@@ -329,6 +330,7 @@ def track_dict(row: sqlite3.Row) -> dict[str, Any]:
         "duration": row["duration_seconds"] or 0,
         "rating": row["rating"] or 0,
         "favorite": bool(row["favorite"]),
+        "no_audio": bool(row["no_audio"]),  # (a file that is only tags: it is listed, and there is nothing to play)
         "format": row["format"],
         "bitrate": row["bitrate"],
         "added": row["date_added"],

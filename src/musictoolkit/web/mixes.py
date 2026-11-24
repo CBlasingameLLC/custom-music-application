@@ -102,13 +102,13 @@ def _specs(conn: sqlite3.Connection, now: datetime, offset_minutes: int) -> list
         Mix("favorites", "Your favorites", "The songs you have starred, shuffled", "t.favorite = 1"),
     ]
     for row in conn.execute(
-        "SELECT (t.year / 10) * 10 AS decade, COUNT(*) AS n FROM tracks t WHERE t.is_missing = 0 AND t.year >= 1900 "
+        "SELECT (t.year / 10) * 10 AS decade, COUNT(*) AS n FROM tracks t WHERE t.is_missing = 0 AND t.no_audio = 0 AND t.year >= 1900 "
         "GROUP BY decade HAVING n >= ? ORDER BY n DESC", (MIN_TRACKS,)
     ).fetchall()[:4]:
         decade = int(row["decade"])
         specs.append(Mix(f"decade-{decade}", f"The {decade}s", "From your library, shuffled", "t.year >= ? AND t.year < ?", [decade, decade + 10]))
     for row in conn.execute(
-        "SELECT t.genre AS genre, COUNT(*) AS n FROM tracks t WHERE t.is_missing = 0 AND TRIM(COALESCE(t.genre, '')) <> '' "
+        "SELECT t.genre AS genre, COUNT(*) AS n FROM tracks t WHERE t.is_missing = 0 AND t.no_audio = 0 AND TRIM(COALESCE(t.genre, '')) <> '' "
         "GROUP BY LOWER(t.genre) HAVING n >= ? ORDER BY n DESC LIMIT ?", (MIN_TRACKS, GENRES)
     ).fetchall():
         specs.append(Mix(genre_id(row["genre"]), row["genre"], "A shuffle of the genre", "LOWER(t.genre) = LOWER(?)", [row["genre"]]))
@@ -116,7 +116,7 @@ def _specs(conn: sqlite3.Connection, now: datetime, offset_minutes: int) -> list
 
 
 def _from(spec: Mix) -> str:
-    return f"FROM tracks t {HISTORY_JOIN} {spec.join} WHERE t.is_missing = 0 AND {spec.where}"
+    return f"FROM tracks t {HISTORY_JOIN} {spec.join} WHERE t.is_missing = 0 AND t.no_audio = 0 AND {spec.where}"
 
 
 def _count(conn: sqlite3.Connection, spec: Mix, cap: int) -> int:
@@ -230,13 +230,13 @@ def radio(conn: sqlite3.Connection, track_id: int, size: int = DEFAULT_SIZE, see
     )
     salt = _salt(f"radio:{track_id}", seed if seed is not None else 0)
     best = conn.execute(
-        f"SELECT {columns} FROM tracks t WHERE t.is_missing = 0 AND t.id <> ? ORDER BY partial DESC, ((t.id + ?) * 2654435761) % 4294967296 LIMIT ?",
+        f"SELECT {columns} FROM tracks t WHERE t.is_missing = 0 AND t.no_audio = 0 AND t.id <> ? ORDER BY partial DESC, ((t.id + ?) * 2654435761) % 4294967296 LIMIT ?",
         (raw_genre, raw_genre, year, year, year, raw_artist, raw_artist, track_id, salt, wanted),
     ).fetchall()
     chosen = {row["id"]: row for row in best}
     if together:
         marks = ",".join("?" * len(together))
-        for row in conn.execute(f"SELECT {columns} FROM tracks t WHERE t.is_missing = 0 AND t.id IN ({marks})",
+        for row in conn.execute(f"SELECT {columns} FROM tracks t WHERE t.is_missing = 0 AND t.no_audio = 0 AND t.id IN ({marks})",
                                 (raw_genre, raw_genre, year, year, year, raw_artist, raw_artist, *together)):
             chosen[row["id"]] = row
     scored: list[tuple[float, int, str]] = []
