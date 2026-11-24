@@ -42,14 +42,26 @@ export async function startRadio(track) {
   }
 }
 
+/** Put songs in the queue (next, or last) and say what went in: a file that is only tags does not, and is not "added". */
+function enqueue(tracks, next) {
+  const sound = tracks.filter((t) => !t.no_audio);
+  if (!sound.length) {
+    toast(tracks.length === 1 ? `"${tracks[0].title}" has tags but no audio, so there is nothing to queue` : 'None of these has any audio, so nothing was queued', 'info');
+    return;
+  }
+  addToQueue(sound, { next });
+  const what = sound.length === 1 ? `"${sound[0].title}"` : fmt.plural(sound.length, 'song');
+  toast(next ? `Playing ${what} next` : `Added ${what} to the queue`);
+}
+
 export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 'Remove from playlist' } = {}) {
   const single = tracks.length === 1 ? tracks[0] : null;
   const allFavorite = tracks.every((t) => t.favorite);
   const label = single ? '' : ` (${tracks.length})`;
   const items = [
     { label: `Play${label}`, icon: 'play', action: () => (playNow ? playNow() : playQueue(tracks, 0)) },
-    { label: 'Play next', icon: 'chevron-right', action: () => { addToQueue(tracks, { next: true }); toast(`Playing ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} next`); } },
-    { label: 'Add to queue', icon: 'queue', action: () => { addToQueue(tracks); toast(`Added ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} to the queue`); } },
+    { label: 'Play next', icon: 'chevron-right', action: () => enqueue(tracks, true) },
+    { label: 'Add to queue', icon: 'queue', action: () => enqueue(tracks, false) },
     ...(single ? [{ label: 'Start radio', icon: 'radio', action: () => startRadio(single) }] : []),
     { divider: true },
     { label: 'Add to playlist…', icon: 'plus', action: () => openAddToPlaylist(tracks) },
@@ -470,7 +482,7 @@ export function TrackTable({
     ${selected.size > 1 && html`<div class="selection-bar" role="toolbar" aria-label="Selected songs" style=${{ height: HEADER_HEIGHT + 'px', marginBottom: -HEADER_HEIGHT + 'px' }}>
         <strong>${fmt.plural(selected.size, 'song')} selected</strong>
         <button class="chip-btn" onClick=${() => playQueue(selectedTracks, 0)}><${Icon} name="play" size=${14} /> Play</button>
-        <button class="chip-btn" onClick=${() => { addToQueue(selectedTracks); toast(`Added ${fmt.plural(selectedTracks.length, 'song')} to the queue`); }}><${Icon} name="queue" size=${14} /> Queue</button>
+        <button class="chip-btn" onClick=${() => enqueue(selectedTracks, false)}><${Icon} name="queue" size=${14} /> Queue</button>
         <button class="chip-btn" onClick=${() => openAddToPlaylist(selectedTracks)}><${Icon} name="plus" size=${14} /> Playlist</button>
         <button class="chip-btn" onClick=${() => openTagEditor(selectedTracks.map((t) => t.id))}><${Icon} name="edit" size=${14} /> Edit tags</button>
         <button class="chip-btn" onClick=${() => setFavorite(selectedTracks, true).then(() => patchLoaded(selectedTracks.map((t) => t.id), { favorite: true })).catch(notifyError)}><${Icon} name="heart" size=${14} /> Favorite</button>

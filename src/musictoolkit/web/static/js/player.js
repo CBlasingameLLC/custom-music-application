@@ -441,7 +441,7 @@ function onFailure(message) {
       .then((check) => (check.ok ? message : check.message), () => message)
       .then((reason) => sameItem(current(), item) && player.set({ error: `Can't play ${what}: ${reason}` }));
   } else {
-    player.set({ loading: false, playing: false, error: `Can't play ${what}: ${item?.no_audio ? NO_AUDIO : message}` });
+    player.set({ loading: false, playing: false, error: `Can't play ${what}: ${message}` });
   }
   const { order, pos } = player.get();
   if (consecutiveErrors < 5 && pos + 1 < order.length) setTimeout(() => advance(false), 700);

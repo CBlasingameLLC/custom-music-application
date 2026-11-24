@@ -35,6 +35,17 @@ def test_a_file_that_is_only_tags_is_marked_refused_in_words_and_left_out_of_wha
     assert asked == []
     expect(page.locator(".playerbar .pb-text .t1")).to_have_count(0)
 
+    titles = [t.strip() for t in page.locator(".trow:not(.skeleton) .t1").all_inner_texts()]
+    titles = [t.replace("No audio", "").strip() for t in titles]
+    after = titles[titles.index("Hidden Song") + 1]  # (the song under the one that is only tags: it has to be the one that plays, not the one after it)
+    play(page, after)
+    expect(page.locator(".playerbar .pb-text .t1")).to_have_text(after)
+
+    stub.click(button="right")  # (queueing it says that it cannot be, and queues nothing)
+    page.get_by_role("menuitem", name="Add to queue").click()
+    expect(page.locator(".toast", has_text='"Hidden Song" has tags but no audio, so there is nothing to queue')).to_be_visible()
+    page.get_by_role("link", name="Songs", exact=True).click()
+
     first = page.locator(".trow:not(.skeleton) .t1").first.inner_text()
     play(page, first)  # (playing the list goes on past the file that is only tags: it is not in the queue)
     bar = page.locator(".playerbar .pb-text .t1")
@@ -49,3 +60,17 @@ def test_a_file_that_is_only_tags_is_marked_refused_in_words_and_left_out_of_wha
     assert asked and all(url.endswith("/stream") for url in asked)
     stub_id = page.evaluate("fetch('/api/tracks?limit=50').then(r => r.json()).then(d => d.items.find(t => t.title === 'Hidden Song').id)")
     assert not any(f"/tracks/{stub_id}/" in url for url in asked)
+
+
+def test_an_album_of_nothing_but_files_without_audio_queues_nothing_and_is_not_started(page, live):
+    make_stub(live.library / "Stubs" / "Empty Album", "01 - Hidden Song.mp3", album="Only Tags")
+    page.get_by_role("button", name="Add music folder").click()
+    page.get_by_label("Folder path").fill(str(live.library))
+    page.get_by_role("button", name="Choose").click()
+    expect(page.get_by_text("1 file has tags but no audio.")).to_be_visible(timeout=60_000)
+    page.get_by_role("link", name="Albums", exact=True).click()
+    page.get_by_text("Only Tags").first.click()
+    expect(page.locator(".hero h1")).to_have_text("Only Tags")
+    page.get_by_role("button", name="Add to queue").click()
+    page.get_by_role("button", name="Play", exact=True).first.click()
+    expect(page.locator(".playerbar .pb-text .t1")).to_have_count(0)  # (nothing was queued, and nothing started)
