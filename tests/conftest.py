@@ -9,7 +9,7 @@ import musicbrainzngs
 import pytest
 from fastapi.testclient import TestClient
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import APIC, ID3, TALB, TIT2, TPE1, TRCK
+from mutagen.id3 import APIC, ID3, TALB, TCON, TDRC, TIT2, TPE1, TRCK
 from PIL import Image
 
 from musictoolkit.config import Config
@@ -42,7 +42,10 @@ def make_track(directory: Path, filename: str, source: str = "complete_tags.mp3"
     return path
 
 
-def make_stub(directory: Path, name: str = "stub.mp3", *, title: str = "Hidden Song", artist: str = "Some Band", album: str = "Some Album", track: int = 4) -> Path:
+def make_stub(
+    directory: Path, name: str = "stub.mp3", *, title: str = "Hidden Song", artist: str = "Some Band", album: str = "Some Album", track: int = 4,
+    genre: str | None = None, year: str | None = None,
+) -> Path:
     """An MP3 that is only an ID3 tag (what the Pi's library had 22 of): the tag is real, there is not one frame of audio after it."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / name
@@ -52,6 +55,10 @@ def make_stub(directory: Path, name: str = "stub.mp3", *, title: str = "Hidden S
     tags.add(TPE1(encoding=3, text=[artist]))
     tags.add(TALB(encoding=3, text=[album]))
     tags.add(TRCK(encoding=3, text=[str(track)]))
+    if genre:
+        tags.add(TCON(encoding=3, text=[genre]))
+    if year:
+        tags.add(TDRC(encoding=3, text=[year]))
     tags.save(path)
     return path
 

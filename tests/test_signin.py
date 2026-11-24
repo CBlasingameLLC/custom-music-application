@@ -235,6 +235,15 @@ def test_a_token_with_characters_that_are_not_ascii_is_wrong_and_not_an_error(tm
     assert web.client.get("/api/about", headers={"cookie": "mtk_session=é".encode("utf-8")}).status_code == 401
 
 
+def test_a_token_is_the_token_only_letter_for_letter(tmp_path: Path) -> None:
+    assert not same_token("ABC", "abc") and not same_token(TOKEN.upper(), TOKEN) and not same_token(" " + TOKEN, TOKEN) and not same_token(TOKEN + " ", TOKEN)
+    assert same_token("\ud800", "\ud800") and not same_token("\ud800", TOKEN)  # (not a character a request can carry, and not an error either)
+    web = _web(tmp_path)
+    assert web.client.post("/signin", data={"token": TOKEN.upper()}).status_code == 401
+    assert web.client.post("/signin", data={"token": " " + TOKEN}).status_code == 401
+    assert web.client.get("/api/about", headers={"x-mtk-token": TOKEN.upper()}).status_code == 401
+
+
 def test_the_limiter_forgets_a_wrong_token_when_it_is_exactly_a_window_old() -> None:
     clock = Clock()
     limiter = GuessLimiter(limit=3, window=10, clock=clock)

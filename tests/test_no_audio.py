@@ -17,7 +17,7 @@ from musictoolkit.ingest import scanner, tagedit
 from musictoolkit.ingest.scanner import NO_AUDIO_BELOW, add_files, scan_library
 from musictoolkit.sync.selector import resolve_selection
 from musictoolkit.web.routers.playback import NO_AUDIO_MESSAGE
-from tests.conftest import FIXTURES_DIR, build_web, make_stub, scan
+from tests.conftest import FIXTURES_DIR, build_web, make_stub, make_track, scan
 
 PADDING = bytes([1, 2, 3, 4]) * 4096  # (no 0xFF in it, so nothing in it can pass for the start of an MPEG frame)
 
@@ -174,6 +174,16 @@ def test_the_least_that_is_a_tag_and_nothing_else_is_counted_by_the_bytes_of_eac
     flac.write_bytes(b"ID3\x04\x00\x00" + syncsafe(5) + bytes(5))
     assert audio_bytes(flac, 20) == 20
     assert audio_bytes(tmp_path / "gone.mp3", 123) == 123  # (a file that cannot be looked into is not called empty)
+    two = tmp_path / "two.mp3"
+    one_tag = make_stub(tmp_path / "one").read_bytes()
+    two.write_bytes(one_tag + one_tag + PADDING[:300])
+    assert audio_bytes(two, 2 * len(one_tag) + 300) == 300  # (tags one after another are all tags)
+    overlap = tmp_path / "overlap.mp3"  # an ID3v2 tag with "TAG" inside it where an ID3v1 tag would begin: the tag is not at the end of the file, the audio is
+    overlap.write_bytes(b"ID3\x04\x00\x00" + syncsafe(200) + bytes(122) + b"TAG" + bytes(75) + PADDING[:50])
+    assert overlap.stat().st_size == 260 and audio_bytes(overlap, 260) == 50
+    cut = tmp_path / "cut.mp3"  # a tag that says it is longer than the file
+    cut.write_bytes(b"ID3\x04\x00\x00" + syncsafe(1000) + bytes(40))
+    assert audio_bytes(cut, 50) == 0
     assert scanner._id3v2_length(b"ID3\x04\x00\x00" + syncsafe(7)) == 17 and scanner._id3v2_length(b"ID3") == 0 and scanner._id3v2_length(b"XYZ" + bytes(7)) == 0
 
 
@@ -326,3 +336,44 @@ def test_a_tag_only_file_gives_no_trouble_to_the_real_server_log_either(tmp_path
         scan(web)
     assert [r.getMessage() for r in messages_of(caplog)] == []
     assert isinstance(web.client, TestClient)
+
+
+def test_a_file_that_goes_away_while_it_is_being_read_is_one_that_could_not_be_read_and_not_one_without_audio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuses(path, easy=False):
+        raise scanner.mutagen.MutagenError("cannot read")
+
+    monkeypatch.setattr(scanner.mutagen, "File", refuses)
+    fields = scanner._read_basic_tags(tmp_path / "gone.mp3")  # (not there at all: nothing is known of its size)
+    assert (fields["no_audio"], fields["unreadable"], fields["title"]) == (False, True, None)
+
+
+def test_a_file_without_audio_does_not_make_a_mix_worth_a_card_and_is_not_in_a_song_radio(tmp_path: Path, music_dir: Path) -> None:
+    from musictoolkit.web import mixes
+
+    folder = music_dir / "Seven"
+    for number in range(7):  # (eight songs of a genre or a decade make a mix; seven do not)
+        make_track(folder, f"{number}.mp3", title=f"Seven {number}", artist="Seven Artist", album="Sevens", genre="Zydeco", date="1987", tracknumber=number + 1)
+    make_stub(folder, "stub.mp3", title="Eighth", artist="Seven Artist", album="Sevens", genre="Zydeco", year="1987")
+    web = build_web(tmp_path, music_dir)
+    scan(web)
+    conn = connect(web.config.database.path)
+    offered = lambda: {mix["id"] for mix in mixes.available(conn)}  # noqa: E731
+    assert "decade-1980" not in offered() and mixes.genre_id("Zydeco") not in offered()
+    conn.execute("UPDATE tracks SET no_audio = 0")  # (the same eight with sound in all of them are a card each)
+    conn.commit()
+    assert {"decade-1980", mixes.genre_id("Zydeco")} <= offered()
+    conn.execute("UPDATE tracks SET no_audio = 1 WHERE title = 'Eighth'")
+    conn.commit()
+    seed = conn.execute("SELECT id FROM tracks WHERE title = 'Seven 0'").fetchone()[0]
+    stub = conn.execute("SELECT id FROM tracks WHERE title = 'Eighth'").fetchone()[0]
+    others = [r[0] for r in conn.execute("SELECT id FROM tracks WHERE title LIKE 'Seven %' AND id <> ?", (seed,))]
+    now = 1_700_000_000  # (the stub and five others were "played together" with the seed: a sitting)
+    for offset, track in enumerate([seed, stub, *others[:5]]):
+        conn.execute("INSERT INTO play_history (track_id, source, played_at_epoch) VALUES (?, 'future_scrobble', ?)", (track, now + offset * 60))
+    conn.commit()
+    radio = web.client.get(f"/api/radio/track/{seed}", params={"size": 40}).json()["tracks"]
+    assert stub not in {t["id"] for t in radio} and seed in {t["id"] for t in radio} and len(radio) >= 6  # (by the same genre and artist, and by the sitting: it would be first)
+    conn.execute("UPDATE tracks SET no_audio = 0 WHERE id = ?", (stub,))
+    conn.commit()
+    assert stub in {t["id"] for t in web.client.get(f"/api/radio/track/{seed}", params={"size": 40}, headers={}).json()["tracks"]}  # (and with sound it is)
+    conn.close()
