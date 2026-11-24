@@ -74,3 +74,35 @@ def test_an_album_of_nothing_but_files_without_audio_queues_nothing_and_is_not_s
     page.get_by_role("button", name="Add to queue").click()
     page.get_by_role("button", name="Play", exact=True).first.click()
     expect(page.locator(".playerbar .pb-text .t1")).to_have_count(0)  # (nothing was queued, and nothing started)
+
+
+def test_queueing_says_what_went_in_and_leaves_out_the_file_that_is_only_tags(page, live):
+    make_stub(live.library / "Stubs" / "Empty Album", "01 - Hidden Song.mp3")
+    page.get_by_role("button", name="Add music folder").click()
+    page.get_by_label("Folder path").fill(str(live.library))
+    page.get_by_role("button", name="Choose").click()
+    expect(page.get_by_text("1 file has tags but no audio.")).to_be_visible(timeout=60_000)
+    page.get_by_role("link", name="Songs", exact=True).click()
+    expect(page.locator(".trow:not(.skeleton)")).to_have_count(10)
+
+    row(page, "Drift").click(button="right")
+    page.get_by_role("menuitem", name="Play next").click()
+    expect(page.locator(".toast", has_text='Playing "Drift" next')).to_be_visible()
+    row(page, "Wires").click(button="right")
+    page.get_by_role("menuitem", name="Add to queue").click()
+    expect(page.locator(".toast", has_text='Added "Wires" to the queue')).to_be_visible()
+
+    row(page, "Neon Rain").locator(".t1").click()  # (two songs selected: the bar over the list)
+    row(page, "Signal Fade").locator(".t1").click(modifiers=["Control"])
+    page.get_by_role("toolbar", name="Selected songs").get_by_role("button", name="Queue").click()
+    expect(page.locator(".toast", has_text="Added 2 songs to the queue")).to_be_visible()
+
+    row(page, "Hidden Song").locator(".t1").click()  # (one of them has no audio: only the other goes in, and the toast counts that one)
+    row(page, "Glacier").locator(".t1").click(modifiers=["Control"])
+    page.get_by_role("toolbar", name="Selected songs").get_by_role("button", name="Queue").click()
+    expect(page.locator(".toast", has_text='Added "Glacier" to the queue')).to_be_visible()
+    page.evaluate("location.hash = '#/now'")  # (what is in the queue)
+    page.get_by_role("tab", name="Up next").click()
+    queue = page.locator(".qrow")
+    expect(queue.filter(has_text="Hidden Song")).to_have_count(0)
+    expect(queue.filter(has_text="Glacier")).to_have_count(1)
