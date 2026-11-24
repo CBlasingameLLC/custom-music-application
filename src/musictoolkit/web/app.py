@@ -215,11 +215,6 @@ def create_app(
         answer_head(module.router.routes)  # (before the router is included: how FastAPI keeps an included router's routes differs between its versions)
         app.include_router(module.router)
 
-    def opened(request: Request, page: Response) -> Response:
-        """What a right token gets. A browser that followed the link is sent on to the address without the token, so that the token is
-        neither in its address bar nor in what it bookmarks; a program (the desktop shell asking whether the app is up) gets the page."""
-        return RedirectResponse("/", status_code=303) if request.headers.get("sec-fetch-mode") == "navigate" else page
-
     @app.get("/", include_in_schema=False)
     def index(request: Request, token: str | None = None):
         page = FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
@@ -227,7 +222,7 @@ def create_app(
             return page
         if signed_in(request):
             if token and same_token(token, ctx.token):  # (the link was opened again: the cookie is renewed)
-                return give_cookie(opened(request, page), request)
+                return give_cookie(page, request)
             return page
         if not token:
             return asking(401)
@@ -236,7 +231,7 @@ def create_app(
             return asking(429, too_many(pause), pause)
         if not right:
             return asking(401, "That is not the token.")
-        return give_cookie(opened(request, page), request)
+        return give_cookie(page, request)
 
     @app.get("/signin", include_in_schema=False)
     def signin_address() -> Response:

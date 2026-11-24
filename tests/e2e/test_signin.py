@@ -46,7 +46,7 @@ def test_a_browser_with_no_cookie_is_asked_for_the_token_and_stays_signed_in_onc
     assert not problems, problems
 
 
-def test_the_sign_in_link_signs_a_browser_in_and_leaves_no_token_in_its_address_or_history(browser, live):
+def test_the_sign_in_link_signs_a_browser_in_and_the_page_takes_the_token_out_of_its_address(browser, live):
     context, page, problems = _new_page(browser)
     page.goto(live.url)  # http://127.0.0.1:PORT/?token=...
     page.wait_for_selector(".sidebar")
@@ -54,9 +54,23 @@ def test_the_sign_in_link_signs_a_browser_in_and_leaves_no_token_in_its_address_
     history = page.evaluate("history.length")
     page.reload()
     page.wait_for_selector(".sidebar")
-    assert page.url == live.base + "/" and page.evaluate("history.length") == history
+    assert page.url == live.base + "/" and page.evaluate("history.length") == history  # (the address was replaced, not added to)
+    other = context.new_page()  # (what else is in the address stays: a route, and any other part of the query)
+    other.goto(live.url + "&x=1#/songs")
+    other.wait_for_selector(".sidebar")
+    assert other.url == live.base + "/?x=1#/songs"
     context.close()
     assert not problems, problems
+
+
+def test_the_desktop_window_keeps_its_address_as_it_was_because_the_shell_and_its_checks_find_the_window_by_the_token_in_it(browser, live):
+    context = browser.new_context(viewport={"width": 900, "height": 600}, locale="en-US", timezone_id="UTC")
+    context.add_init_script("window.mtk = {}")  # (what the shell's preload puts in a page: only its presence matters here)
+    page = context.new_page()
+    page.goto(live.url)
+    page.wait_for_load_state("load")
+    assert page.url == live.url and "token=" in page.url
+    context.close()
 
 
 def test_a_wrong_link_shows_the_page_that_asks_and_too_many_wrong_tokens_wait_a_minute(browser, live):

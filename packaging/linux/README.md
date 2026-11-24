@@ -80,8 +80,8 @@ only); it is never printed in a log. Show the link that signs a device in:
 sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml token --url https://musicpi.tail1234.ts.net
 ```
 
-Open that link once on each device; it keeps the device signed in for `login_days` (90 by default) and leaves the address without the
-token in it, so a bookmark of the page is just the page. A device that has only the address (or whose cookie ended) is shown a page with a
+Open that link once on each device; it keeps the device signed in for `login_days` (90 by default), and the page then takes the
+token out of the address, so a bookmark of the page is just the page. A device that has only the address (or whose cookie ended) is shown a page with a
 box for the token: paste what `mtk token` prints there. Anyone who has the link or the token has the app, so do not post either anywhere.
 Eight wrong tokens in a minute make the server refuse every token for the rest of the minute (a device that is already signed in is not
 affected). If you would rather choose the token yourself, put `MTK_TOKEN=<openssl rand -hex 32>` in

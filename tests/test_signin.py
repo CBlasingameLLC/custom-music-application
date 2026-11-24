@@ -135,15 +135,15 @@ def test_a_form_from_another_site_is_refused_without_looking_at_the_token_or_cou
 # ---------------------------------------------------------------------------------------------------- the link
 
 
-def test_a_browser_that_follows_the_link_is_sent_on_to_the_address_without_the_token_and_a_program_gets_the_page(tmp_path: Path) -> None:
+def test_the_link_gives_the_page_and_the_cookie_to_a_browser_and_to_a_program_alike(tmp_path: Path) -> None:
     web = _web(tmp_path, login_days=90)
-    browser = web.client.get("/", params={"token": TOKEN}, headers={"sec-fetch-mode": "navigate"}, follow_redirects=False)
-    assert browser.status_code == 303 and browser.headers["location"] == "/" and "max-age=7776000" in browser.headers["set-cookie"].lower()
-    program = _web(tmp_path / "p", login_days=90).client.get("/", params={"token": TOKEN}, follow_redirects=False)
-    assert program.status_code == 200 and "mtk_session=" in program.headers["set-cookie"]  # (the desktop shell asks the page itself whether the app is up)
-    for mode in ("cors", "no-cors", "same-origin", "websocket"):
-        other = _web(tmp_path / mode).client.get("/", params={"token": TOKEN}, headers={"sec-fetch-mode": mode}, follow_redirects=False)
-        assert other.status_code == 200, mode
+    for mode in ("navigate", "cors", "no-cors", "same-origin", None):  # (not a redirect for any: the address is cleaned by the page, which the desktop window's checks rely on staying as it was)
+        fresh = TestClient(web.app)
+        headers = {"sec-fetch-mode": mode} if mode else {}
+        answer = fresh.get("/", params={"token": TOKEN}, headers=headers, follow_redirects=False)
+        assert answer.status_code == 200 and "max-age=7776000" in answer.headers["set-cookie"].lower(), mode
+        assert answer.headers["content-type"].startswith("text/html") and answer.headers["cache-control"] == "no-store"
+        assert fresh.get("/api/about").status_code == 200  # (the cookie rides along)
 
 
 def test_a_wrong_token_in_the_link_shows_the_page_and_a_signed_in_device_that_opens_an_old_link_is_not_counted(tmp_path: Path) -> None:
@@ -153,8 +153,8 @@ def test_a_wrong_token_in_the_link_shows_the_page_and_a_signed_in_device_that_op
     assert web.client.get("/", params={"token": ""}).status_code == 401 and "That is not the token." not in web.client.get("/", params={"token": ""}).text
     web.client.post("/signin", data={"token": TOKEN})
     for _ in range(20):
-        old_link = web.client.get("/", params={"token": "old"}, headers={"sec-fetch-mode": "navigate"}, follow_redirects=False)
-        assert old_link.status_code == 200 and "set-cookie" not in old_link.headers  # (the app, as it is: no new cookie, no redirect)
+        old_link = web.client.get("/", params={"token": "old"}, follow_redirects=False)
+        assert old_link.status_code == 200 and "set-cookie" not in old_link.headers  # (the app, as it is: no new cookie)
     assert web.app.state.limiter.wait() == 0
     renewed = web.client.get("/", params={"token": TOKEN}, follow_redirects=False)
     assert renewed.status_code == 200 and "mtk_session=" in renewed.headers["set-cookie"]  # (a right link renews the cookie)
