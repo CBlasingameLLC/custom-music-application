@@ -112,11 +112,14 @@ for (const status of [200, 401, 403, 500]) {
 // installing and activating: take over at once, and keep nothing
 {
   const worker = load({ fetchImpl: async () => new Response('x') });
-  worker.handlers.install({});
+  const routes = [];
+  worker.handlers.install({ addRoutes: (rule) => routes.push(rule) });
+  const bare = load({ fetchImpl: async () => new Response('x') });
+  bare.handlers.install({}); // (a browser that cannot be told: nothing to call, and nothing breaks)
   let waited;
   worker.handlers.activate({ waitUntil: (value) => { waited = value; } });
   await waited;
-  out.lifecycle = { skipWaiting: worker.calls.skipWaiting, claim: worker.calls.claim, events: Object.keys(worker.handlers).sort() };
+  out.lifecycle = { skipWaiting: worker.calls.skipWaiting, claim: worker.calls.claim, events: Object.keys(worker.handlers).sort(), routes, bareSkipWaiting: bare.calls.skipWaiting };
 }
 
 // across all of it, the worker never reached for storage or for anything but fetch
@@ -174,7 +177,11 @@ def test_only_a_page_load_is_taken_over(results: dict) -> None:
 
 
 def test_it_installs_and_takes_over_at_once_and_listens_for_nothing_else(results: dict) -> None:
-    assert results["lifecycle"] == {"skipWaiting": 1, "claim": 1, "events": ["activate", "fetch", "install"]}
+    assert results["lifecycle"] == {
+        "skipWaiting": 1, "claim": 1, "events": ["activate", "fetch", "install"], "bareSkipWaiting": 1,
+        # everything but a page load is sent to the network without asking the worker (Chromium loses a request sent as the page closes otherwise)
+        "routes": [{"condition": {"not": {"requestMode": "navigate"}}, "source": "network"}],
+    }
 
 
 def test_it_keeps_nothing(results: dict) -> None:

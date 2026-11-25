@@ -71,12 +71,13 @@ def live(tmp_path: Path):
     thread.join(timeout=10)
 
 
-def signed_in_page(browser, live, init_script: str | None = None):
+def signed_in_page(browser, live, init_script: str | None = None, device: dict | None = None):
     """A page already signed in to `live` (a generator for fixtures). Any console error, uncaught exception or failed
-    request fails the test. `init_script` runs before the app does: to stand in for the desktop shell's `window.mtk`."""
+    request fails the test. `init_script` runs before the app does: to stand in for the desktop shell's `window.mtk`.
+    `device` replaces what the browser context is made with (a phone: see PHONE)."""
     # One locale and time zone everywhere, so the dates and hours the UI prints (and the days a play belongs to) do not
     # depend on the machine the tests run on.
-    context = browser.new_context(viewport={"width": 1360, "height": 860}, locale="en-US", timezone_id="UTC")
+    context = browser.new_context(**{"viewport": {"width": 1360, "height": 860}, "locale": "en-US", "timezone_id": "UTC", **(device or {})})
     if init_script:
         context.add_init_script(init_script)
     page = context.new_page()
@@ -100,7 +101,7 @@ def signed_in_page(browser, live, init_script: str | None = None):
         else None,
     )
     page.goto(live.url)
-    page.wait_for_selector(".sidebar")
+    page.wait_for_selector("#main")  # (the app has drawn: its sidebar on a computer, its row of tabs on a phone)
     yield page
     context.close()
     assert not problems, "the page reported problems:\n" + "\n".join(problems)
@@ -110,6 +111,26 @@ def signed_in_page(browser, live, init_script: str | None = None):
 def page(browser, live):
     """A page already signed in to `live`."""
     yield from signed_in_page(browser, live)
+
+
+# An iPhone as far as the page can tell: its browser's name, its small touch screen and its pixel density (Chromium stands in for Safari).
+IPHONE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+)
+PHONE = {
+    "user_agent": IPHONE_UA,
+    "viewport": {"width": 390, "height": 844},  # (an installed app: the whole screen is the page)
+    "screen": {"width": 390, "height": 844},
+    "device_scale_factor": 3,
+    "is_mobile": True,
+    "has_touch": True,
+}
+
+
+@pytest.fixture
+def phone(browser, live):
+    """A page already signed in to `live`, on an iPhone."""
+    yield from signed_in_page(browser, live, device=PHONE)
 
 
 def wait_until(page, expression: str, timeout: float = 10.0):

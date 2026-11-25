@@ -13,7 +13,13 @@
 const VERSION = '__VERSION__';
 const WAIT = 8000; // milliseconds a page waits for the server before this says it cannot be reached
 
-self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  // A page that a worker with a fetch handler controls has every one of its requests offered to the worker first, and in Chromium a
+  // request sent as the page closes (where an episode got to) is lost on the way. Where the browser can be told, everything but a page
+  // load goes to the network without the worker being asked at all.
+  if (typeof event.addRoutes === 'function') event.addRoutes({ condition: { not: { requestMode: 'navigate' } }, source: 'network' });
+});
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 const OFFLINE = `<!doctype html>
