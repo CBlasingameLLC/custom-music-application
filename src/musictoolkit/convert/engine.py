@@ -9,9 +9,7 @@ dither when the depth does, and handed to the lossy encoders as floats (libsndfi
 from __future__ import annotations
 
 import contextlib
-import errno
 import os
-import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +19,7 @@ import numpy as np
 
 from musictoolkit.convert import formats
 from musictoolkit.convert.source import SourceInfo, library
+from musictoolkit.media.room import no_room
 
 CHUNK_SECONDS = 5  # decoded five seconds at a time
 COPY_CHUNK = 1 << 20
@@ -28,7 +27,6 @@ DITHER_SEED = 0x4D544B  # the same song is always converted to the same bytes
 RESAMPLE_QUALITY = "VHQ"
 FIT_TOLERANCE = 1.05  # a lossy song averaging 5% over the bitrate asked for still counts as being at it
 NO_ROOM = "There is not enough room on the drive for the converted songs."
-LOW_ROOM = 1 << 20  # a drive with less than this left (1 MiB) that has just refused a write has run out of room
 FILE_FORMATS = {"mp3": ("MP3", "MPEG_LAYER_III"), "ogg": ("OGG", "VORBIS"), "opus": ("OGG", "OPUS"), "flac": ("FLAC", None), "wav": ("WAV", None)}
 
 
@@ -159,21 +157,6 @@ def _not_onto_itself(source: str | Path, target: Path) -> None:
         same = False
     if same:
         raise ConvertError("A song cannot be converted onto itself.")
-
-
-def no_room(exc: BaseException, folder: Path | None = None) -> bool:
-    """Whether a failed write was the drive running full. A plain file write says so with its error number (28, ENOSPC). The audio library says
-    only "System error." of any write the system refused (found on a drive that was really full), so for that the drive is looked at: how much
-    is left in `folder`. The words of a message are no use for this: they often hold the song's own file name, and a folder called "Outer Space"
-    is not a full drive."""
-    if getattr(exc, "errno", None) == errno.ENOSPC or "no space left" in str(exc).lower():
-        return True
-    if folder is not None and "system error" in str(exc).lower():
-        try:
-            return shutil.disk_usage(folder).free < LOW_ROOM
-        except OSError:
-            return False
-    return False
 
 
 def convert_file(
