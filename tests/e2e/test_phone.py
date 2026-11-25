@@ -173,6 +173,37 @@ def test_a_tap_on_a_row_plays_it_and_the_small_player_opens_the_big_one(browser,
     next(pages, None)
 
 
+def test_a_row_of_songs_on_a_phone_is_the_song_with_its_artist_under_it_and_two_buttons(browser, live):
+    pages, page = open_phone(browser, live)
+    add_library(page, live)
+    go(page, "/songs")
+    row = page.locator(".trow:not(.skeleton)").first
+    cells = row.locator(".tcell")
+    assert cells.count() == 3  # the song, the heart, the menu: no number, artist, album, year, length...
+    assert row.locator(".tcell.title .t2").inner_text() == "Aurora Vale"  # (the artist moves under the title when it has no column of its own)
+    assert row.bounding_box()["height"] >= 44
+    buttons = row.locator("button").all()
+    assert len(buttons) == 2
+    for button in buttons:
+        box = button.bounding_box()
+        assert box["width"] >= 44 and box["height"] >= 44  # (a finger)
+    next(pages, None)
+
+
+def test_a_text_box_on_a_phone_is_big_enough_that_the_phone_does_not_zoom_into_it(browser, live):
+    """Safari zooms the page into any text box whose text is smaller than 16 px, and does not zoom back out."""
+    pages, page = open_phone(browser, live)
+    go(page, "/songs")
+    for box in (page.get_by_label("Search your library"), page.get_by_label("Search songs, artists, albums")):
+        assert page.evaluate("(el) => parseFloat(getComputedStyle(el).fontSize)", box.element_handle()) >= 16
+        assert box.locator("xpath=ancestor::label").bounding_box()["height"] >= 40  # (the box that is drawn, which a tap anywhere in focuses)
+    go(page, "/settings")
+    for el in page.locator("input[type=text], input[type=password], input[type=number], select").all():
+        if el.is_visible():
+            assert page.evaluate("(e) => parseFloat(getComputedStyle(e).fontSize)", el.element_handle()) >= 16
+    next(pages, None)
+
+
 def test_the_seek_bar_takes_a_finger(browser, live):
     pages, page = open_phone(browser, live)
     add_library(page, live)

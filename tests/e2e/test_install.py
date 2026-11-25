@@ -151,3 +151,17 @@ def test_the_desktop_window_has_no_use_for_it(browser, live):
     assert page.locator(".card-panel", has_text="Use it on your phone or Mac").count() == 0
     context.close()
     assert not problems, problems
+
+
+def test_the_colour_of_the_frame_on_a_phone_follows_the_theme(browser, live):
+    context, page, problems = _context(browser, live)
+    colour = "document.querySelector('meta[name=theme-color]').content"
+    assert page.evaluate(colour) == "#0d0f14"
+    page.get_by_role("button", name="Switch to light theme").click()
+    assert page.evaluate(colour) == "#f5f6fb"
+    page.reload()
+    page.wait_for_selector(".sidebar")
+    page.get_by_role("button", name="Switch to dark theme").click()
+    assert page.evaluate(colour) == "#0d0f14"
+    context.close()
+    assert not problems, problems

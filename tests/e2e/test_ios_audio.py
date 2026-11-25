@@ -13,31 +13,11 @@ from contextlib import contextmanager
 
 from playwright.sync_api import expect
 
-from tests.e2e.conftest import PHONE, add_library, signed_in_page, wait_until
+from tests.e2e.conftest import COUNT_WEB_AUDIO, PHONE, WATCH_MEDIA_SESSION, add_library, signed_in_page, wait_until
 
 expect.set_options(timeout=10_000)
 
 PLAYER = "import('/static/js/player.js')"
-
-# Counts what the page asks of Web Audio (before the page runs): contexts made, and elements wired into one.
-COUNT_WEB_AUDIO = """
-window.__webAudio = { contexts: 0, elementSources: 0 };
-for (const name of ['AudioContext', 'webkitAudioContext']) {
-  const Base = window[name];
-  if (!Base) continue;
-  window[name] = class extends Base {
-    constructor(...args) { super(...args); window.__webAudio.contexts += 1; }
-    createMediaElementSource(element) { window.__webAudio.elementSources += 1; return super.createMediaElementSource(element); }
-  };
-}
-"""
-
-# Remembers what the page registers with the system's media controls: the last handler given for each action (null when it was cleared).
-WATCH_MEDIA_SESSION = """
-window.__handlers = {};
-const original = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
-navigator.mediaSession.setActionHandler = (action, handler) => { window.__handlers[action] = handler ? 'function' : null; return original(action, handler); };
-"""
 
 
 @contextmanager
@@ -152,3 +132,71 @@ def test_the_picture_of_the_last_song_does_not_stay_on_the_lock_screen_for_a_son
     wait_until(page, "navigator.mediaSession.metadata.title === 'Gravel Dust'", 10)
     page.wait_for_timeout(600)  # (long enough for a picture of the song before to arrive late, which it must not be put up for this one)
     assert page.evaluate("navigator.mediaSession.metadata.artwork.length") == 0
+
+
+def test_on_an_iphone_the_loudness_of_each_song_is_not_asked_for_because_there_is_nothing_to_apply_it_to(browser, live):
+    asked: list[str] = []
+    with opened(browser, live, device=PHONE) as page:
+        page.on("request", lambda r: asked.append(r.url) if r.url.endswith("/info") else None)
+        add_library(page, live)
+        play_songs(page)
+        page.evaluate(f"{PLAYER}.then((m) => m.next())")
+        wait_until(page, f"{PLAYER}.then((m) => m.player.get().pos === 1 && m.deckState().decks[0].time > 0.2)")
+        assert asked == []
+
+
+def test_on_a_computer_the_loudness_of_each_song_is_asked_for(page, live):
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(r.url) if r.url.endswith("/info") else None)
+    add_library(page, live)
+    play_songs(page)
+    wait_until(page, f"{PLAYER}.then((m) => m.deckState().decks[0].time > 0.2)")
+    assert len(asked) >= 1
+
+
+def test_the_system_is_told_that_the_page_plays_music(browser, live):
+    """Safari 16.4 and later: with the audio session set to playback the sound carries on with the screen locked and the ring switch does not silence it."""
+    with opened(browser, live, init_script="navigator.audioSession = { type: 'auto' };") as page:
+        assert page.evaluate("navigator.audioSession.type") == "playback"
+
+
+IPAD_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"  # (what an iPad's Safari calls itself)
+
+
+def _plain(browser, live, touch_points: int) -> bool:
+    script = f"Object.defineProperty(navigator, 'platform', {{ get: () => 'MacIntel' }}); Object.defineProperty(navigator, 'maxTouchPoints', {{ get: () => {touch_points} }});"
+    with opened(browser, live, init_script=script, device={"user_agent": IPAD_UA}) as page:
+        return page.evaluate(f"{PLAYER}.then((m) => m.PLAIN)")
+
+
+def test_an_ipad_is_known_by_its_touch_screen_since_its_browser_says_it_is_a_mac(browser, live):
+    assert _plain(browser, live, touch_points=5) is True
+    assert _plain(browser, live, touch_points=0) is False  # (a Mac)
+    assert _plain(browser, live, touch_points=1) is False  # (one touch point is a laptop's, not a tablet's: Apple's own test is more than one)
+
+
+def test_the_buttons_of_the_lock_screen_drive_the_player(browser, live):
+    with opened(browser, live, init_script=WATCH_MEDIA_SESSION) as page:
+        add_library(page, live)
+        play_songs(page)
+        position = f"{PLAYER}.then((m) => m.player.get().pos)"
+
+        page.evaluate("window.__press.play()")  # (a Play while it is playing is not a Pause)
+        page.wait_for_timeout(300)
+        assert page.evaluate(f"{PLAYER}.then((m) => m.player.get().playing)") is True
+        page.evaluate("window.__press.pause()")
+        wait_until(page, f"{PLAYER}.then((m) => !m.player.get().playing)")
+        page.evaluate("window.__press.pause()")  # (and a Pause while it is paused is not a Play)
+        page.wait_for_timeout(300)
+        assert page.evaluate(f"{PLAYER}.then((m) => m.player.get().playing)") is False
+        page.evaluate("window.__press.play()")
+        wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+
+        page.evaluate("window.__press.nexttrack()")
+        wait_until(page, f"{position}.then((pos) => pos === 1)")
+        page.evaluate("window.__press.previoustrack()")
+        wait_until(page, f"{position}.then((pos) => pos === 0)")
+        page.evaluate("window.__press.seekto({ seekTime: 6 })")
+        wait_until(page, f"{PLAYER}.then((m) => m.deckState().decks.some((d) => d.time > 5.5 && d.time < 8))")
+        page.evaluate("window.__press.stop()")
+        wait_until(page, f"{PLAYER}.then((m) => !m.player.get().playing)")

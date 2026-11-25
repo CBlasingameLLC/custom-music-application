@@ -1242,6 +1242,7 @@ body.dropping::after {
 [data-layout="phone"] .hero-text h1 { font-size: 26px; }
 [data-layout="phone"] .hero-actions { justify-content: center; }
 [data-layout="phone"] .selection-bar { overflow-x: auto; }
+[data-layout="phone"] .tcell.heart, [data-layout="phone"] .tcell.more { padding-right: 0; justify-content: center; overflow: visible; }
 
 /* a phone on its side has little height to spare: the tabs lose their words, and everything is a little lower */
 @media (max-height: 500px) {

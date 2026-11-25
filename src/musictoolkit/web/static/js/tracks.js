@@ -412,7 +412,7 @@ export function TrackTable({
     }
   }
 
-  const gridTemplate = cols.map((c) => COLUMNS[c].width).join(' ');
+  const gridTemplate = cols.map((c) => (width < 520 && (c === 'heart' || c === 'more') ? '44px' : COLUMNS[c].width)).join(' '); // (a finger needs more than 38 px)
   const selectedTracks = selected.size ? loadedSelection() : [];
   const activeId = cursor !== null && total !== null && cursor < total && cursor >= range.first && cursor <= range.last ? rowId(cursor) : undefined;
 
@@ -446,12 +446,12 @@ export function TrackTable({
       added: html`<div role="gridcell" class="tcell dim">${fmt.date(track.added)}</div>`,
       rating: html`<div role="gridcell" class="tcell"><${Rating} value=${track.rating} onChange=${(r) => setRating([track], r).then(() => patchLoaded([track.id], { rating: r })).catch(notifyError)} /></div>`,
       time: html`<div role="gridcell" class="tcell dim time">${fmt.time(track.duration)}</div>`,
-      heart: html`<div role="gridcell" class="tcell">
+      heart: html`<div role="gridcell" class="tcell heart">
         <button class="icon-btn heart ${track.favorite ? 'on' : ''}" tabIndex="-1" aria-label=${track.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${track.favorite}
           onClick=${(e) => { e.stopPropagation(); setFavorite([track], !track.favorite).then(() => patchLoaded([track.id], { favorite: !track.favorite })).catch(notifyError); }}>
           <${Icon} name="heart" size=${16} fill=${track.favorite} />
         </button></div>`,
-      more: html`<div role="gridcell" class="tcell"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
+      more: html`<div role="gridcell" class="tcell more"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
         e.stopPropagation();
         const box = e.currentTarget.getBoundingClientRect();
         rowMenu({ clientX: box.left, clientY: box.bottom + 4 }, index, track);

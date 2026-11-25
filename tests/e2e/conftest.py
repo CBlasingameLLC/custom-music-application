@@ -174,3 +174,30 @@ def row(page, title: str):
 def play(page, title: str) -> None:
     """Double-click the song's title, like a user would."""
     row(page, title).locator(".t1").dblclick()
+
+
+# Counts what the page asks of Web Audio (put before the page runs): contexts made, and elements wired into one.
+COUNT_WEB_AUDIO = """
+window.__webAudio = { contexts: 0, elementSources: 0 };
+for (const name of ['AudioContext', 'webkitAudioContext']) {
+  const Base = window[name];
+  if (!Base) continue;
+  window[name] = class extends Base {
+    constructor(...args) { super(...args); window.__webAudio.contexts += 1; }
+    createMediaElementSource(element) { window.__webAudio.elementSources += 1; return super.createMediaElementSource(element); }
+  };
+}
+"""
+
+# Remembers what the page registers with the system's media controls (the lock screen, the media keys): for each action the last handler it
+# was given, as 'function' or null when it was cleared (`__handlers`), and the handler itself, to be pressed like the lock screen would (`__press`).
+WATCH_MEDIA_SESSION = """
+window.__handlers = {};
+window.__press = {};
+const original = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+navigator.mediaSession.setActionHandler = (action, handler) => {
+  window.__handlers[action] = handler ? 'function' : null;
+  window.__press[action] = handler;
+  return original(action, handler);
+};
+"""
