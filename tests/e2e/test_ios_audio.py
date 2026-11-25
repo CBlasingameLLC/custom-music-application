@@ -59,6 +59,12 @@ def test_on_an_iphone_the_songs_are_played_by_the_plain_element_and_web_audio_is
         assert not playing["paused"] and playing["time"] > 0 and playing["src"].startswith("/api/tracks/")
         assert state["decks"][1]["src"] is None and state["decks"][1]["track"] is None  # (the spare is never given a song)
         assert state["blends"] == 0 and state["decks"][0]["levelling"] is None and state["decks"][0]["fade"] is None  # (no graph to level or fade in)
+        # asking for a join (the one thing that would load the next song ahead of time) changes nothing, and nothing can be drawn from the sound
+        page.evaluate(f"{PLAYER}.then((m) => {{ m.setGapless(true); m.setCrossfade(3); }})")
+        page.wait_for_timeout(300)
+        assert deck_state(page)["decks"][1]["src"] is None
+        assert page.evaluate(f"{PLAYER}.then((m) => m.getAnalyser())") is None
+        assert web_audio(page) == {"contexts": 0, "elementSources": 0}
         # not even the one place that asks for the graph for its own sake, the picture that moves with the sound
         page.evaluate("location.hash = '#/now'")
         page.wait_for_selector(".nowplaying")
@@ -120,6 +126,21 @@ def test_the_lock_screen_is_told_the_song_and_its_picture_and_gets_the_buttons_f
         handlers = page.evaluate("window.__handlers")
         assert handlers["play"] == handlers["pause"] == handlers["previoustrack"] == handlers["nexttrack"] == handlers["seekto"] == "function"
         assert handlers["seekbackward"] is None and handlers["seekforward"] is None  # (a song gets previous and next, not the skip by seconds)
+
+
+def test_the_picture_of_a_song_is_let_go_of_when_the_next_song_comes_on(page, live):
+    page.add_init_script("window.__revoked = []; const revoke = URL.revokeObjectURL.bind(URL); URL.revokeObjectURL = (url) => { window.__revoked.push(url); revoke(url); };")
+    page.reload()
+    page.wait_for_selector(".sidebar")
+    add_library(page, live)
+    play_songs(page)  # Drift
+    wait_until(page, "navigator.mediaSession.metadata.artwork.length === 1", 10)
+    first = page.evaluate("navigator.mediaSession.metadata.artwork[0].src")
+    assert page.evaluate("window.__revoked") == []
+    page.evaluate(f"{PLAYER}.then((m) => m.next())")  # Glacier
+    wait_until(page, "navigator.mediaSession.metadata.title === 'Glacier' && navigator.mediaSession.metadata.artwork.length === 1", 10)
+    assert page.evaluate("navigator.mediaSession.metadata.artwork[0].src") != first
+    assert page.evaluate("window.__revoked") == [first]  # (the old one, and only the old one)
 
 
 def test_the_picture_of_the_last_song_does_not_stay_on_the_lock_screen_for_a_song_that_has_none(page, live):
@@ -200,3 +221,29 @@ def test_the_buttons_of_the_lock_screen_drive_the_player(browser, live):
         wait_until(page, f"{PLAYER}.then((m) => m.deckState().decks.some((d) => d.time > 5.5 && d.time < 8))")
         page.evaluate("window.__press.stop()")
         wait_until(page, f"{PLAYER}.then((m) => !m.player.get().playing)")
+
+
+def test_on_an_ipad_the_now_playing_page_has_no_picture_drawn_from_the_sound(browser, live):
+    """An iPad has the layout of a computer (so the visualizer would be drawn) and the engine of an iPhone (which has no sound to draw it from)."""
+    script = COUNT_WEB_AUDIO + "Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' }); Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 5 });"
+    with opened(browser, live, init_script=script, device={"user_agent": IPAD_UA, "viewport": {"width": 1024, "height": 1366}, "has_touch": True}) as page:
+        assert page.evaluate("document.documentElement.dataset.layout") == "desktop"
+        add_library(page, live)
+        play_songs(page)
+        page.evaluate("location.hash = '#/now'")
+        page.wait_for_selector(".nowplaying")
+        assert page.locator("canvas.visualizer").count() == 0
+        assert web_audio(page) == {"contexts": 0, "elementSources": 0}
+        expect(page.locator(".playerbar").get_by_role("slider", name="Volume")).to_have_count(0)  # (the phone's own buttons are the volume)
+
+
+def test_an_ipod_and_an_old_ipad_are_known_by_their_name_and_a_touch_screen_laptop_is_not_taken_for_an_ipad(browser, live):
+    def plain(user_agent: str, platform: str, touch_points: int) -> bool:
+        script = f"Object.defineProperty(navigator, 'platform', {{ get: () => '{platform}' }}); Object.defineProperty(navigator, 'maxTouchPoints', {{ get: () => {touch_points} }});"
+        with opened(browser, live, init_script=script, device={"user_agent": user_agent}) as page:
+            return page.evaluate(f"{PLAYER}.then((m) => m.PLAIN)")
+
+    assert plain("Mozilla/5.0 (iPod touch; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 Version/15.0 Mobile/15E148 Safari/604.1", "iPod", 5) is True
+    assert plain("Mozilla/5.0 (iPad; CPU OS 12_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.1.2 Mobile/15E148 Safari/604.1", "iPad", 5) is True
+    windows = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+    assert plain(windows, "Win32", 10) is False  # (a Windows laptop with a touch screen has many touch points and is not an iPad)

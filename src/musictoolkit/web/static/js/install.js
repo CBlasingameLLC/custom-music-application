@@ -8,7 +8,7 @@ export function installAdvice({ protocol, hostname, standalone }) {
   return {
     installed: Boolean(standalone),
     // an address that only works on the computer it is typed on: a phone cannot be given it
-    local: ['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname) || hostname.endsWith('.localhost'),
+    local: ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.localhost'),
     // a phone only gives a Home Screen app its own worker (and the page that says the server cannot be reached) over https
     secure: protocol === 'https:',
   };

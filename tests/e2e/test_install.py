@@ -3,8 +3,15 @@ reached is said so (with a way to try again), a server's refusal is not hidden b
 
 from __future__ import annotations
 
+import os
+import threading
+import time
+from pathlib import Path
+
+import uvicorn
 from playwright.sync_api import expect
 
+from tests.conftest import build_web
 from tests.e2e.conftest import TOKEN, wait_until
 
 expect.set_options(timeout=10_000)
@@ -165,3 +172,32 @@ def test_the_colour_of_the_frame_on_a_phone_follows_the_theme(browser, live):
     assert page.evaluate(colour) == "#0d0f14"
     context.close()
     assert not problems, problems
+
+
+def test_an_address_that_is_http_and_not_the_computers_own_is_told_what_it_lacks(browser, tmp_path: Path):
+    """A server reached by a name of its own (a LAN name, a Tailscale name) but not over https: a phone can put it on its Home Screen, but it is a
+    bookmark there. The test's server answers to `musicpi.test`, and a browser of its own is told that the name is this computer."""
+    web = build_web(tmp_path, None, token=TOKEN, allowed_hosts=["musicpi.test"])
+    server = uvicorn.Server(uvicorn.Config(web.app, host="127.0.0.1", port=0, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 15
+    while not server.started:
+        assert time.time() < deadline, "the test server did not start"
+        time.sleep(0.02)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    chromium = browser.browser_type.launch(executable_path=os.environ.get("MTK_CHROMIUM") or None, args=["--host-resolver-rules=MAP musicpi.test 127.0.0.1"])
+    try:
+        page = chromium.new_page(viewport={"width": 1360, "height": 860})
+        page.goto(f"http://musicpi.test:{port}/?token={TOKEN}#/settings")
+        card = page.locator(".card-panel", has_text="Use it on your phone or Mac")
+        expect(card).to_be_visible()
+        expect(card.get_by_label("This server's address")).to_have_value(f"http://musicpi.test:{port}")
+        expect(card).to_contain_text("This address is http, not https")
+        expect(card).to_contain_text("tailscale serve")
+        assert "only on the computer that runs the app" not in card.inner_text()
+        expect(card).to_contain_text("Add to Home Screen")  # (the steps are still given)
+    finally:
+        chromium.close()
+        server.should_exit = True
+        thread.join(timeout=10)

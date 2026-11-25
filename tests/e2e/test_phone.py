@@ -6,6 +6,8 @@ The browser is Chromium pretending to be an iPhone (its screen, its touch, its n
 
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import expect
 
 from tests.e2e.conftest import PHONE, add_library, api, signed_in_page, wait_until
@@ -81,6 +83,9 @@ def test_a_phone_gets_a_row_of_tabs_and_no_sidebar_and_no_player_bar_until_somet
     expect(tabs).to_be_visible()
     assert [t.strip() for t in tabs.locator(".tabbar-item").all_inner_texts()] == ["Home", "Songs", "Albums", "Playlists", "More"]
     assert page.locator(".miniplayer").count() == 0  # (nothing is playing: nothing to show)
+    assert page.get_by_role("button", name="Back", exact=True).count() == 0  # (the first page has nothing behind it)
+    assert page.get_by_role("button", name=re.compile("^Switch to")).count() == 0 and page.get_by_role("button", name="Forward", exact=True).count() == 0  # (the theme is chosen in Settings; a phone has no forward button)
+    assert page.get_by_label("Search your library").get_attribute("placeholder") == "Search your library"  # (no keyboard shortcut to hint at)
     box = tabs.bounding_box()
     assert box["y"] + box["height"] == 844 and box["width"] == 390  # (along the bottom edge, the whole width)
     for item in tabs.locator(".tabbar-item").all():
@@ -94,6 +99,9 @@ def test_the_tab_of_the_page_you_are_on_is_marked_and_more_is_marked_for_the_pag
     for route, name in (("/songs", "Songs"), ("/albums", "Albums"), ("/playlists", "Playlists"), ("/", "Home")):
         go(page, route)
         assert tabs.locator('[aria-current="page"]').all_inner_texts() == [name], route
+    go(page, "/songs")
+    page.get_by_role("button", name="Back", exact=True).tap()  # (the way back that a Home Screen app has no browser to give)
+    page.wait_for_selector('#main[data-route="/"]')  # (where it came from)
     go(page, "/settings")
     assert tabs.locator('[aria-current="page"]').count() == 0 and "active" in tabs.get_by_role("button", name="More").get_attribute("class")
     go(page, "/album/anything")  # (an album's own page belongs to the Albums tab)
@@ -111,6 +119,10 @@ def test_more_lists_the_pages_the_tabs_leave_out_and_going_to_one_puts_it_away(b
         "Artists", "Favorites", "Recently played", "Radio", "Podcasts", "Discover", "Stats", "Listening history",
         "Library tools", "Discs", "Devices", "Settings",
     ]
+    expect(sheet.get_by_role("link", name="Artists")).to_be_focused()  # (the keyboard is in it, not behind it)
+    sheet.get_by_role("heading", name="Listen").tap()
+    sheet.get_by_role("heading", name="More").tap()
+    expect(sheet).to_be_visible()  # (a tap on the sheet itself is not one on what is around it)
     box = sheet.bounding_box()
     assert box["y"] + box["height"] == 844 and box["width"] == 390  # (comes up from the bottom edge)
     for item in sheet.locator(".more-item").all():
@@ -148,6 +160,9 @@ def test_a_tap_on_a_row_plays_it_and_the_small_player_opens_the_big_one(browser,
     assert page.locator(".trow.current .t1").inner_text() == title
     assert mini.get_by_role("button", name="Pause").bounding_box()["width"] >= 44
 
+    line = "parseFloat(getComputedStyle(document.querySelector('.mini-progress')).getPropertyValue('--pct'))"
+    wait_until(page, f"{line} > 0")
+    assert page.evaluate(line) < 100
     mini.get_by_role("button", name="Pause").tap()
     wait_until(page, f"{PLAYER}.then((m) => !m.player.get().playing)")
     expect(mini.get_by_role("button", name="Play")).to_be_visible()
@@ -279,3 +294,19 @@ def test_a_tablet_gets_the_layout_of_a_computer_with_what_a_pointer_would_show_a
     page.wait_for_selector(".card .card-play")
     assert page.evaluate("getComputedStyle(document.querySelector('.card .card-play')).opacity") == "1"  # (nothing hovers on a tablet)
     next(pages, None)
+
+
+def test_where_a_phone_layout_begins(browser, live):
+    """720 px wide is a phone's, 721 is not; a short touch screen is a phone on its side, a short window on a computer is not."""
+    def layout(width: int, height: int, touch: bool) -> str:
+        device = {"viewport": {"width": width, "height": height}, "has_touch": touch, "is_mobile": touch}
+        pages = signed_in_page(browser, live, device=device)
+        page = next(pages)
+        found = page.evaluate("document.documentElement.dataset.layout")
+        next(pages, None)
+        return found
+
+    assert layout(720, 900, touch=True) == "phone" and layout(721, 900, touch=True) == "desktop"
+    assert layout(720, 900, touch=False) == "phone"  # (a computer's window made narrow is a phone's too: the sidebar has no room)
+    assert layout(900, 500, touch=True) == "phone" and layout(900, 501, touch=True) == "desktop"
+    assert layout(1000, 400, touch=False) == "desktop"  # (a short window with a mouse is not a phone on its side)
