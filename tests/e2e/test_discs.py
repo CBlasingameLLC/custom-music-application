@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import send2trash
 import soundfile as sf
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect
 
 from musictoolkit.discs import helper as disc_helper
@@ -497,6 +498,104 @@ def test_a_slow_look_at_the_drives_after_a_rip_does_not_send_the_page_to_read_a_
     assert (world / "E" / "eject.log").exists()
     page.get_by_role("button", name="Rip another disc").click()  # (the list of drives the page has is from before the rip: the disc it names has left the tray)
     expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible(timeout=20_000)
+
+
+class HeldLooks:
+    """The page's looks at the drives, kept back until the test lets each one through: a drive that is slow to answer, with the order of the
+    answers chosen by the test instead of by how fast the machine is. `fresh` are the looks the page asks for because something happened (a
+    rip ended, a button was pressed), in the order it asked; `routine` are the ones its timer asks for every few seconds. Whatever is still
+    held when the test ends, or fails, is let through, so that the page is not left waiting."""
+
+    def __init__(self, page) -> None:
+        self.page = page
+        self.fresh: list = []
+        self.routine: list = []
+        self.answered: list = []
+
+    def __enter__(self) -> "HeldLooks":
+        self.page.route(LISTING, lambda route: (self.fresh if "fresh=true" in route.request.url else self.routine).append(route))
+        return self
+
+    def __exit__(self, failed, *_) -> None:
+        try:
+            for route in (*self.fresh, *self.routine):
+                if route not in self.answered:
+                    self.answer(route)
+            self.page.unroute(LISTING)
+        except PlaywrightError:
+            if not failed:  # (a failed test may have left a page that is gone; the failure is the news, not this)
+                raise
+
+    def wait_for(self, count: int) -> None:
+        """Until the page has asked for this many looks of the first kind."""
+        deadline = time.monotonic() + 15
+        while len(self.fresh) < count:
+            assert time.monotonic() < deadline, f"the page asked for {len(self.fresh)} looks at the drives, not {count}"
+            self.page.wait_for_timeout(20)
+
+    def answer(self, route, answer=None) -> None:
+        """Let the page hear an answer: what the drives say now, or one that was fetched earlier (route.fetch())."""
+        route.fulfill(response=route.fetch() if answer is None else answer)
+        self.answered.append(route)
+
+
+def requests_of_the_discs(page) -> list[str]:
+    """What the page asks of the discs API from now on, as "GET /drives/E%3A/disc" and the like, in order (the list grows as it goes)."""
+    asked: list[str] = []
+    page.on("request", lambda r: asked.append(f"{r.method} {r.url.split('/api/discs', 1)[1]}") if "/api/discs/" in r.url else None)
+    return asked
+
+
+def about_a_disc(asked: list[str]) -> list[str]:
+    """Of what was asked, what reads the disc in a drive or previews ripping it: neither can be answered once the disc has been ejected."""
+    return [a for a in asked if a == "POST /rip/preview" or re.fullmatch(r"GET /drives/[^/]+/disc", a)]
+
+
+def test_an_answer_that_says_the_disc_is_gone_does_not_leave_the_page_previewing_its_songs(page, live, world, monkeypatch) -> None:
+    add_library(page, live)
+    asked = requests_of_the_discs(page)
+    with musicbrainz(live, monkeypatch, *albums("The Real Name")):
+        open_discs(page)
+        expect(start_button(page)).to_be_enabled()
+        with HeldLooks(page) as looks:  # from here on the drives answer when the test says
+            start_button(page).click()
+            expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
+            assert (world / "E" / "eject.log").exists()
+            looks.wait_for(1)  # the page has heard that the rip is over, and has asked what the drives hold now
+            page.get_by_role("button", name="Rip another disc").click()  # (the form still has the songs of the disc that was ejected)
+            looks.wait_for(2)
+            before = len(asked)
+            looks.answer(looks.fresh[0])  # the answer to that look: the drive is empty
+            expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible()
+            page.wait_for_timeout(500)  # (a request that was wrongly sent would have been sent, and refused, by now)
+            assert not about_a_disc(asked[before:]), f"the page asked about a disc that the drive had just said was gone: {asked[before:]}"
+
+
+def test_an_answer_from_before_a_rip_that_comes_after_it_does_not_send_the_page_to_read_the_disc_that_was_ejected(page, live, world, monkeypatch) -> None:
+    add_library(page, live)
+    asked = requests_of_the_discs(page)
+    with musicbrainz(live, monkeypatch, *albums("The Real Name")):
+        open_discs(page)
+        expect(start_button(page)).to_be_enabled()
+        with HeldLooks(page) as looks:
+            page.get_by_role("button", name="Read the disc again").click()  # a look at the drives, asked now ...
+            looks.wait_for(1)
+            from_before_the_rip = looks.fresh[0].fetch()  # ... and answered now, with the disc in the tray; the page has not heard the answer yet
+            start_button(page).click()
+            expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
+            assert (world / "E" / "eject.log").exists()
+            looks.wait_for(2)  # the page has heard that the rip is over, and has asked again
+            looks.answer(looks.fresh[0], from_before_the_rip)  # the answer from before the rip arrives, after it
+            page.wait_for_timeout(300)
+            before = len(asked)
+            page.get_by_role("button", name="Rip another disc").click()
+            looks.wait_for(3)
+            page.wait_for_timeout(500)  # (a request that was wrongly sent would have been sent, and refused, by now)
+            assert not about_a_disc(asked[before:]), f"the page took an answer from before the rip for what the drive holds: {asked[before:]}"
+            looks.answer(looks.fresh[1])  # the answer to the look asked when the rip ended: the drive is empty
+            expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible()
+            page.wait_for_timeout(500)
+            assert not about_a_disc(asked[before:]), f"the page asked about a disc that the drive had just said was gone: {asked[before:]}"
 
 
 def test_a_rip_that_cannot_start_says_why_and_leaves_the_choices_alone(page, live, world, monkeypatch) -> None:

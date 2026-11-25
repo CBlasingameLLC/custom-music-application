@@ -413,7 +413,8 @@ function RipTab({ active }) {
   const ripping = Boolean(current) || running;
 
   useEffect(() => {
-    if (!active || !listed || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
+    // (nor is a disc previewed that the drives no longer show: the list that says the rip ejected it arrives while the form still holds its songs)
+    if (!active || !listed || !seen || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
     const asked = JSON.parse(wanted);
     if (!asked.scheme) {
       setPlan({ key: wanted, error: 'Type a layout: how the folders and the files are named.' });
@@ -425,7 +426,7 @@ function RipTab({ active }) {
       (error) => mounted.current && setPlan({ key: wanted, error: friendly(error.message) }),
     ).finally(() => mounted.current && setPreviewing(false));
     return undefined;
-  }, [wanted, ripping, previewing, again, active, listed]);
+  }, [wanted, ripping, previewing, again, active, listed, seen]);
 
   // A file may have been moved or made while the window was away (in File Explorer, say): look at where the songs will go again.
   useEffect(() => {
