@@ -5,7 +5,8 @@ import { Button, Cover, Empty, IconButton, TabPanel, Tabs } from '../components.
 import { confirmDialog, promptText } from '../dialogs.js';
 import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, PLAIN, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
 import { describe, isEpisode, isStation, isTrack, itemKey } from '../items.js';
-import { enc, go, href, loadPlaylists, notifyError, toast } from '../state.js';
+import { enc, go, href, layout, loadPlaylists, notifyError, toast } from '../state.js';
+import { Heart, Seek, Transport } from './transport.js';
 
 // ------------------------------------------------------------ queue
 
@@ -163,7 +164,8 @@ function Lyrics({ track }) {
 function Visualizer() {
   const canvas = useRef();
   const playing = useStore(player, (s) => s.playing);
-  const still = prefersReducedMotion() || PLAIN; // a picture that moves all the time is not for someone who asked for less motion (and on an iPhone there is no graph to draw it from)
+  const { phone } = useStore(layout);
+  const still = prefersReducedMotion() || PLAIN || phone; // a picture that moves all the time is not for someone who asked for less motion (an iPhone has no graph to draw it from, and a phone has the room for the controls instead)
   useEffect(() => {
     const el = canvas.current;
     if (!el || still) return undefined;
@@ -293,9 +295,16 @@ function EpisodeNotes({ episode }) {
   </div>`;
 }
 
+/** On a phone this page is the whole player: the seek bar and the buttons are here, because the small player is not (see main.js). */
+function PhoneControls({ track }) {
+  const s = useStore(player);
+  return html`<div class="np-controls"><${Seek} track=${track} /><${Transport} s=${s} track=${track} big /></div>`;
+}
+
 export function NowPlayingView() {
   const track = useStore(player, (s) => current(s)); // a song, a station or an episode
   const liveTitle = useStore(player, (s) => s.liveTitle);
+  const { phone } = useStore(layout);
   const [tab, setTab] = useState('lyrics');
   if (!track) {
     return html`<${Empty} icon="music" title="Nothing is playing" level=${1}>Pick a song, a radio station or a podcast episode to start. Lyrics, the queue and the equalizer live here.<//>`;
@@ -309,13 +318,14 @@ export function NowPlayingView() {
         ? html`<${Cover} albumKey=${track.album_key} name=${track.album} size=480 class="np-art" />`
         : html`<${Cover} item=${track} name=${shown.name} size=480 class="np-art" />`}
       <div class="np-meta">
-        <h1>${shown.title}</h1>
+        <div class="np-title-row"><h1>${shown.title}</h1>${phone && html`<${Heart} item=${track} />`}</div>
         ${isTrack(track)
           ? html`<p><a href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a> · <a href=${href(`/album/${track.album_key}`)}>${track.album}</a></p>`
           : isStation(track)
             ? html`<p><span class="live-badge">LIVE</span> <a href=${href('/radio')}>${liveTitle ? track.name : 'Live radio'}</a>${liveTitle || !track.country ? null : ` · ${track.country}`}</p>`
             : html`<p><a href=${href(`/podcast/${track.podcast_id}`)}>${track.podcast_title}</a>${track.published_at ? ` · ${fmt.date(track.published_at)}` : ''}</p>`}
       </div>
+      ${phone && html`<${PhoneControls} track=${track} />`}
       <${Visualizer} />
     </div>
     <div class="np-right">

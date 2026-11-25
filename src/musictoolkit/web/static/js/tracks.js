@@ -1,6 +1,6 @@
 // Track lists: a virtualized table that stays fast with tens of thousands of songs,
 // plus the actions (menu, favorite, rating) that apply to tracks anywhere in the app.
-import { api, fmt, html, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
+import { api, fmt, html, touchOnly, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
 import { Icon } from './icons.js';
 import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
@@ -111,12 +111,13 @@ const COLUMNS = {
 };
 
 // Which columns survive as the window narrows (least important first to go).
-const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating']];
+const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating'], ['num', 'artist', 'time']];
 function visibleColumns(wanted, width) {
   let hide = [];
   if (width < 1180) hide = hide.concat(DROP_ORDER[0]);
   if (width < 960) hide = hide.concat(DROP_ORDER[1]);
   if (width < 720) hide = hide.concat(DROP_ORDER[2]);
+  if (width < 520) hide = hide.concat(DROP_ORDER[3]); // a phone: the song with its artist under it, and the two buttons
   return wanted.filter((c) => !hide.includes(c));
 }
 
@@ -465,7 +466,7 @@ export function TrackTable({
       key=${track.id + ':' + index}
       style=${style}
       draggable=${reorderable}
-      onClick=${(e) => select(e, index, track)}
+      onClick=${(e) => (touchOnly() ? (isCurrent ? toggle() : onPlay?.(index)) : select(e, index, track))}
       onDblClick=${() => onPlay?.(index)}
       onContextMenu=${(e) => rowMenu(e, index, track)}
       onDragStart=${(e) => { dragFrom.current = index; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(index)); }}

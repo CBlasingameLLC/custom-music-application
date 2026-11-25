@@ -57,6 +57,7 @@ export const ui = createStore({
   density: prefs.density === 'compact' ? 'compact' : 'comfortable',
   queueOpen: false,
   jobsOpen: false,
+  moreOpen: false, // the sheet of every other page, on a phone
   songColumns: prefs.songColumns || null,
 });
 
@@ -80,6 +81,19 @@ applyLook(ui.get());
 export const setTheme = (theme) => ui.set({ theme });
 export const setAccent = (accent) => ui.set({ accent: normalizeAccent(accent) });
 export const setDensity = (density) => ui.set({ density: density === 'compact' ? 'compact' : 'comfortable' });
+
+// ------------------------------------------------------------ layout
+
+// A phone (or a phone on its side) gets a row of tabs at the bottom in place of the sidebar, and a small player that opens the big one.
+// The page says which it is on <html data-layout>, for the style sheet; the app reads it from here, to draw the right pieces.
+const phoneQuery = window.matchMedia('(max-width: 720px), (max-height: 500px) and (pointer: coarse)');
+export const layout = createStore({ phone: phoneQuery.matches });
+const applyLayout = () => {
+  layout.set({ phone: phoneQuery.matches });
+  document.documentElement.dataset.layout = phoneQuery.matches ? 'phone' : 'desktop';
+};
+phoneQuery.addEventListener('change', applyLayout);
+applyLayout();
 
 // ------------------------------------------------------------ shared library data
 

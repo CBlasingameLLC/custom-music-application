@@ -98,6 +98,9 @@ export function useDebounced(value, ms = 250) {
 /** Does the person's system ask for less motion? (Windows: Settings, Accessibility, Visual effects, Animation effects off.) */
 export const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
+/** A touch screen and nothing that hovers: a tap is what plays and opens there, and what a pointer over a row shows is never seen. */
+export const touchOnly = () => window.matchMedia?.('(hover: none) and (pointer: coarse)').matches ?? false;
+
 /** An iPhone, an iPod or an iPad (an iPad's Safari says that it is a Mac: its touch screen tells them apart). */
 export const IOS = /iPhone|iPod|iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
