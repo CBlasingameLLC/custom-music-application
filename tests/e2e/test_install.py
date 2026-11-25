@@ -107,3 +107,47 @@ def test_the_desktop_window_does_not_register_a_worker(browser, live):
     assert page.evaluate("navigator.serviceWorker.getRegistrations().then(r => r.length)") == 0
     context.close()
     assert not problems, problems
+
+
+# ---------------------------------------------------------------------------------------------------- the help in Settings
+
+
+def test_settings_tells_how_to_put_the_app_on_a_phone_and_a_mac(browser, live):
+    context, page, problems = _context(browser, live)
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=live.base)
+    page.evaluate("location.hash = '#/settings'")
+    card = page.locator(".card-panel", has_text="Use it on your phone or Mac")
+    expect(card).to_be_visible()
+    box = card.get_by_label("This server's address")
+    assert box.input_value() == live.base and box.get_attribute("readonly") is not None
+    expect(card.get_by_role("heading", name="iPhone or iPad")).to_be_visible()
+    expect(card.get_by_role("heading", name="Mac", exact=True)).to_be_visible()
+    expect(card).to_contain_text("Add to Home Screen")
+    expect(card).to_contain_text("Add to Dock")
+    expect(card).to_contain_text("only on the computer that runs the app")  # (this test's address is the computer's own)
+    assert "tailscale serve" not in card.inner_text()  # (that is for an address that is http and not the computer's own)
+    card.get_by_role("button", name="Copy").click()
+    expect(page.locator(".toast")).to_contain_text("Address copied")
+    assert page.evaluate("navigator.clipboard.readText()") == live.base
+    context.close()
+    assert not problems, problems
+
+
+def test_the_installed_app_is_not_told_how_to_install_itself(browser, live):
+    context, page, problems = _context(browser, live, init_script="Object.defineProperty(navigator, 'standalone', { value: true });")
+    page.evaluate("location.hash = '#/settings'")
+    card = page.locator(".card-panel", has_text="Use it on your phone or Mac")
+    expect(card).to_contain_text("This is the installed app")
+    assert page.get_by_role("heading", name="iPhone or iPad").count() == 0 and "Add to Home Screen" not in card.inner_text()
+    expect(card.get_by_label("This server's address")).to_be_visible()  # (the address is still there, for a second device)
+    context.close()
+    assert not problems, problems
+
+
+def test_the_desktop_window_has_no_use_for_it(browser, live):
+    context, page, problems = _context(browser, live, init_script="window.mtk = { version: 'test' };")
+    page.evaluate("location.hash = '#/settings'")
+    page.wait_for_selector(".settings")
+    assert page.locator(".card-panel", has_text="Use it on your phone or Mac").count() == 0
+    context.close()
+    assert not problems, problems

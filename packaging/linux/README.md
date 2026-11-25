@@ -21,7 +21,7 @@ port from the internet to it**. Accounts and roles are the next round (0.11).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.10.1 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.11.0 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -105,7 +105,7 @@ A monitor should ask `/healthz` (it needs no token); `/` answers `401` to a devi
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.10.1` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.11.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -126,6 +126,32 @@ Turn on *HTTPS certificates* and *MagicDNS* in the Tailscale admin page, add the
 needs one to install the app on a phone's home screen). Tailscale publishes the machine's name, not anything it serves, in public
 certificate logs. The cookie that keeps a device signed in is marked Secure when the proxy says (`X-Forwarded-Proto: https`) that the page came over https; check it
 in the browser's developer tools if you care.
+
+## On the phone and on the Mac
+
+The app is a web page that can be installed: it opens from an icon of its own, with no browser around it. It needs the `https` address above (a phone
+gives a Home Screen app its own worker only over `https`; over plain `http` the page can still be put on the Home Screen, but it opens like a bookmark).
+
+**iPhone or iPad**
+
+1. Put the Tailscale app on the phone and sign in to the account the server is on. Leave it connected: it uses next to nothing when nothing is sent.
+2. In Safari open `https://musicpi.<your tailnet>.ts.net`. The page asks for the token, once (`mtk token` shows it; copy it on a Mac or another iPhone and paste it,
+   the clipboard is shared), or open the link `mtk token --url https://musicpi.<your tailnet>.ts.net` prints.
+3. Press Share, then **Add to Home Screen**. From iOS 17 Safari copies the site's cookies to the new app, so it opens signed in; if it asks for the token anyway,
+   paste it once more (the app keeps its cookies apart from Safari's). It then stays signed in for `login_days`.
+4. Open **Music Kit** from the Home Screen.
+
+What an iPhone does and does not do:
+
+- The songs play with the screen locked. The lock screen shows the song, its cover and the buttons for play and pause, previous and next (an episode has skip back 15 seconds and
+  forward 30 instead). The page plays through the plain audio element, not through Web Audio, which Safari stops when the screen locks.
+- The volume is the phone's own buttons, and the equalizer, the loudness levelling (ReplayGain), the crossfade and the gapless join are not there: they are made of Web Audio. The
+  next song is loaded when a song ends, so there is a short gap (a fraction of a second on a good connection).
+- What cannot be promised from here: how long iOS lets a Home Screen app keep running with the screen locked. If the music stops between two songs after the phone has
+  been locked for a long time, that is iOS stopping the page, and an iPhone app that speaks the Subsonic protocol (planned) is the way to be sure.
+- The phone is away from the server, so everything is streamed: on mobile data a song is its whole file (transcoding to a smaller one is planned).
+
+**Mac.** Safari (macOS Sonoma or later): *File, Add to Dock*. Chrome and Edge: the menu, then *Install*. It opens in a window of its own and answers the media keys.
 
 ## Move the library over from the Windows PC
 
@@ -154,6 +180,8 @@ in the browser's developer tools if you care.
 | `403 forbidden host` | The name in the address is not in `allowed_hosts`. Add it (exactly, without the port), restart |
 | `401 unauthorized`, or the page with the box for the token | The device is not signed in: open the link from `mtk token --url ...`, or paste the token (`mtk token`) into the box |
 | "Too many wrong tokens. Try again in N seconds." (`429`) | Eight wrong tokens came in within a minute (a typo, a program with an old token). Wait; devices that are signed in are not affected |
+| A page that says **Can't reach your music server**, with a *Try again* button | The phone or Mac got no answer from the server within eight seconds (the installed app shows this instead of the browser's own error). Tailscale is off on the phone, the phone is on a different account, or the server is off: check each, then press *Try again* |
+| The app on the Home Screen asks for the token | Its cookies are not Safari's: before iOS 17 they are not copied when the app is added, and a cookie that was cleared is gone. Paste the token once; the app then stays signed in for `login_days` |
 | A song with a **No audio** mark | The file is only tags (an MP3 with no audio frames, or an empty file): nothing to play. It is left out of queues, mixes and what is copied to a device. Filter on "Has tags but no audio" to list them; the scan counts them apart from errors |
 | `Could not read the audio in ...` in the log | The file has more than tags but its audio could not be read (damage). One line, no traceback; the song stays in the library |
 | `Cannot start the server: it would listen on 0.0.0.0 ... allowed_hosts is empty` | Listening beyond this computer needs the names; see Configure |
