@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
 import sys
@@ -18,6 +19,7 @@ from mutagen.mp3 import MP3
 from musictoolkit.discs import helper as disc_helper
 from musictoolkit.discs import reader
 from musictoolkit.discs import rip as ripping
+from musictoolkit.discs.encode import NO_ROOM
 from musictoolkit.discs.tagging import TagError
 from musictoolkit.discs.toc import Toc, Track
 from musictoolkit.net import guard
@@ -26,6 +28,7 @@ from tests.conftest import build_web
 from tests.fake_disc_helper import add_drive, audio, audio_disc, set_control
 from tests.fake_musicbrainz import coverart_script, ident, musicbrainz_script, release_xml
 from tests.fake_streams import png_bytes, serve_script
+from tests.full_drive import drive_fills_up
 
 FAKE = Path(__file__).parent / "fake_disc_helper.py"
 SEED = 6
@@ -359,6 +362,68 @@ def test_a_disc_taken_out_half_way_ends_the_rip_and_keeps_what_was_done(rig) -> 
     assert job.status == "error" and "taken out or changed" in job.error
     assert [t["status"] for t in found["tracks"]] == ["done", "failed", "skipped"] and found["status"] == "partial"
     assert (album(rig) / "01 - First.flac").exists() and not list(rig.music.rglob("*.part")) and set(songs_in_library(rig)) == {"First"}
+
+
+def outcomes(found: dict) -> list[tuple[str, str | None]]:
+    return [(t["status"], t["message"]) for t in found["tracks"]]
+
+
+@pytest.mark.parametrize("fmt,quality", [("flac", "standard"), ("mp3", "320")])
+def test_a_drive_that_fills_up_ends_the_rip_there_and_every_song_not_ripped_says_why_in_the_same_words(rig, monkeypatch: pytest.MonkeyPatch, fmt: str, quality: str) -> None:
+    drive_fills_up(monkeypatch, f"02 - Second.{fmt}.part")
+    job, found = rip_it(rig, format=fmt, quality=quality)
+    assert job.status == "error" and job.error == NO_ROOM == "There is not enough room on the drive for the music."
+    assert found["status"] == "partial" and found["message"] == NO_ROOM
+    assert outcomes(found) == [("done", None), ("failed", NO_ROOM), ("skipped", NO_ROOM)], "the song the room ran out on, and the one that was never reached"
+    assert (album(rig) / f"01 - First.{fmt}").exists() and set(songs_in_library(rig)) == {"First"}
+    assert not list(rig.music.rglob("*.part")) and not list(rig.ctx.data_dir.rglob("*.pcm")), "nothing half-written is left"
+
+
+def test_a_first_song_that_does_not_fit_is_a_rip_that_failed_for_want_of_room(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    drive_fills_up(monkeypatch, "01 - First.flac.part")
+    job, found = rip_it(rig)
+    assert job.status == "error" and job.error == NO_ROOM
+    assert found["status"] == "failed" and found["message"] == NO_ROOM
+    assert outcomes(found) == [("failed", NO_ROOM), ("skipped", NO_ROOM), ("skipped", NO_ROOM)]
+    assert not list(rig.music.rglob("*.flac")) and not list(rig.music.rglob("*.part")) and not songs_in_library(rig)
+
+
+def test_a_write_that_is_refused_on_a_drive_that_has_room_is_not_said_to_be_a_full_drive(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    drive_fills_up(monkeypatch, "02 - Second.flac.part", full=False)
+    job, found = rip_it(rig)
+    assert job.status == "error" and job.error == "The file could not be written (System error.)."
+    assert found["status"] == "partial" and found["message"] == job.error
+    assert outcomes(found) == [("done", None), ("failed", "Stopped before it was finished."), ("skipped", "Not reached.")]
+    assert not list(rig.music.rglob("*.part")) and not list(rig.ctx.data_dir.rglob("*.pcm"))
+
+
+def test_a_folder_that_cannot_be_made_for_want_of_room_ends_the_rip_in_the_same_words(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    make = Path.mkdir
+
+    def refuse_the_album_folder(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "Test Album":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return make(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", refuse_the_album_folder)
+    job, found = rip_it(rig)
+    assert job.status == "error" and job.error == NO_ROOM
+    assert found["status"] == "failed" and outcomes(found) == [("failed", NO_ROOM), ("skipped", NO_ROOM), ("skipped", NO_ROOM)]
+    assert not list(rig.music.rglob("*.flac")) and not list(rig.ctx.data_dir.rglob("*.pcm"))
+
+
+def test_a_folder_that_cannot_be_made_for_another_reason_is_not_said_to_be_a_full_drive(rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    make = Path.mkdir
+
+    def refuse_the_album_folder(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name == "Test Album":
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+        return make(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", refuse_the_album_folder)
+    job, found = rip_it(rig)
+    assert job.status == "error" and "Permission denied" in job.error and NO_ROOM not in job.error
+    assert outcomes(found) == [("failed", "Stopped before it was finished."), ("skipped", "Not reached."), ("skipped", "Not reached.")]
 
 
 def test_a_different_disc_put_in_after_the_preview_is_noticed_before_anything_is_written(rig) -> None:

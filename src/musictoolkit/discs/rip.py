@@ -19,12 +19,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from musictoolkit.discs import encode, store
-from musictoolkit.discs.encode import EncodeError
+from musictoolkit.discs.encode import EncodeError, NoRoomError
 from musictoolkit.discs.helper import SECTOR_BYTES, DiscError, DiscHelper, in_use
 from musictoolkit.discs.reader import ACCURACY, HelperSource, read_track
 from musictoolkit.discs.tagging import SongTags, TagError, write_tags
 from musictoolkit.discs.toc import SECTORS_PER_SECOND, Toc
 from musictoolkit.ingest import cleanup, moves, organizer, scanner
+from musictoolkit.media.room import no_room
 
 logger = logging.getLogger("musictoolkit")
 
@@ -275,7 +276,9 @@ def run_rip(
 ) -> dict[str, Any]:
     """The job: rip every song in the plan. `db` gives a connection as a context manager; `handle` reports progress and notices a cancel.
     A song that cannot be read is marked and the next one is tried; anything that stops the drive (the disc taken out, no answer) ends the
-    rip, keeping what is done. Raises a DiscError/EncodeError/TagError written for the person when the rip ends without finishing."""
+    rip, keeping what is done, and so does a library drive with no room left (every song after that one would fail the same way): the history says
+    so, in the same words, of the song it was on and of every song it did not get to. Raises a DiscError/EncodeError/TagError written for the person
+    when the rip ends without finishing."""
     from musictoolkit.web.jobs import JobCancelled  # noqa: PLC0415 - the job runner's own signal for a cancel
 
     tracks = plan.to_rip
@@ -338,12 +341,15 @@ def run_rip(
         problem = error
         status, message = ("partial" if finished else "failed"), f"{type(error).__name__}: {error}"
     finally:
+        full = str(problem) if isinstance(problem, NoRoomError) else None  # (a rip that ended for want of room says so of every song it did not rip, in the words it ends with)
         with db() as conn:
             conn.execute(
-                "UPDATE disc_rip_tracks SET status = 'failed', message = COALESCE(message, 'Stopped before it was finished.') WHERE rip_id = ? AND status = 'ripping'", (rip_id,)
+                "UPDATE disc_rip_tracks SET status = 'failed', message = COALESCE(message, ?) WHERE rip_id = ? AND status = 'ripping'",
+                (full or "Stopped before it was finished.", rip_id),
             )
             conn.execute(
-                "UPDATE disc_rip_tracks SET status = 'skipped', message = COALESCE(message, 'Not reached.') WHERE rip_id = ? AND status = 'waiting'", (rip_id,)
+                "UPDATE disc_rip_tracks SET status = 'skipped', message = COALESCE(message, ?) WHERE rip_id = ? AND status = 'waiting'",
+                (full or "Not reached.", rip_id),
             )
             if status == "done" and (failed or not finished):
                 status = "partial" if finished else "failed"
@@ -405,7 +411,12 @@ def _rip_one(
                     source, track.start, track.sectors, raw, disc_sectors=music_end, accuracy=request.accuracy,
                     on_progress=progress, check=handle.check,
                 )
-                part.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    part.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as error:
+                    if no_room(error):  # (a folder needs room too: without this it would come up as "OSError: [Errno 28] ...")
+                        raise NoRoomError(encode.NO_ROOM) from None
+                    raise
                 encode.encode_pcm(raw, part, request.format, request.quality, check=handle.check)
         except DiscError as error:
             if error.code == "read_error":

@@ -173,6 +173,8 @@ Put a disc in and the page notices (it looks at the drives every few seconds whi
 4. **Where the songs will go.** The page shows every song's path, how much room it needs, and what it will leave alone, and the **Rip** button waits
    for that. A name that is already taken is never overwritten: that song is left out and the preview says so.
 5. **Rip.** Each song is a step with its own progress and status; **Cancel** stops after the block being read and keeps the songs that are done.
+   If the drive runs out of room the rip ends there (every song after that one would fail the same way): the song it was on is not kept, the songs
+   already ripped stay, and the history says *There is not enough room on the drive for the music.* of that song and of every song it did not get to.
    If the app is closed in the middle, the next start marks the rip *interrupted* and removes what was half written.
 
 What a rip puts in your library: `Artist/Album/01 - Title.flac` (or your own layout), tagged with title, artist, album artist, album, date, track and

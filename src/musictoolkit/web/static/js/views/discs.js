@@ -139,9 +139,13 @@ function Plan({ plan, checking }) {
 
 // ------------------------------------------------------------ a rip under way, or just finished
 
+/** How a song of a rip is shown. When a rip ends for want of room, every song it did not get to is given the words the rip ended with. Such a song was
+ *  asked for and was not ripped, so it is shown as not ripped, with the reason, and not as "Left out" (which is what a song the person chose to skip is). */
+const shown = (t, rip) => (t.status === 'skipped' && rip.message && t.message === rip.message ? { ...t, status: 'failed' } : t);
+
 function describeRip(rip) {
   const songs = rip.tracks.filter((t) => t.status === 'done' || t.status === 'problem').length;
-  const notRipped = rip.tracks.filter((t) => t.status === 'failed' || (t.status === 'skipped' && t.message === 'Not reached.')).length;
+  const notRipped = rip.tracks.map((t) => shown(t, rip)).filter((t) => t.status === 'failed' || (t.status === 'skipped' && t.message === 'Not reached.')).length;
   const wanted = songs + notRipped;
   if (rip.status === 'running') return null;
   if (rip.status === 'done') {
@@ -206,7 +210,7 @@ function RipProgress({ ripId, onNew }) {
       <p><${Icon} name=${rip.status === 'done' && !rip.problems ? 'check' : 'alert'} size=${16} /><span>${rip.undone_at ? 'This rip has been taken back: its songs went to the Recycle Bin.' : words}</span></p>
     </div>`}
     ${rip && html`<ol class="rip-tracks" aria-label="Songs">
-      ${rip.tracks.map((t) => html`<li key=${t.number} class=${t.status}>
+      ${rip.tracks.map((t) => shown(t, rip)).map((t) => html`<li key=${t.number} class=${t.status}>
         <span class="num">${t.number}</span>
         <span class="rip-song"><strong>${t.title}</strong>${t.message && t.status !== 'skipped' ? html`<span class="subtle">${t.message}</span>` : ''}</span>
         <span class="reason ${CHIP[t.status] || ''}">${t.status === 'ripping' ? html`<span class="spinner small"></span>` : ''} ${TRACK_STATUS[t.status] || t.status}</span>
@@ -625,7 +629,7 @@ function RipRow({ rip, busy, onUndo }) {
       ${!detail ? html`<${Spinner} />` : html`
         ${detail.message && html`<p class="note"><${Icon} name="info" size=${14} /><span>${detail.message}</span></p>`}
         <p class="subtle">${detail.folder || detail.root}${detail.disc_id ? ` · disc ${detail.disc_id}` : ''}</p>
-        <ol class="rip-tracks" aria-label="Songs of this rip">${detail.tracks.map((t) => html`<li key=${t.number} class=${t.status}>
+        <ol class="rip-tracks" aria-label="Songs of this rip">${detail.tracks.map((t) => shown(t, detail)).map((t) => html`<li key=${t.number} class=${t.status}>
           <span class="num">${t.number}</span>
           <span class="rip-song"><strong>${t.title}</strong>${t.message && t.status !== 'skipped' ? html`<span class="subtle">${t.message}</span>` : ''}</span>
           <span class="reason ${CHIP[t.status] || ''}">${TRACK_STATUS[t.status] || t.status}</span>
