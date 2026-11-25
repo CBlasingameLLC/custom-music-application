@@ -570,13 +570,19 @@ def test_the_lock_screen_has_skip_buttons_for_an_episode_and_the_song_before_and
     page.get_by_role("button", name="Play Episode 6").click()
     expect(bar(page).locator(".pb-text .t1")).to_have_text("Episode 6")
     assert page.evaluate(skips) == ["function", "function"] and page.evaluate(tracks) == ["function", "function"]
-    # pressed on the lock screen: back 15 seconds, forward 30
+    # pressed on the lock screen: forward 30 seconds (past the end of 12: the episode ends), and back 15 (before the start: to the start, and it plays on)
+    ends = f"{PLAYER}.then((m) => m.deckState().hardEnds)"
+    before = page.evaluate(ends)
     page.evaluate(f"{PLAYER}.then((m) => m.seek(5))")
     page.evaluate("window.__press.seekforward()")
-    wait_until(page, f"{PLAYER}.then((m) => m.player.get().position >= 11.9 || !m.player.get().playing)")  # (30 seconds on is past the end of 12)
+    wait_until(page, f"{PLAYER}.then((m) => m.deckState().hardEnds === {before + 1})")
+    page.evaluate("window.__press.play()")
+    wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+    before = page.evaluate(ends)
     page.evaluate(f"{PLAYER}.then((m) => m.seek(9))")
     page.evaluate("window.__press.seekbackward()")
-    wait_until(page, f"{PLAYER}.then((m) => m.player.get().position < 1)")  # (15 seconds back is before the start of it)
+    page.wait_for_timeout(700)
+    assert page.evaluate(ends) == before and state(page)["playing"] is True  # (back to the start, still playing: forward by mistake would have been the end of it)
 
     page.evaluate("location.hash = '#/songs'")
     play(page, "Drift")

@@ -310,3 +310,59 @@ def test_where_a_phone_layout_begins(browser, live):
     assert layout(720, 900, touch=False) == "phone"  # (a computer's window made narrow is a phone's too: the sidebar has no room)
     assert layout(900, 500, touch=True) == "phone" and layout(900, 501, touch=True) == "desktop"
     assert layout(1000, 400, touch=False) == "desktop"  # (a short window with a mouse is not a phone on its side)
+
+
+# ---------------------------------------------------------------------------------------------------- accessibility
+
+
+def test_the_screens_of_a_phone_pass_axe_in_both_themes(browser, live):
+    """The same checks as the sweep of the computer's screens (test_accessibility.py), over what a phone draws that a computer does not: the
+    row of tabs, the small player, the sheet of pages, the full-screen player, a menu and a dialog that come up from the bottom."""
+    from tests.e2e.test_accessibility import CLEAR, violations  # (skips this test too when axe is not installed)
+
+    pages, page = open_phone(browser, live)
+    add_library(page, live)
+    page.evaluate(f"{PLAYER}.then(async (m) => {{ const {{ items }} = await fetch('/api/tracks?limit=5').then((r) => r.json()); await m.playQueue(items, 0); m.pause(); }})")
+    found = []
+    for theme in ("dark", "light"):
+        page.evaluate(f"import('/static/js/state.js').then((s) => s.setTheme('{theme}'))")
+        for route in ("/", "/songs", "/albums", "/playlists", "/settings", "/now"):
+            go(page, route)
+            page.evaluate(CLEAR)
+            found += [f"{theme} {route}: {line}" for line in violations(page)]
+        go(page, "/songs")
+        page.get_by_role("navigation", name="Tabs").get_by_role("button", name="More").tap()
+        found += [f"{theme} the More sheet: {line}" for line in violations(page)]
+        page.keyboard.press("Escape")
+        page.get_by_role("button", name="More actions").first.tap()
+        expect(page.get_by_role("menu", name="Actions")).to_be_visible()
+        found += [f"{theme} a row's menu: {line}" for line in violations(page)]
+        page.get_by_role("menuitem", name="Add to playlist…").tap()
+        expect(page.get_by_role("dialog")).to_be_visible()
+        found += [f"{theme} a dialog: {line}" for line in violations(page)]
+        page.evaluate(CLEAR)
+    assert not found, "axe found:\n" + "\n".join(found)
+    next(pages, None)
+
+
+ANDROID_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
+
+
+def test_a_phone_that_is_not_an_iphone_has_the_layout_of_a_phone_and_the_engine_of_a_computer(browser, live):
+    """The phone layout is about the size of the screen and the plain engine is about iOS: neither is taken for the other."""
+    from tests.e2e.conftest import COUNT_WEB_AUDIO
+
+    pages = signed_in_page(browser, live, init_script=COUNT_WEB_AUDIO, device={**PHONE, "user_agent": ANDROID_UA})
+    page = next(pages)
+    assert page.evaluate("document.documentElement.dataset.layout") == "phone"
+    assert page.evaluate(f"{PLAYER}.then((m) => m.PLAIN)") is False
+    add_library(page, live)
+    go(page, "/songs")
+    page.locator(".trow:not(.skeleton)").first.tap()
+    wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+    go(page, "/now")
+    assert page.locator("canvas.visualizer").count() == 0  # (there is no room for it beside the buttons)
+    assert page.evaluate("window.__webAudio") == {"contexts": 1, "elementSources": 2}  # (the equalizer, loudness levelling and crossfade are all there)
+    page.get_by_role("tab", name="Sound").tap()
+    expect(page.get_by_role("heading", name="Equalizer")).to_be_visible()
+    next(pages, None)

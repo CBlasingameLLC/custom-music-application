@@ -9,6 +9,7 @@ What they cannot say is what Safari does with the screen locked: that is for a p
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 
 from playwright.sync_api import expect
@@ -141,6 +142,33 @@ def test_the_picture_of_a_song_is_let_go_of_when_the_next_song_comes_on(page, li
     wait_until(page, "navigator.mediaSession.metadata.title === 'Glacier' && navigator.mediaSession.metadata.artwork.length === 1", 10)
     assert page.evaluate("navigator.mediaSession.metadata.artwork[0].src") != first
     assert page.evaluate("window.__revoked") == [first]  # (the old one, and only the old one)
+
+
+def test_a_picture_that_arrives_after_the_next_song_came_on_is_let_go_of_and_the_next_song_still_gets_its_own(page, live):
+    """The pictures are asked for as the songs come on; one that is slow must not be put up for the song after it, nor take its place."""
+    page.add_init_script("window.__revoked = []; const revoke = URL.revokeObjectURL.bind(URL); URL.revokeObjectURL = (url) => { window.__revoked.push(url); revoke(url); };")
+    page.reload()
+    page.wait_for_selector(".sidebar")
+    held = []  # the requests for the 512 px pictures (the lock screen's), kept waiting; the small covers of the page go through
+    page.route("**/api/art/track/*", lambda route: held.append(route) if "size=512" in route.request.url else route.continue_())
+    add_library(page, live)
+    play_songs(page)  # Drift
+    wait_until(page, "navigator.mediaSession.metadata && navigator.mediaSession.metadata.title === 'Drift'", 10)
+    page.evaluate(f"{PLAYER}.then((m) => m.next())")  # Glacier
+    wait_until(page, "navigator.mediaSession.metadata.title === 'Glacier'", 10)
+    deadline = time.time() + 10
+    while len(held) < 2:
+        assert time.time() < deadline, f"only {len(held)} of the 2 pictures were asked for"
+        page.wait_for_timeout(50)
+    drift, glacier = held
+    assert drift.request.url != glacier.request.url
+    drift.continue_()  # Drift's picture comes at last, with Glacier on
+    page.wait_for_timeout(600)
+    assert page.evaluate("navigator.mediaSession.metadata.artwork.length") == 0  # (not put up for the song that is on)
+    assert len(page.evaluate("window.__revoked")) == 1  # (and let go of)
+    glacier.continue_()
+    wait_until(page, "navigator.mediaSession.metadata.artwork.length === 1", 10)  # (Glacier's own, which the late one did not take the place of)
+    assert page.evaluate("window.__revoked") != page.evaluate("[navigator.mediaSession.metadata.artwork[0].src]")
 
 
 def test_the_picture_of_the_last_song_does_not_stay_on_the_lock_screen_for_a_song_that_has_none(page, live):
