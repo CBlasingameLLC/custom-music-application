@@ -1,0 +1,109 @@
+"""The app as an installed app, in a real browser: it is installable, its worker is in charge of the whole app, a server that cannot be
+reached is said so (with a way to try again), a server's refusal is not hidden behind that, and the worker keeps nothing."""
+
+from __future__ import annotations
+
+from playwright.sync_api import expect
+
+from tests.e2e.conftest import TOKEN, wait_until
+
+expect.set_options(timeout=10_000)
+
+
+def _context(browser, live, *, init_script: str | None = None):
+    """A browser signed in to `live`, on its own (so a test can take it offline, or take its cookie away)."""
+    context = browser.new_context(viewport={"width": 1360, "height": 860}, locale="en-US", timezone_id="UTC")
+    if init_script:
+        context.add_init_script(init_script)
+    page = context.new_page()
+    problems: list[str] = []
+    # (a song without cover art is a 404 the page draws a placeholder for; a page that asks for the token is a 401)
+    page.on("console", lambda m: problems.append(f"console: {m.text}") if m.type == "error" and "status of 4" not in m.text else None)
+    page.on("pageerror", lambda e: problems.append(f"uncaught: {e}"))
+    page.goto(live.url)
+    page.wait_for_selector(".sidebar")
+    return context, page, problems
+
+
+def _ready(page) -> dict:
+    """Wait for the worker to be in charge of the page, and say what it is."""
+    return page.evaluate(
+        "navigator.serviceWorker.ready.then(r => ({scope: r.scope, script: r.active.scriptURL, state: r.active.state}))"
+    )
+
+
+def test_the_page_is_an_app_a_browser_will_install(browser, live):
+    """What Chromium itself says about installing it: the manifest reads without a fault, and there is nothing in the way."""
+    context, page, problems = _context(browser, live)
+    _ready(page)
+    cdp = context.new_cdp_session(page)
+    manifest = cdp.send("Page.getAppManifest")
+    assert manifest["errors"] == [] and manifest["url"] == live.base + "/static/manifest.webmanifest"
+    assert '"display": "standalone"' in manifest["data"]
+    # (the only thing in the way is the test browser's own profile: Chromium does not offer to install from a private window)
+    assert [e["errorId"] for e in cdp.send("Page.getInstallabilityErrors")["installabilityErrors"]] == ["in-incognito"]
+    assert page.evaluate("document.querySelector('meta[name=theme-color]').content") == "#0d0f14"
+    context.close()
+    assert not problems, problems
+
+
+def test_the_worker_is_in_charge_of_the_whole_app(browser, live):
+    context, page, problems = _context(browser, live)
+    got = _ready(page)
+    assert got == {"scope": live.base + "/", "script": live.base + "/sw.js", "state": "activated"}
+    assert page.evaluate("navigator.serviceWorker.controller === null") in (True, False)  # (in charge from the next load, or at once: it claims)
+    wait_until(page, "navigator.serviceWorker.controller !== null", 10)
+    context.close()
+    assert not problems, problems
+
+
+def test_the_worker_keeps_nothing(browser, live):
+    """No copy of any page or script in the browser's Cache Storage, with a signed-in page, and with a sign-in address (a token in it) opened."""
+    context, page, problems = _context(browser, live)
+    _ready(page)
+    page.goto(live.url + "&x=1")
+    page.wait_for_selector(".sidebar")
+    assert page.evaluate("caches.keys()") == []
+    assert page.evaluate("navigator.storage.estimate().then(e => (e.usageDetails || {}).caches || 0)") == 0
+    context.close()
+    assert not problems, problems
+
+
+def test_a_server_that_cannot_be_reached_is_said_so_and_trying_again_gets_the_app_back(browser, live):
+    context, page, _problems = _context(browser, live)
+    _ready(page)
+    wait_until(page, "navigator.serviceWorker.controller !== null", 10)
+    context.set_offline(True)
+    page.reload()
+    expect(page.get_by_role("heading", name="Can't reach your music server")).to_be_visible()
+    expect(page.get_by_text("Tailscale")).to_be_visible()
+    assert page.locator(".sidebar").count() == 0
+    context.set_offline(False)
+    page.get_by_role("link", name="Try again").click()
+    page.wait_for_selector(".sidebar")  # (the same address, the same cookie: the app, with nobody signing in again)
+    context.close()
+
+
+def test_a_server_that_answers_with_a_refusal_is_not_hidden_behind_that_page(browser, live):
+    """A device whose cookie has gone is asked for the token, as without the worker: the server did answer."""
+    context, page, _problems = _context(browser, live)
+    _ready(page)
+    wait_until(page, "navigator.serviceWorker.controller !== null", 10)
+    context.clear_cookies()
+    page.reload()
+    expect(page.get_by_label("Access token")).to_be_visible()
+    assert "Can't reach" not in page.content()
+    page.get_by_label("Access token").fill(TOKEN)
+    page.get_by_role("button", name="Sign in").click()
+    page.wait_for_selector(".sidebar")
+    context.close()
+
+
+def test_the_desktop_window_does_not_register_a_worker(browser, live):
+    """The shell's own window (it has `window.mtk`) is on a port of its own each time and has no use for one."""
+    context, page, problems = _context(browser, live, init_script="window.mtk = { version: 'test' };")
+    page.wait_for_load_state("load")
+    page.wait_for_timeout(1000)
+    assert page.evaluate("navigator.serviceWorker.getRegistrations().then(r => r.length)") == 0
+    context.close()
+    assert not problems, problems

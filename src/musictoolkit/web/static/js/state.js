@@ -68,6 +68,7 @@ function applyLook(s) {
   root.dataset.density = s.density;
   const vars = accentVars(s.accent, s.theme);
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', s.theme === 'light' ? '#f5f6fb' : '#0d0f14'); // the colour of the frame around the page on a phone: --bg
   try {
     localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns, accent: s.accent, density: s.density, vars }));
   } catch {

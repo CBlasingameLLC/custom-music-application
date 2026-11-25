@@ -11,7 +11,10 @@ must not be able to drive it):
     server's token is the same every time and its cookie lasts `login_days`;
   * a token that someone typed, followed in a link or sent from a program is
     counted when it is wrong, and after a few wrong ones none is looked at for
-    a minute. A device that is already signed in is not affected.
+    a minute. A device that is already signed in is not affected;
+  * the app's own files (/static, and /sw.js, which an installed app needs from
+    the root) hold nothing private and are sent to anyone who asks, the way a
+    browser asks for them before it has a cookie.
 """
 
 from __future__ import annotations
@@ -251,6 +254,14 @@ def create_app(
         if not right:
             return asking(401, "That is not the token.")
         return give_cookie(RedirectResponse("/", status_code=303), request)
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker() -> Response:
+        """The service worker of the installed app. It has to be sent from the root of the address, not from /static/, to be in charge of
+        the whole app; it holds nothing private, so no token is asked for (a browser fetches it without the cookie when it checks for a
+        new one). Its version is this app's, so a new version of the app is a new file."""
+        source = (STATIC_DIR / "sw.js").read_text(encoding="utf-8").replace("__VERSION__", __version__)
+        return Response(source, media_type="text/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
     @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     def healthz() -> dict:

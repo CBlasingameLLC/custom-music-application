@@ -203,3 +203,9 @@ loadSettings().catch(() => {});
 loadFacets().catch(() => {});
 loadPlaylists().catch(() => {});
 restoreQueue();
+
+// Installed as an app (Home Screen, Dock), the page says what is wrong when the server cannot be reached (see sw.js). Not in the
+// desktop window, which has its own server on a port of its own each time and no need of it.
+if ('serviceWorker' in navigator && !window.mtk) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}), { once: true });
+}
