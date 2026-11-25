@@ -2,16 +2,15 @@
 
 /**
  * `where` is { protocol, hostname, standalone }: the address the page was opened at, and whether it was opened from an icon on a
- * Home Screen or in a Dock (`standalone`) rather than in a browser's tab.
+ * Home Screen or in a Dock (`standalone`) rather than in a browser's tab. The answer says whether it is `installed`, and which `note`
+ * the page owes: 'local' (the address works only on the computer it is typed on, so a phone cannot be given it), 'http' (a phone can
+ * still put it on its Home Screen, but a Home Screen app only gets its own worker, and with it the page that says the server cannot be
+ * reached, over https) or '' (nothing to say).
  */
 export function installAdvice({ protocol, hostname, standalone }) {
-  return {
-    installed: Boolean(standalone),
-    // an address that only works on the computer it is typed on: a phone cannot be given it
-    local: ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.localhost'),
-    // a phone only gives a Home Screen app its own worker (and the page that says the server cannot be reached) over https
-    secure: protocol === 'https:',
-  };
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || hostname.endsWith('.localhost');
+  const secure = protocol === 'https:';
+  return { installed: Boolean(standalone), local, secure, note: local ? 'local' : secure ? '' : 'http' };
 }
 
 /** Is this page open as an installed app? (iOS says so with `navigator.standalone`, other browsers with the display mode.) */

@@ -162,7 +162,9 @@ def test_a_tap_on_a_row_plays_it_and_the_small_player_opens_the_big_one(browser,
 
     line = "parseFloat(getComputedStyle(document.querySelector('.mini-progress')).getPropertyValue('--pct'))"
     wait_until(page, f"{line} > 0")
-    assert page.evaluate(line) < 100
+    page.evaluate(f"{PLAYER}.then((m) => {{ m.seek(6); m.pause(); }})")  # (half way through the 12 seconds)
+    wait_until(page, f"{line} > 40 && {line} < 60")
+    page.evaluate(f"{PLAYER}.then((m) => m.toggle())")
     mini.get_by_role("button", name="Pause").tap()
     wait_until(page, f"{PLAYER}.then((m) => !m.player.get().playing)")
     expect(mini.get_by_role("button", name="Play")).to_be_visible()
@@ -216,6 +218,23 @@ def test_a_text_box_on_a_phone_is_big_enough_that_the_phone_does_not_zoom_into_i
     for el in page.locator("input[type=text], input[type=password], input[type=number], select").all():
         if el.is_visible():
             assert page.evaluate("(e) => parseFloat(getComputedStyle(e).fontSize)", el.element_handle()) >= 16
+    next(pages, None)
+
+
+def test_the_page_of_the_player_has_the_heart_and_it_works(browser, live):
+    pages, page = open_phone(browser, live)
+    add_library(page, live)
+    go(page, "/songs")
+    page.locator(".trow:not(.skeleton)").first.tap()
+    wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+    go(page, "/now")
+    title = page.locator(".np-meta h1").inner_text()
+    heart = page.locator(".nowplaying").get_by_role("button", name="Add to favorites")
+    assert heart.bounding_box()["width"] >= 44
+    heart.tap()
+    expect(page.locator(".nowplaying").get_by_role("button", name="Remove from favorites")).to_be_visible()
+    favorites = [t["title"] for t in api(page, "/tracks?limit=50")["items"] if t["favorite"]]
+    assert favorites == [title]
     next(pages, None)
 
 

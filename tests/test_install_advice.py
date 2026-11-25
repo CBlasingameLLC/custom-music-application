@@ -76,3 +76,15 @@ def test_a_page_opened_from_an_icon_knows_it_whichever_way_the_browser_says_so(r
     assert results["opened"] == {
         "ios_home_screen": True, "ios_browser": False, "dock_or_chrome_app": True, "plain_tab": False, "none": False,
     }
+
+
+def test_the_note_the_page_owes_depends_on_where_it_was_opened(results: dict) -> None:
+    notes = {name: got["note"] for name, got in results["advice"].items()}
+    assert notes == {
+        "tailnet": "",  # (https, and a name a phone can open: nothing to say)
+        "lan_http": "http", "lan_name_http": "http",  # (a name or an address a phone can open, but not over https)
+        "loopback": "local", "localhost": "local", "subdomain_of_localhost": "local", "ipv6_loopback": "local",
+        "https_loopback": "local",  # (https does not make the computer's own address something a phone can open)
+        "lookalike": "",
+        "installed": "",
+    }

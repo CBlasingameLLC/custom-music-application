@@ -301,7 +301,7 @@ function WindowCard({ settings }) {
 
 function InstallCard() {
   const address = location.origin;
-  const { installed, local, secure } = installAdvice({ protocol: location.protocol, hostname: location.hostname, standalone: openedAsApp() });
+  const { installed, note } = installAdvice({ protocol: location.protocol, hostname: location.hostname, standalone: openedAsApp() });
   function copy() {
     navigator.clipboard?.writeText(address).then(() => toast('Address copied', 'success', 1800), () => toast('Select the address and copy it', 'info'));
   }
@@ -311,8 +311,8 @@ function InstallCard() {
         <input type="text" readonly value=${address} onFocus=${(e) => e.target.select()} aria-label="This server's address" />
         <${Button} icon="copy" onClick=${copy}>Copy<//>
       </span></label>
-    ${local && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address works only on the computer that runs the app. To use the app from a phone, the server has to be reached by a name or address the phone can open (the server guide, <code>packaging/linux/README.md</code>, shows how to do that with Tailscale).</span></p>`}
-    ${!local && !secure && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address is <code>http</code>, not <code>https</code>. A phone can still put it on its Home Screen, but it opens like a bookmark, and the page that says the server cannot be reached is not available. <code>tailscale serve</code> gives the server an <code>https</code> address.</span></p>`}
+    ${note === 'local' && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address works only on the computer that runs the app. To use the app from a phone, the server has to be reached by a name or address the phone can open (the server guide, <code>packaging/linux/README.md</code>, shows how to do that with Tailscale).</span></p>`}
+    ${note === 'http' && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address is <code>http</code>, not <code>https</code>. A phone can still put it on its Home Screen, but it opens like a bookmark, and the page that says the server cannot be reached is not available. <code>tailscale serve</code> gives the server an <code>https</code> address.</span></p>`}
     ${!installed && html`<${Fragment}>
       <h3 class="install-h">iPhone or iPad</h3>
       <ol class="steps">
