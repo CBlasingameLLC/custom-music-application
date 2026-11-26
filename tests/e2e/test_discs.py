@@ -588,12 +588,15 @@ def test_the_settings_card_sets_what_the_screen_starts_from(page, live, world) -
     card.get_by_label("MP3 quality").select_option("320")
     card.get_by_label("Accuracy").select_option("fast")
     expect(page.locator(".toast", has_text="Saved").first).to_be_visible()
+    # (the toast is the first save's: the other two may still be on their way to the server, which is what is read next)
+    wait_until(page, "fetch('/api/settings').then(r => r.json()).then(s => s.disc.rip_format === 'mp3' && s.disc.rip_mp3_quality === '320' && s.disc.rip_accuracy === 'fast')", 30)
     assert (live.ctx.config.disc.rip_format, live.ctx.config.disc.rip_mp3_quality, live.ctx.config.disc.rip_accuracy) == ("mp3", "320", "fast")
 
     open_discs(page)
     expect(page.get_by_label("Format")).to_have_value("mp3")
     expect(page.get_by_label("MP3 quality")).to_have_value("320")
     expect(page.get_by_label("Accuracy")).to_have_value("fast")
+    expect(page.locator(".sync-table .where").first).to_be_visible()  # (the page's own question, where the songs will go, is answered before the stand-in drive is taken away)
 
 
 def test_diagnostics_list_the_drives(page, live, world) -> None:
