@@ -130,7 +130,7 @@ def test_the_copies_of_a_folder_are_listed_newest_first_and_only_those(tmp_path:
     folder = tmp_path / "copies"
     for name, ago in (("library-20260101-000000.db", 300), ("library-20260102-000000.db", 100), ("library-20260103-000000.db", 200)):
         touch(folder, name, ago)
-    for stranger in ("notes.txt", "library-before-restore-20260101-000000.db", "library-2026.db", "library-20260101-000000.db.partial", "Library-20260101-000000.db", "xlibrary-20260101-000000.db"):
+    for stranger in ("notes.txt", "library-before-restore-20260101-000000.db", "library-2026.db", "library-20260101-000000.db.partial", "LIBRARY-20260109-000000.db", "xlibrary-20260101-000000.db"):  # (a different day in capitals: on a file system that does not tell capitals apart it would be the copy itself)
         touch(folder, stranger)
     (folder / "library-20260105-000000.db").mkdir()  # (a folder with such a name is no copy... and no file)
     assert [copy.path.name for copy in backup.listing(folder)] == ["library-20260102-000000.db", "library-20260103-000000.db", "library-20260101-000000.db"]
@@ -152,6 +152,7 @@ def test_a_copy_that_is_dated_ahead_of_the_clock_is_the_oldest_and_not_the_newes
         ("library-20260103-000000.db", now + backup.FUTURE_SLACK), ("library-20260101-000000.db", now - 1000), ("library-20260102-000000.db", 0.0)]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="on Windows scandir hands over the whole entry with the listing: there is no later call that can find the file gone")
 def test_a_copy_that_goes_from_the_folder_while_it_is_being_listed_is_not_in_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     folder = tmp_path / "copies"
     touch(folder, "library-20260101-000000.db")
