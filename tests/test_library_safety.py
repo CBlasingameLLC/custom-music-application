@@ -211,7 +211,7 @@ def test_a_new_library_folder_with_nothing_in_it_yet_is_available(tmp_path: Path
     fresh = tmp_path / "music"
     fresh.mkdir()
     web = build_web(tmp_path, fresh)
-    assert web.client.get("/healthz").json() == {"status": "ok", "version": __version__, "library": {"folders": 1, "available": 1}}
+    assert web.client.get("/healthz").json() == {"status": "ok", "version": __version__, "library": {"folders": 1, "available": 1}, "backups": "ok"}
     assert next(iter(web.client.get("/api/system/diagnostics").json()["library"]))["available"] is True
 
 

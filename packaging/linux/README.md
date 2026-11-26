@@ -16,6 +16,7 @@ you listed (see *Sign in with Tailscale*).
 |---|---|
 | The program | `/opt/musictoolkit/venv` |
 | Its data (config, database, logs, caches, the token file) | `/var/lib/musictoolkit` (owner `mtk`). Keep it on the system disk, not on the music drive |
+| Copies of the database | `/var/lib/musictoolkit/backups` (system disk) and `/srv/music/backups` (the music drive, another device): see *Back up the database* |
 | The music drive | mounted at `/srv/music`; the library is `/srv/music/library`; copy new music into `/srv/music/inbox` and let Organize files put it in place; conversions go to `/srv/music/exports` (never inside the library) |
 | The account it runs as | `mtk` (no login), in the group `music`, which the share that copies music over also uses |
 
@@ -23,7 +24,7 @@ you listed (see *Sign in with Tailscale*).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.13.0 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.14.0 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -66,17 +67,29 @@ allowed_hosts = ["musicpi.local"]
 - `tailscale_logins`: the Tailscale accounts that are signed in without the token (see *Sign in with Tailscale*). Empty: only the token signs a device in. It needs
   `host = "127.0.0.1"`, and the server refuses to start with it on any other address.
 
+```toml
+[database]
+backup_hours = 24
+backup_keep = 7
+backup_folders = ["/srv/music/backups"]
+```
+
+- `backup_hours`: a copy of the database by itself this often (0: none by itself). `backup_keep`: the newest this many copies are kept in each folder. `backup_folders`:
+  the folders besides `/var/lib/musictoolkit/backups` that get each copy. The server **refuses to start** with a value of the wrong kind, and says which. See
+  *Back up the database*.
+
 ## Run it as a service
 
 ```bash
 sudo cp packaging/linux/musictoolkit.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now musictoolkit
-curl -s http://127.0.0.1:4533/healthz        # {"status":"ok","version":"…","library":{"folders":1,"available":1}}
+curl -s http://127.0.0.1:4533/healthz        # {"status":"ok","version":"…","library":{"folders":1,"available":1},"backups":"ok"}
 journalctl -u musictoolkit -f                # what it says; the app's own log is /var/lib/musictoolkit/logs/musictoolkit.log
 ```
 
-`/healthz` needs no token and tells nothing but the version and whether the library folders are there (`"status":"degraded"` when the
-drive is not mounted): point a monitor at it.
+`/healthz` needs no token and tells nothing but the version, whether the library folders are there (`"status":"degraded"` when the
+drive is not mounted) and whether the copies of the database are being made (`"backups":"ok"`, `"off"`, or `"overdue"`, which also makes the status `degraded`):
+point a monitor at it.
 
 **The token.** At its first start the server makes a random token and keeps it in `/var/lib/musictoolkit/server.token` (readable by `mtk`
 only); it is never printed in a log. Show the link that signs a device in:
@@ -104,13 +117,49 @@ sudo journalctl --rotate && sudo journalctl --vacuum-time=1s   # forget the old 
 
 A monitor should ask `/healthz` (it needs no token); `/` answers `401` to a device that is not signed in, `HEAD` requests are answered like `GET`.
 
+## Back up the database
+
+The ratings, favorites, plays and playlists live only in `/var/lib/musictoolkit/data/library.db`, on the system disk. The music files can be copied over again from
+anywhere; the database cannot. The server copies it by itself once a day: a whole copy, looked over before it is kept, into `/var/lib/musictoolkit/backups` and into every
+folder of `backup_folders`. A copy on the system disk does not survive the system disk, so put one on the music drive, which is another device:
+
+```bash
+sudo install -d -o mtk -g music -m 2775 /srv/music/backups   # the server never makes this folder itself: a drive that is not mounted is not a place to make one
+sudoedit /var/lib/musictoolkit/config.toml                    # [database] backup_folders = ["/srv/music/backups"]  (the example config has it)
+sudo systemctl restart musictoolkit                           # a first copy is made a minute after the start
+sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml backup now        # a copy now: says where each copy went, and why a folder failed
+```
+
+A copy is the size of the database (96 MB for 100,000 songs and 300,000 plays), and each folder keeps the newest `backup_keep` (7) and touches nothing else in it. A folder that is
+not there (the drive is not mounted) is skipped, said in the journal, and given the newest copy within the hour after it is back.
+
+- **See them.** `mtk backup list`, or Settings, *Data*, in the app: each folder, how many copies, how big, and how long ago the newest was made. `mtk backup check FILE` says
+  whether a copy is sound and what it holds: `…db: sound. 100,000 songs, 300,000 plays, 4 playlists, 812 favorites. Layout 16 (this app's is 16).`
+- **A monitor.** `/healthz` has `"backups":"overdue"` (and `"status":"degraded"`) when any folder has had no copy newer than three times `backup_hours`, a folder that is not
+  there included: that is a copy you asked for and are not getting.
+- **Put one back** (the file was damaged, a change went wrong, the disk was replaced):
+
+  ```bash
+  sudo systemctl stop musictoolkit
+  sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml backup list
+  sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml backup restore /srv/music/backups/library-20261126-030000.db            # says what it would do, and changes nothing
+  sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml backup restore /srv/music/backups/library-20261126-030000.db --yes
+  sudo systemctl start musictoolkit
+  ```
+
+  What the database held before is first kept as `library-before-restore-….db` in `/var/lib/musictoolkit/backups` (pruning never takes it away), so a restore can be undone by
+  restoring that. A copy that is damaged, is not this app's database, or was made by a newer version of the app is refused, and nothing is changed. With a new system disk:
+  install the server, copy the config over, and run the restore: it makes the database.
+- **Away from the house too.** The Pi and its drive are in the same room, so now and then copy the newest file to another computer, for example from a Mac or a PC on the
+  tailnet: `rsync -a you@musicpi.tail1234.ts.net:/srv/music/backups/ ~/musicpi-backups/` (the copies hold what you listened to, so they can be read by `mtk` and the group `music` only: your account on the Pi has to be in that group).
+
 ## A server that runs `mtk dashboard` (0.9.0 and earlier)
 
 `mtk dashboard` is the desktop app's server: it listens on this computer only, makes the token it is given in `MTK_TOKEN`, and (up to 0.10.0) **printed the
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.13.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.14.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -271,6 +320,8 @@ The ids an app shows are the server's own and mean nothing outside it.
 | `Cannot start the server: it would listen on 0.0.0.0 ... allowed_hosts is empty` | Listening beyond this computer needs the names; see Configure |
 | `/healthz` says `degraded`; "The library's drive is not available right now" | The music drive is not mounted. Songs are not forgotten: they play again when it is back |
 | A scan reports `1 folder(s) not found` | The same thing; the scan skips a folder that is not there or is empty while the library has songs in it |
+| `/healthz` says `"backups":"overdue"` and `degraded` | A folder has had no new copy of the database for three times `backup_hours`. `journalctl -u musictoolkit \| grep "Copy of the database"` says why for each folder, and Settings, *Data*, marks it. `the folder is not there (is the drive connected?)`: the drive is not mounted, or the name in `backup_folders` is wrong, or the folder was never made (see *Back up the database*). `Permission denied`: `mtk` cannot write there (group `music`, mode `2775`). `No space left on device`: the disk is full |
+| `Cannot start the server: [database] backup_keep must be a whole number, 1 or more.` (or `backup_hours`, `backup_folders`) | The setting is of the wrong kind; the message says which and how it should be written. The server does not start rather than go without the copies you asked for |
 
 ## Update
 
@@ -281,4 +332,4 @@ sudo /opt/musictoolkit/venv/bin/pip install --upgrade .
 sudo systemctl start musictoolkit
 ```
 
-The database is brought up to date by the new version when it starts. Back it up first from the app (Settings, Back up database).
+The database is brought up to date by the new version when it starts. Make a copy first (the copy is made whole, and checked): `sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config.toml backup now`.

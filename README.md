@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.13.0)
+## What it does (v0.14.0)
 
 | Area | Features |
 |---|---|
@@ -45,6 +45,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Convert** | Make copies of songs in another format, for a car, a phone or a player that wants one: **MP3** (320, 256, 192 or 128 kbps), **Ogg Vorbis**, **Opus**, **FLAC** or **WAV**. Choose the music as for a device (the whole library, favorites, a playlist, a genre, a rating, recently added), preview what happens to every song, and the copies go to a folder of your own, never into the library. Tags and cover come along, a song that is already in the format is copied as it is, and a whole batch can be undone. See below |
 | **Accounts** | ListenBrainz, Last.fm and MusicBrainz, each with a **Test connection** button. Plays from the app are sent to ListenBrainz in the background when you turn that on |
 | **Diagnostics** | Settings, Diagnostics checks the library, folders, drives, accounts and media keys and writes a report to copy when something does not work (never includes tokens or keys) |
+| **Backups** | The ratings, favorites, play history and playlists live only in the library database, so the app copies it by itself: a whole, checked copy every day, the newest 7 kept, in the app's own folder and in any other folders you name (the music drive of a server, a second disk). Settings lists the copies and how old they are, and has a button for one now; `mtk backup check` looks a copy over, and `mtk backup restore` puts one back and keeps what was there. A server's health check says when the copies have stopped. See below |
 | **Look** | Dark and light themes, an accent colour (eight presets or any colour you pick; the colours derived from it are always kept readable, at least 4.5:1), comfortable or compact density, responsive down to a narrow window. Settings, Appearance |
 | **Accessibility** | Everything can be done from the keyboard (a skip link, dialogs that keep the focus, menus and tables you walk with the arrow keys), screens are labelled for screen readers and say which page you moved to, text meets WCAG AA contrast in both themes, and the app follows Windows' *reduce motion*, *more contrast* and high-contrast themes. Checked automatically with axe on every screen; see below |
 | **Library tools** | Everything that changes your files shows a preview first, runs as a job with progress and a Cancel button, and can be undone. See below |
@@ -358,6 +359,7 @@ defaults to a dry run; pass `--apply` to execute.
 | `mtk dashboard [--port N]` | Start the UI (what the desktop app runs). At a terminal it prints the link that includes the per-launch token; anywhere else (a log, a service's journal) it prints no token |
 | `mtk serve [--host H] [--port N]` | Run the app as a server for other devices until stopped (see Server mode). Needs `[server] allowed_hosts` to listen beyond this computer |
 | `mtk token [--url https://NAME]` | Show the server's token, or the link to open once on each device |
+| `mtk backup now \| list \| check FILE \| restore FILE [--yes]` | Copies of the database: make one in every folder now, list them, say whether a copy is sound and what it holds, put one back (it says what it would do unless `--yes`, and keeps what the database held) |
 | `mtk library reroot --from D:\Music --to /srv/music/library [--apply] [--update-config]` | Tell the database where the library is now after it was copied (dry run unless `--apply`; a copy of the database is kept) |
 | `mtk scan <path> [--force]` | Scan a folder into the library database. A folder that is not there, or is empty while the library has songs in it (a drive that is not mounted), is refused unless `--force` |
 | `mtk tag <path> [--apply]` | Enrich sparse tags via MusicBrainz (the app's Fix missing tags page does this with review and undo) |
@@ -375,11 +377,36 @@ defaults to a dry run; pass `--apply` to execute.
 `~/.musictoolkit/` (`%USERPROFILE%\.musictoolkit\` on Windows)
 
 - `config.toml`: settings (edited from the app's Settings page)
-- `data/library.db`: the library database (SQLite). Settings has a **Back up database** button
+- `data/library.db`: the library database (SQLite): the ratings, favorites, play history and playlists are only here
+- `backups/`: copies of the database, `library-YYYYmmdd-HHMMSS.db`, one a day and the newest 7 kept (see *Copies of the database*); `library-before-restore-…db` is what the database held before a restore
 - `cache/art/`, `cache/radio/`, `cache/podcasts/`: cached pictures (safe to delete)
 - `cache/discs/`: the temporary copy of the song being ripped, and the converted songs of a music CD being burned (empty unless a rip or a burn is running or was cut short)
 - `cache/convert/`: the temporary WAV of a song Windows decoded for a conversion, removed as soon as that song is done (empty unless a conversion is running or was cut short)
 - `logs/`: `musictoolkit.log` (the app), `backend.log` (startup output) and `updater.log` (update checks)
+
+## Copies of the database
+
+The ratings, favorites, play history, playlists, followed podcasts and saved stations live only in `data/library.db`. The songs can be copied over again from
+anywhere; these cannot. So the app copies the database by itself, and is careful about what a copy is:
+
+- **When, where, how many.** `[database] backup_hours` (24) is how old the newest copy may get; a minute after the app starts, and then every minute it looks, it
+  makes a new one if none is that new. The age is the date of the file, so restarting the app does not start the count again, and `0` turns the copies by themselves
+  off (the Settings button and `mtk backup now` still make one). A copy goes into `backups/` next to `config.toml` and into every folder of `[database] backup_folders`
+  (`["D:/Backups"]`, or on a server the music drive: the database is on the system disk, and a copy on the same disk does not survive the disk). Each folder keeps the
+  newest `backup_keep` (7) copies and nothing else in it is touched. A folder that is not there (a drive that is not connected) is skipped and said in the log, never made;
+  when the drive is back, it is given the newest copy as it is, within the hour (a minute after the app is started).
+- **Whole and checked.** A copy is made with SQLite's own online backup, so it holds what the app has written and the app goes on working while it is made. It is looked over
+  (`PRAGMA quick_check`) before it is given its name, written under another name and renamed (a power cut leaves no half-copy that looks whole), and a copy that goes
+  to another folder is read back and compared. It is one file by itself, and it holds what you listened to, so on Linux and macOS it is readable by its owner and the
+  group and not by everyone on the computer.
+- **How big.** A copy is the size of the database: 96 MB for a library of 100,000 songs and 300,000 plays (the one `scripts/perf_synthetic.py` makes), which takes
+  0.6 s to copy into two folders on the machine it was tried on. Seven of them in each folder are 7 times that.
+- **Looking at them.** Settings, Data, lists each folder (how many copies, how big, how long ago the newest was made), says when a folder has had no new copy for three
+  times `backup_hours` and what went wrong the last time. `mtk backup list` says the same in a terminal; `mtk backup check FILE` says whether a copy is sound and what it holds
+  (songs, plays, playlists, favorites). A server's `/healthz` has `"backups": "ok"`, `"off"` or `"overdue"` (and is `degraded` when overdue), for a monitor.
+- **Putting one back.** Stop the app. `mtk backup restore FILE` says what it would do and changes nothing; with `--yes` the copy becomes the database. A copy that is damaged,
+  is not this app's database, or was made by a newer version of the app is refused. What the database held before is first kept as `library-before-restore-…db` beside
+  the copies (pruning never takes it away), so a restore can be undone by restoring that. Start the app again: it keeps some of what it has read (statistics, mixes) until it is.
 
 ## Server mode (a Raspberry Pi, or any Linux computer)
 
@@ -401,8 +428,10 @@ drive attached. The step-by-step guide, the systemd service and an example confi
   a program on the network could write the header and be anyone), and a page of another site cannot use the identity of the person whose browser it runs in (the
   browser says where a request came from; a browser too old to say is not believed). A request that came through Tailscale Funnel (the public internet) is
   refused outright. The sign-in page shows which account Tailscale sees and the line to add; Settings, *How this device signs in*, says how a device got in.
-- **`/healthz`** answers without a token with the version and whether the library folders are there (`ok` or `degraded`), for a monitor (`HEAD` works too,
-  here and on every page and song).
+- **`/healthz`** answers without a token with the version, whether the library folders are there (`ok` or `degraded`) and whether the copies of the database are
+  being made (`"backups": "ok"`, `"off"`, or `"overdue"`, which also makes the status `degraded`), for a monitor (`HEAD` works too, here and on every page and song).
+- **Copies of the database** are made by themselves (see above); on a server, put one more place for them on the music drive with `backup_folders`, and see
+  [`packaging/linux/`](packaging/linux/README.md) for the folder to make, `mtk backup`, and how to restore on the Pi.
 - **A file that is only tags** (an MP3 with no audio frames, an empty file) is found by the scan, listed with a **No audio** mark and counted apart from errors,
   and is left out of queues, mixes and what is copied to a device, instead of being a traceback in the log and a "can't play" at every shuffle.
 - **A drive that is not mounted** is never taken for "every song was deleted": a scan skips a library folder that is not there, or is empty while the

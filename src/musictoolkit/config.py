@@ -57,6 +57,10 @@ class SyncConfig:
 @dataclass
 class DatabaseConfig:
     path: str = field(default_factory=lambda: str(default_data_dir() / "data" / "library.db"))
+    # Copies of the database (ratings, favorites, plays, playlists live only in it): see backup.py. The app's own folder for them is `backups`, beside config.toml.
+    backup_hours: float = 24  # a copy by itself this often (0: none by itself; the button and `mtk backup now` still make one)
+    backup_keep: int = 7  # how many of the newest copies each folder keeps
+    backup_folders: list[str] = field(default_factory=list)  # more folders to put each copy in: the music drive is another device than the one the database is on
 
 
 @dataclass
@@ -188,6 +192,8 @@ def load_config(path: Path | str | None = None) -> Config:
     base_dir = resolved.absolute().parent
     database = _section(DatabaseConfig, raw.get("database", {}))
     database.path = _anchor_to(base_dir, database.path)
+    if isinstance(database.backup_folders, list):  # (a setting that is not a list is said so when the copies are made)
+        database.backup_folders = [_anchor_to(base_dir, folder) if isinstance(folder, str) and folder.strip() else folder for folder in database.backup_folders]
     logging_cfg = _section(LoggingConfig, raw.get("logging", {}))
     logging_cfg.dir = _anchor_to(base_dir, logging_cfg.dir)
 

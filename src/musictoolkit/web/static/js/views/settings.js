@@ -491,9 +491,33 @@ function AppearanceCard() {
   <//>`;
 }
 
+/** What the list of copies says, one row each as [ok, label, detail]: how often, what each folder holds, whether they are late, and what went wrong last time. */
+function backupRows(status) {
+  const when = (iso) => { const ms = Date.parse(iso); return Number.isFinite(ms) ? fmt.ago(ms / 1000) : 'a while ago'; };
+  const rows = [[null, 'Schedule', status.hours > 0
+    ? `${status.hours === 1 ? 'Every hour' : `Every ${status.hours} hours`}. The newest ${status.keep} are kept in each folder.`
+    : `Off: a copy is made only when you press the button. The newest ${status.keep} are kept in each folder.`]];
+  status.folders.forEach((folder, index) => {
+    const label = index === 0 ? "App's folder" : 'Another folder';
+    if (folder.copies) rows.push([true, label, `${folder.folder}: ${fmt.plural(folder.copies, 'copy', 'copies')}, ${fmt.bytes(folder.size)}. The newest was made ${when(folder.newest)}.`]);
+    else if (index > 0 && !folder.there) rows.push([false, label, `${folder.folder}: the folder is not there. Is the drive connected?`]);
+    else rows.push([null, label, `${folder.folder}: no copy yet.`]);
+  });
+  if (status.overdue) rows.push([false, 'Late', 'At least one folder has no copy newer than three times the time between copies. Press the button; if that does not help, the activity log says why.']);
+  const missing = new Set(status.folders.filter((folder, index) => index > 0 && !folder.there).map((folder) => folder.folder));  // (said by the folder's own row)
+  (status.last?.problems || []).filter((p) => !missing.has(p.folder)).forEach((p) => rows.push([false, 'Last copy', `${p.folder}: ${p.problem}`]));
+  return rows;
+}
+
 function DataCard({ about }) {
+  const { data: copies, reload } = useAsync(() => api('/system/backups'), []);
   async function backup() {
-    try { const result = await api('/system/backup', { method: 'POST' }); toast(`Backup saved: ${result.path}`, 'success', 9000); } catch (error) { notifyError(error); }
+    try {
+      const result = await api('/system/backup', { method: 'POST' });
+      toast(result.copies.length > 1 ? `Backup saved in ${result.copies.length} places. The first: ${result.path}` : `Backup saved: ${result.path}`, 'success', 9000);
+      result.problems.forEach((p) => toast(`Not saved in ${p.folder}: ${p.problem}`, 'error', 12000));
+    } catch (error) { notifyError(error); }
+    reload();
   }
   return html`<${Card} icon="drive" title="Data">
     ${about && html`<dl class="info-grid">
@@ -502,6 +526,8 @@ function DataCard({ about }) {
       <dt>Library database</dt><dd class="path">${about.db_path} (${fmt.bytes(about.db_size)})</dd>
     </dl>`}
     <p class="subtle">Your play history, playlists, ratings and favorites live only in the library database. Your music files are separate.</p>
+    ${copies && html`<ul class="diag-list" aria-label="Copies of the database">${backupRows(copies).map(([ok, label, detail], i) => html`<li class="diag ${ok === true ? 'ok' : ok === false ? 'bad' : ''}" key=${i}>
+      <${Icon} name=${ok === true ? 'check' : ok === false ? 'alert' : 'info'} size=${15} /><strong>${label}</strong><span>${detail}</span></li>`)}</ul>`}
     <div class="row-actions">
       <${Button} icon="download" onClick=${backup}>Back up the database now<//>
       <${Button} icon="list" onClick=${() => openModal({ title: 'Activity log', width: 820, render: () => html`<${LogViewer} />` })}>View the activity log<//>

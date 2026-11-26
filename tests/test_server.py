@@ -286,7 +286,7 @@ def test_the_health_check_needs_no_token_but_does_need_a_known_name(tmp_path: Pa
     web = build_web(tmp_path, music_dir, token=TOKEN, allowed_hosts=["musicpi.local"])
     answer = web.client.get("/healthz")
     assert answer.status_code == 200
-    assert answer.json() == {"status": "ok", "version": __version__, "library": {"folders": 1, "available": 1}}
+    assert answer.json() == {"status": "ok", "version": __version__, "library": {"folders": 1, "available": 1}, "backups": "ok"}
     assert web.client.get("/healthz", headers={"host": "musicpi.local"}).status_code == 200
     assert web.client.get("/healthz", headers={"host": "evil.example"}).status_code == 403
     assert web.client.get("/api/about").status_code == 401  # (the rest still wants the token)
@@ -296,7 +296,7 @@ def test_the_health_check_says_degraded_when_a_library_folder_is_not_there_and_n
     web = build_web(tmp_path, music_dir)
     web.config.library.roots.append(str(tmp_path / "unplugged" / "Secret Folder"))
     answer = web.client.get("/healthz")
-    assert answer.json() == {"status": "degraded", "version": __version__, "library": {"folders": 2, "available": 1}}
+    assert answer.json() == {"status": "degraded", "version": __version__, "library": {"folders": 2, "available": 1}, "backups": "ok"}
     assert "Secret Folder" not in answer.text and str(music_dir) not in answer.text
 
 

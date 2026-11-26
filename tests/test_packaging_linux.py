@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import configparser
+import tomllib
 from pathlib import Path
 
-from musictoolkit import __version__
+from musictoolkit import __version__, backup
 from musictoolkit import server as server_ops
 from musictoolkit.config import load_config
 
@@ -49,6 +50,17 @@ def test_the_service_may_write_only_the_music_and_its_own_data() -> None:
     config = load_config(PACKAGING / "config.example.toml")
     assert all(any(root == place or root.startswith(place + "/") for place in writable) for root in config.library.roots)  # (the library is inside what it may write)
     assert service["ExecStart"].split()[2] == "/var/lib/musictoolkit/config.toml"  # (so the data folder, which holds the config, the database and the token, is the second)
+
+
+def test_the_example_config_puts_copies_of_the_database_on_the_music_drive_where_the_service_may_write_and_the_guide_says_how_to_make_the_folder() -> None:
+    raw = tomllib.loads((PACKAGING / "config.example.toml").read_text(encoding="utf-8"))["database"]  # (as written: a load would make a path of the platform's kind)
+    assert (raw["backup_hours"], raw["backup_keep"], raw["backup_folders"]) == (24, 7, ["/srv/music/backups"])
+    backup.settings_of(load_config(PACKAGING / "config.example.toml").database)  # (and is a setting the server starts with)
+    writable = _unit()["Service"]["ReadWritePaths"].split()
+    assert all(any(folder == place or folder.startswith(place + "/") for place in writable) for folder in raw["backup_folders"])  # (the music drive: inside what it may write)
+    make = "sudo install -d -o mtk -g music -m 2775 /srv/music/backups"
+    assert make in (PACKAGING / "config.example.toml").read_text(encoding="utf-8") and make in (PACKAGING / "README.md").read_text(encoding="utf-8")
+    assert _unit()["Service"]["SupplementaryGroups"] == "music"  # (the group the folder is made for)
 
 
 def test_the_example_environment_file_has_an_empty_token_and_says_how_to_make_one() -> None:

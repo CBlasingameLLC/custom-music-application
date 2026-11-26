@@ -7,6 +7,13 @@ contact = ""                        # your email or a project address: MusicBrai
 
 [database]
 path = "./data/library.db"          # keep it on the system disk, not on the music drive
+# The ratings, favorites, plays and playlists live only in this database. A whole, checked copy of it is made by itself every backup_hours, in /var/lib/musictoolkit/backups
+# and in each folder of backup_folders. Put one on the music drive (another device than the database), made first:
+#   sudo install -d -o mtk -g music -m 2775 /srv/music/backups
+# A folder that is not there (the drive is not mounted) is skipped and said in the log, never made.
+backup_hours = 24                   # 0: none by itself (the button in Settings and `mtk backup now` still make one)
+backup_keep = 7                     # the newest this many copies are kept in each folder
+backup_folders = ["/srv/music/backups"]
 
 [logging]
 level = "INFO"

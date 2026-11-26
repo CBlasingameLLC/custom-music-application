@@ -2,11 +2,13 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import typer
 
+from musictoolkit import backup as backup_ops
 from musictoolkit import server as server_ops
 from musictoolkit.config import Config, bootstrap_if_missing, load_config, resolve_config_path, save_config
 from musictoolkit.db.connection import connect
@@ -405,6 +407,7 @@ def serve(
         number = server_ops.check_port(port if port is not None else settings.port)
         names = server_ops.allowed_names(bind, settings.allowed_hosts)
         logins = server_ops.tailscale_logins(bind, settings.tailscale_logins)
+        server_ops.backup_settings(cfg.database)
         token, source = server_ops.server_token(_data_dir(), os.environ)
     except server_ops.ServeError as error:
         typer.echo(f"Cannot start the server: {error}", err=True)
@@ -451,6 +454,88 @@ def token(
     except server_ops.ServeError as error:
         typer.echo(f"{error}", err=True)
         raise typer.Exit(1) from None
+
+
+backup_app = typer.Typer(help="Copies of the database (the ratings, favorites, plays and playlists live only in it).", no_args_is_help=True)
+app.add_typer(backup_app, name="backup")
+
+
+def _backup_places() -> tuple[Path, Path, backup_ops.Settings]:
+    """The database, the app's own folder for copies, and the settings (a setting that is wrong is said, and nothing is done)."""
+    cfg: Config = state["config"]  # type: ignore[assignment]
+    try:
+        settings = backup_ops.settings_of(cfg.database)
+    except backup_ops.BackupError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(2) from None
+    return Path(str(state["db_path"] or cfg.database.path)), _data_dir() / "backups", settings
+
+
+def _size(number: int) -> str:
+    return f"{number / 1e6:,.1f} MB"
+
+
+def _holds(counts: dict[str, int]) -> str:
+    return ", ".join(f"{count:,} {name if count != 1 else name[:-1]}" for name, count in counts.items())  # (songs, plays, playlists, favorites: and "1 song")
+
+
+@backup_app.command("now")
+def backup_now() -> None:
+    """Make a copy of the database now: in the app's backups folder, and in each folder that backup_folders in config.toml names."""
+    db_path, primary, settings = _backup_places()
+    outcomes = backup_ops.run(db_path, primary, settings.folders, settings.keep)
+    for outcome in outcomes:
+        if outcome.problem:
+            typer.echo(f"  {outcome.folder}: {outcome.problem}", err=True)
+        else:
+            typer.echo(f"  {outcome.path}  ({_size(outcome.size)}; {outcome.pruned} older taken away)")
+    if any(outcome.problem for outcome in outcomes):
+        raise typer.Exit(1)
+
+
+@backup_app.command("list")
+def backup_list() -> None:
+    """The copies there are, newest first, in each folder."""
+    _db_path, primary, settings = _backup_places()
+    for folder in (primary, *settings.folders):
+        typer.echo(f"{folder}" + ("" if folder.is_dir() else "   (the folder is not there)"))
+        for copy in backup_ops.listing(folder):
+            typer.echo(f"  {copy.path.name}  {_size(copy.size):>10}  {datetime.fromtimestamp(copy.made):%Y-%m-%d %H:%M}" if copy.made else f"  {copy.path.name}  {_size(copy.size):>10}  (dated in the future)")
+
+
+@backup_app.command("check")
+def backup_check(file: Path = typer.Argument(..., help="A copy of the database")) -> None:
+    """Whether a copy is sound, and what it holds (songs, plays, playlists, favorites)."""
+    report = backup_ops.check(file)
+    if not report.ok:
+        typer.echo(f"{file}: {report.problem}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"{file}: sound. {_holds(report.counts)}. Layout {report.schema} (this app's is {backup_ops.latest_schema()}).")
+
+
+@backup_app.command("restore")
+def backup_restore(
+    file: Path = typer.Argument(..., help="A copy of the database"),
+    yes: bool = typer.Option(False, "--yes", help="Do it: without this it only says what it would do"),
+) -> None:
+    """Put a copy back as the database. What the database holds now is kept first, beside the copies (library-before-restore-...).
+
+    Stop the app first, and start it again after: it keeps some of what it has read (statistics, mixes) until it is restarted."""
+    db_path, primary, _settings = _backup_places()
+    report = backup_ops.check(file)
+    if not report.ok:
+        typer.echo(f"{file} cannot be restored: {report.problem}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"{file} holds {_holds(report.counts)}. It would replace {db_path}.")
+    if not yes:
+        typer.echo("Nothing was changed. Add --yes to do it (what is in the database now is kept first).")
+        raise typer.Exit(1)
+    try:
+        kept = backup_ops.restore(file, db_path, primary)
+    except backup_ops.BackupError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"Done. {'What was there is kept in ' + str(kept) + '. ' if kept else ''}Start the app again (the server: sudo systemctl restart musictoolkit).")
 
 
 library_app = typer.Typer(name="library", help="Look after the library's database.", no_args_is_help=True)
