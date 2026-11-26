@@ -12,6 +12,9 @@ must not be able to drive it):
   * a token that someone typed, followed in a link or sent from a program is
     counted when it is wrong, and after a few wrong ones none is looked at for
     a minute. A device that is already signed in is not affected;
+  * a server that is told which Tailscale accounts to trust (`tailscale_logins`, behind
+    `tailscale serve`) signs those in without the token, and refuses what came
+    through Tailscale Funnel: see tailnet.py;
   * the app's own files (/static, and /sw.js, which an installed app needs from
     the root) hold nothing private and are sent to anyone who asks, the way a
     browser asks for them before it has a cookie.
@@ -63,6 +66,7 @@ from musictoolkit.web.routers import (
 )
 from musictoolkit.net.proxy import Slots
 from musictoolkit.radio.hub import RadioHub
+from musictoolkit.web import tailnet
 from musictoolkit.web.hosts import LOOPBACK_HOSTS, clean_names, hostname_of
 from musictoolkit.web.podcast_job import PodcastSchedule
 from musictoolkit.web.radar_job import RadarSchedule
@@ -117,10 +121,14 @@ def create_app(
     allowed_hosts: Iterable[str] = (),
     login_days: int = 0,
     rescan_hours: float = 0,
+    tailscale_logins: Iterable[str] = (),
 ) -> FastAPI:
     """`allowed_hosts`: the names besides the loopback ones that this app answers to (a server's). `login_days`: how long the cookie
-    that the token buys lasts (0: until the browser window is closed). `rescan_hours`: look for new songs by itself this often (0: never)."""
+    that the token buys lasts (0: until the browser window is closed). `rescan_hours`: look for new songs by itself this often (0: never).
+    `tailscale_logins`: the Tailscale accounts that are signed in without the token, on Tailscale's word (a server that listens on
+    this computer only, behind `tailscale serve`: `mtk serve` checks that before it passes the list on)."""
     answers_to = LOOPBACK_HOSTS | set(clean_names(allowed_hosts))
+    logins = frozenset(tailnet.clean_logins(tailscale_logins))
     ctx = AppContext(
         db_path=Path(db_path).absolute(), config_path=Path(config_path).absolute(), config=config, token=token
     )
@@ -159,8 +167,22 @@ def create_app(
     app.state.ctx = ctx
     limiter = app.state.limiter = GuessLimiter()
 
+    def signed_in_by(request: Request) -> str | None:
+        """How the cookie signed this device in: "token", "tailscale" (a login that is still on the list), or None (no cookie, or one that
+        is no good any more: another token's, or a login that was taken off the list). Only asked where there is a token."""
+        cookie = request.cookies.get(COOKIE_NAME, "")
+        if same_token(cookie, ctx.token):
+            return "token"
+        if tailnet.cookie_login(cookie, ctx.token, logins):
+            return "tailscale"
+        return None
+
     def signed_in(request: Request) -> bool:
-        return same_token(request.cookies.get(COOKIE_NAME, ""), ctx.token)  # (only asked where there is a token)
+        return signed_in_by(request) is not None
+
+    def seen(request: Request) -> tailnet.Seen:
+        """What Tailscale says about the device that made the request (nothing, unless this server runs behind `tailscale serve`)."""
+        return tailnet.look(request.headers, logins)
 
     def try_token(candidate: str) -> tuple[bool, int]:
         """(is it the token, seconds before the next try). A wrong one is counted; while too many have been wrong none is looked at."""
@@ -171,39 +193,56 @@ def create_app(
         limiter.wrong()
         return False, 0
 
-    def give_cookie(response: Response, request: Request) -> Response:
+    def give_cookie(response: Response, request: Request, value: str | None = None) -> Response:
         response.set_cookie(
-            COOKIE_NAME, ctx.token, httponly=True, samesite="strict", path="/",
+            COOKIE_NAME, value or ctx.token, httponly=True, samesite="strict", path="/",
             secure=request.url.scheme == "https",  # (a browser keeps a Secure cookie only from an https page: uvicorn reports https when a proxy on this machine says so)
             max_age=login_days * 86400 if login_days > 0 else None,
         )
         return response
 
-    def asking(status: int, problem: str = "", wait: int = 0) -> HTMLResponse:
+    def sign_in_as(response: Response, request: Request, login: str) -> Response:
+        """The cookie of a device that Tailscale vouched for (made from the token and the login: see tailnet.session_cookie)."""
+        return give_cookie(response, request, tailnet.session_cookie(ctx.token, login))
+
+    def asking(request: Request, status: int, problem: str = "", wait: int = 0) -> HTMLResponse:
         """The page with the box for the token (401), or the same page saying to wait (429)."""
         headers = {"Cache-Control": "no-store", **({"Retry-After": str(wait)} if wait else {})}
-        return HTMLResponse(sign_in_page(problem=problem, login_days=login_days), status_code=status, headers=headers)
+        said = seen(request)
+        page = sign_in_page(
+            problem=problem, login_days=login_days, tailscale_login=said.login, tailscale_on=bool(logins), tailscale_allowed=said.allowed
+        )
+        return HTMLResponse(page, status_code=status, headers=headers)
 
     def too_many(wait: int) -> str:
         return f"Too many wrong tokens. Try again in {wait} seconds."
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
+        if tailnet.through_funnel(request.headers):  # (Tailscale marks a request that came from the public internet: this server is for a private network)
+            return JSONResponse({"detail": "this server is not available through Tailscale Funnel"}, status_code=403)
         if hostname_of(request.headers.get("host", "")) not in answers_to:
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
+        vouched_for: str | None = None  # the login that Tailscale vouched for, when that is what lets this request in: it gets the cookie
         if ctx.token and request.url.path.startswith("/api/") and not signed_in(request):
-            offered = request.headers.get("x-mtk-token")  # (a program: the desktop shell, a script)
-            right, pause = try_token(offered) if offered else (False, 0)
-            if not right:
-                refused = JSONResponse(
-                    {"detail": f"too many wrong tokens: try again in {pause} seconds" if pause else "unauthorized"},
-                    status_code=429 if pause else 401,
-                    headers={"Retry-After": str(pause)} if pause else None,
-                )
-                if request.cookies.get(COOKIE_NAME):  # the cookie of a token that was changed since: have the browser drop it
-                    refused.delete_cookie(COOKIE_NAME, path="/")
-                return refused
+            said = seen(request)
+            if said.vouched:
+                vouched_for = said.login
+            else:
+                offered = request.headers.get("x-mtk-token")  # (a program: the desktop shell, a script)
+                right, pause = try_token(offered) if offered else (False, 0)
+                if not right:
+                    refused = JSONResponse(
+                        {"detail": f"too many wrong tokens: try again in {pause} seconds" if pause else "unauthorized"},
+                        status_code=429 if pause else 401,
+                        headers={"Retry-After": str(pause)} if pause else None,
+                    )
+                    if request.cookies.get(COOKIE_NAME):  # the cookie of a token that was changed since: have the browser drop it
+                        refused.delete_cookie(COOKIE_NAME, path="/")
+                    return refused
         response = await call_next(request)
+        if vouched_for is not None:
+            sign_in_as(response, request, vouched_for)
         response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -227,13 +266,15 @@ def create_app(
             if token and same_token(token, ctx.token):  # (the link was opened again: the cookie is renewed)
                 return give_cookie(page, request)
             return page
+        if (said := seen(request)).vouched:  # (Tailscale says who this is, and the server signs that account in: no token is asked for or counted)
+            return sign_in_as(page, request, said.login)
         if not token:
-            return asking(401)
+            return asking(request, 401)
         right, pause = try_token(token)
         if pause:
-            return asking(429, too_many(pause), pause)
+            return asking(request, 429, too_many(pause), pause)
         if not right:
-            return asking(401, "That is not the token.")
+            return asking(request, 401, "That is not the token.")
         return give_cookie(page, request)
 
     @app.get("/signin", include_in_schema=False)
@@ -248,12 +289,25 @@ def create_app(
             return RedirectResponse("/", status_code=303)
         if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):  # (a form on another site guessing tokens through this browser)
             return JSONResponse({"detail": "a sign-in has to be made from this app's own page"}, status_code=403)
+        if (said := seen(request)).vouched:
+            return sign_in_as(RedirectResponse("/", status_code=303), request, said.login)
         right, pause = try_token(token)
         if pause:
-            return asking(429, too_many(pause), pause)
+            return asking(request, 429, too_many(pause), pause)
         if not right:
-            return asking(401, "That is not the token.")
+            return asking(request, 401, "That is not the token.")
         return give_cookie(RedirectResponse("/", status_code=303), request)
+
+    @app.get("/api/session", include_in_schema=False)
+    def session(request: Request) -> dict:
+        """How this device is signed in, and what Tailscale says about it (for Settings): `by` is "token", "tailscale" or "open" (the app has
+        no token). `tailscale.login` is the login Tailscale put in this very request: the person's own, shown to the person."""
+        said = seen(request)
+        if not ctx.token:
+            by = "open"
+        else:
+            by = signed_in_by(request) or ("tailscale" if said.vouched else None)
+        return {"by": by, "tailscale": {"on": bool(logins), "login": said.login, "allowed": said.allowed, "own_page": said.own_page}}
 
     @app.get("/sw.js", include_in_schema=False)
     def service_worker() -> Response:

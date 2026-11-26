@@ -1,12 +1,12 @@
 // Settings: music folders, accounts, folder layouts, appearance, data.
-import { api, fmt, Fragment, html, useEffect, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, useAsync, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
 import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 import { checkForNewEpisodes } from '../podcasts.js';
-import { installAdvice, openedAsApp } from '../install.js';
+import { installAdvice, openedAsApp, signInAdvice } from '../install.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -317,7 +317,7 @@ function InstallCard() {
       <h3 class="install-h">iPhone or iPad</h3>
       <ol class="steps">
         <li>Put the Tailscale app on the phone and sign in to the account the server is on.</li>
-        <li>Open this address in Safari and sign in (with the sign-in link, or by pasting the token).</li>
+        <li>Open this address in Safari. If the page asks for the token, sign in with the sign-in link or paste the token (a server that signs in your Tailscale account does not ask: see below).</li>
         <li>Press Share, then <strong>Add to Home Screen</strong>.</li>
         <li>Open <strong>Music Kit</strong> from the Home Screen. It stays signed in. If it says it cannot reach the server, open the Tailscale app and check that it is connected.</li>
       </ol>
@@ -328,6 +328,35 @@ function InstallCard() {
       </ol>
     <//>`}
     <p class="subtle">On an iPhone the volume is the phone's own buttons, and the equalizer, the loudness levelling and the crossfade are not offered: they are what would stop the music when the screen locks.</p>
+  <//>`;
+}
+
+// ------------------------------------------------------------ how this device signs in
+
+function SignInCard() {
+  const { data } = useAsync(() => api('/session'), []);
+  const advice = signInAdvice(data); // (nothing yet, or an app that has no token: nothing to say)
+  if (advice.state === 'open') return null;
+  const copy = (text, what) => navigator.clipboard?.writeText(text).then(() => toast(`${what} copied`, 'success', 1800), () => toast('Select the text and copy it', 'info'));
+  const who = html`<strong>${advice.login}</strong>`;
+  const inToken = 'This device is signed in with the token.';
+  return html`<${Card} icon="user" title="How this device signs in">
+    ${advice.state === 'tailscale' && html`<${Fragment}>
+      <p>Tailscale signs this device in as ${who}. No token is needed, and this device stays signed in for as long as that account is on the server's list.</p>
+      <p class="subtle">To stop signing an account in, take it off <code>tailscale_logins</code> in the <code>[server]</code> section of config.toml on the server and restart it: its devices are signed out at once.</p>
+    <//>`}
+    ${advice.state === 'unlisted' && html`<${Fragment}>
+      <p>${inToken} Tailscale says it belongs to ${who}, which this server does not sign in. To sign that account in without a token, add it to <code>tailscale_logins</code> in the <code>[server]</code> section of config.toml on the server, and restart it.</p>
+      <pre class="line">${advice.entry}</pre>
+      <div class="row-actions"><${Button} icon="copy" onClick=${() => copy(advice.entry, 'Login')}>Copy the login<//></div>
+    <//>`}
+    ${advice.state === 'offer' && html`<${Fragment}>
+      <p>${inToken} Tailscale says it belongs to ${who}. The server can sign that account in without a token, on every device of yours. Add this line to the <code>[server]</code> section of config.toml on the server, then restart it:</p>
+      <pre class="line">${advice.line}</pre>
+      <div class="row-actions"><${Button} icon="copy" onClick=${() => copy(advice.line, 'Line')}>Copy the line<//></div>
+    <//>`}
+    ${advice.state === 'remembered' && html`<p>Tailscale signed this device in, and it stays signed in for as long as that account is on the server's list. This visit did not come through <code>tailscale serve</code>, so Tailscale named no one now.</p>`}
+    ${advice.state === 'token' && html`<p>${inToken} Tailscale did not say who it is, so the server cannot sign it in by itself. Open the server at its <code>tailscale serve</code> address (<code>https://</code> and the name ending in <code>.ts.net</code>), not at its local name or its IP address, and the server learns which account this is.</p>`}
   <//>`;
 }
 
@@ -496,6 +525,7 @@ export function SettingsView() {
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
       ${!desktop && html`<${InstallCard} />`}
+      ${!desktop && html`<${SignInCard} />`}
       <${AppearanceCard} />
       <${DiagnosticsCard} />
       <${DataCard} about=${about} />

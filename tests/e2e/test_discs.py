@@ -173,6 +173,35 @@ def test_a_disc_nobody_knows_is_typed_in_by_hand_and_the_paths_follow(page, live
     assert (live.library / "My Band" / "Live in the Garage" / "01 - Warm Up.flac").exists()
 
 
+def test_what_is_typed_the_moment_the_form_is_drawn_is_not_replaced_when_the_form_is_started(page, live, world, monkeypatch) -> None:
+    """The fields are drawn as soon as the disc is read; they are given what is known about the disc a moment later. Text that goes in between
+    (a person quicker than the page, a password manager, a test) must stay. The browser's next-frame callback is held back so that the moment
+    between the two is a tenth of a second, which is how long the page waits for it at most, instead of one frame."""
+    add_library(page, live)
+    with musicbrainz(live, monkeypatch):
+        page.evaluate("""() => {
+          window.requestAnimationFrame = () => 0;  // (the page's own after-paint work then waits for its fallback timer)
+          window.typed = null;
+          new MutationObserver((_, observer) => {
+            const field = [...document.querySelectorAll('label.field')].find((l) => l.querySelector('span')?.textContent === 'Album artist');
+            if (!field) return;
+            observer.disconnect();
+            setTimeout(() => {  // the next task after the fields were drawn
+              const input = field.querySelector('input');
+              input.value = 'Typed in a hurry';
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              window.typed = true;
+            }, 0);
+          }).observe(document.getElementById('main'), { childList: true, subtree: true });
+        }""")
+        open_discs(page)
+        wait_until(page, "window.typed === true", 15)
+        page.wait_for_timeout(600)  # (the page has done what it does after painting, and MusicBrainz has said it does not know the disc)
+        expect(page.get_by_text("MusicBrainz does not know this disc")).to_be_visible()
+        expect(page.get_by_label("Album artist")).to_have_value("Typed in a hurry")
+        expect(page.get_by_label("Title of song 1")).to_have_value("Track 01")  # (and the rest of the form was started all the same)
+
+
 def test_without_a_contact_the_screen_says_how_to_find_albums_and_typing_still_works(page, live, world) -> None:
     add_library(page, live)
     assert not live.ctx.config.musicbrainz.contact

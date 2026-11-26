@@ -7,6 +7,7 @@ whose cookie ended, gets this page instead and pastes the token. Either way what
 from __future__ import annotations
 
 import hmac
+import json
 import math
 import threading
 import time
@@ -67,6 +68,7 @@ form {{ display: flex; flex-direction: column; gap: .5rem; margin: 1.25rem 0; }}
 input, button {{ font: inherit; padding: .6rem .75rem; }}
 .problem {{ color: #b3261e; font-weight: 600; }}
 .note {{ opacity: .75; font-size: .9rem; }}
+pre {{ overflow-x: auto; padding: .5rem .75rem; border: 1px solid; border-radius: .4rem; user-select: all; -webkit-user-select: all; }}
 </style></head>
 <body>
 <h1>Music Toolkit</h1>
@@ -77,15 +79,42 @@ input, button {{ font: inherit; padding: .6rem .75rem; }}
 <input id="token" name="token" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" required autofocus>
 <button type="submit">Sign in</button>
 </form>
+{tailnet}
 <p class="note">{where}</p>
 </body></html>
 """
 
 
-def sign_in_page(*, problem: str = "", login_days: int = 0) -> str:
-    """The page with the box for the token. `problem` says what went wrong with the last try (nothing on the first visit)."""
+def tailnet_note(login: str | None, *, on: bool, allowed: bool) -> str:
+    """What to tell a device that Tailscale has named (`login`): that it could be signed in without the token, or why it is not. `on`: the server
+    signs in some Tailscale accounts; `allowed`: this one is among them (then the only reason it is not signed in is that its request
+    came from a page of another site). Nothing when Tailscale named no one. The login is the viewer's own, and is shown as text."""
+    if login is None:
+        return ""
+    who = f"<strong>{escape(login)}</strong>"
+    if on and allowed:
+        return (
+            f'<p class="note">Tailscale says this device belongs to {who}, which this server signs in without the token, but this page was opened '
+            "from another site. Open the server's address itself (type it, or use the app's icon) and you are signed in.</p>"
+        )
+    if on:
+        return (
+            f'<p class="note">Tailscale says this device belongs to {who}. This server does not sign in that account. To sign it in without the '
+            "token, add it to <code>tailscale_logins</code> in the <code>[server]</code> section of config.toml on the server, and restart it.</p>"
+        )
+    line = f"tailscale_logins = [{json.dumps(login, ensure_ascii=False)}]"
+    return (
+        f'<p class="note">This server can sign this device in through Tailscale, with no token. Tailscale says it belongs to {who}. To allow that, '
+        f"add this line to the <code>[server]</code> section of config.toml on the server, then restart it:</p><pre>{escape(line)}</pre>"
+    )
+
+
+def sign_in_page(*, problem: str = "", login_days: int = 0, tailscale_login: str | None = None, tailscale_on: bool = False, tailscale_allowed: bool = False) -> str:
+    """The page with the box for the token. `problem` says what went wrong with the last try (nothing on the first visit). The `tailscale_`
+    arguments say what Tailscale told the server about the device (see `tailnet_note`)."""
     stays = f" The device then stays signed in for {login_days} days." if login_days > 0 else ""
     return PAGE.format(
         problem=f'<p class="problem" role="alert">{escape(problem)}</p>' if problem else "",
+        tailnet=tailnet_note(tailscale_login, on=tailscale_on, allowed=tailscale_allowed),
         where="On the computer that runs the server, <code>mtk token</code> shows the token." + stays,
     )

@@ -24,3 +24,6 @@ port = 4533
 allowed_hosts = ["musicpi.local"]
 rescan_hours = 6                    # look for new songs by itself every this many hours (0: only at the start, and when asked)
 login_days = 90                     # how long a device that opened the sign-in link stays signed in
+# The Tailscale accounts that are signed in without the token, behind `tailscale serve` (see "Sign in with Tailscale" in packaging/linux/README.md).
+# Each one can do everything, like the token. Needs host = "127.0.0.1". The sign-in page shows the line to add for the account it sees.
+tailscale_logins = []               # for example ["you@example.com"]

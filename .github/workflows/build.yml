@@ -58,7 +58,8 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-  # The interface in a real Chromium: clicks, keyboard, audio element, drag and drop.
+  # The interface in a real Chromium: clicks, keyboard, audio element, drag and drop. And in WebKit, Safari's own engine, for what a phone's
+  # browser does that Chromium cannot say (tests/e2e/test_webkit.py): MTK_REQUIRE_WEBKIT makes a WebKit that does not start an error, not a skip.
   e2e:
     runs-on: ubuntu-latest
     steps:
@@ -73,10 +74,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev,e2e]"
 
-      - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
+      - name: Install Chromium and WebKit
+        run: python -m playwright install --with-deps chromium webkit
 
       - name: Run browser tests
+        env:
+          MTK_REQUIRE_WEBKIT: '1'
         run: python -m pytest tests/e2e -q
 
   # The backend where a server runs it: Linux on x86-64 and on arm64 (a Raspberry Pi 5 is arm64), with the Python of Debian 12

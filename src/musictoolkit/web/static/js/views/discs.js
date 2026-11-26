@@ -318,9 +318,10 @@ function RipTab({ active }) {
   }, [tray, Boolean(drive)]);
 
   // A different disc: start from what is known about it. (The same disc read again, because the drive was busy a moment or a look at
-  // the drives failed once, keeps what has been typed.)
+  // the drives failed once, keeps what has been typed.) Before the fields are drawn, not after: they are in the page from the render that
+  // has the disc, and anything typed into them before the next frame (a person quick enough, a password manager, a test) would be replaced.
   const discId = disc?.data?.disc_id;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const data = discRef.current;
     if (!data || startedFor.current === data.disc_id) return;
     startedFor.current = data.disc_id;

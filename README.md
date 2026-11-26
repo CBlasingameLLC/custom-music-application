@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.11.0)
+## What it does (v0.12.0)
 
 | Area | Features |
 |---|---|
@@ -51,7 +51,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Desktop** | A tray icon by the clock with Play/Pause, Next, Previous and Quit; closing the window keeps the music playing from the tray (or quits: your choice in Settings, Window and tray); the window opens where you left it; **Open with** in Explorer, and files or folders dropped on the window, are added to the library and played |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |
 | **Phone and Mac** | The app can be put on a phone's Home Screen or a Mac's Dock and opens like any other app, with no browser around it. On a phone it is laid out for one: a row of tabs (Home, Songs, Albums, Playlists, More), a small player over them that opens the whole player, songs that play when tapped, menus and dialogs that come up from the bottom, and sizes made for a thumb with the notch and the home bar kept clear. On an iPhone the songs play through the plain audio element so that the music carries on with the screen locked, and the lock screen shows the song, its cover and the buttons (volume is the phone's own, and the equalizer, loudness levelling and crossfade are off there). A server that cannot be reached shows a page that says so, with a button to try again. See below |
-| **Server** | Run the same app on a Raspberry Pi or any Linux computer (`mtk serve`) and use it from every device at home, and from outside through a private network such as Tailscale. It answers only to the names you list, one token signs a device in for 90 days, a library folder that is not mounted is never taken for deleted songs, new songs are found by themselves every few hours, and `mtk library reroot` carries a Windows library over with its ratings, plays and playlists. **No accounts yet** (next round), so reach it only from your own network. See below |
+| **Server** | Run the same app on a Raspberry Pi or any Linux computer (`mtk serve`) and use it from every device at home, and from outside through a private network such as Tailscale. It answers only to the names you list, one token signs a device in for 90 days, a library folder that is not mounted is never taken for deleted songs, new songs are found by themselves every few hours, and `mtk library reroot` carries a Windows library over with its ratings, plays and playlists. Behind `tailscale serve` it can sign in the Tailscale accounts you list, so that your own devices need no token at all. There are no accounts of its own: whoever is signed in can do everything, so reach it only from your own network or a private one. See below |
 
 ### Library tools (Library tools in the sidebar)
 
@@ -394,6 +394,13 @@ drive attached. The step-by-step guide, the systemd service and an example confi
   cookie is marked Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`). A browser that has only the address (or
   whose cookie ended) gets a page with a box for the token (`mtk token` prints it); eight wrong tokens in a minute make the server refuse all tokens for the
   rest of the minute. Neither the token nor the link is ever written to a log.
+- **Sign in with Tailscale** (no token on any of your devices): `tailscale serve` tells the app which Tailscale account a request came from, and `[server]
+  tailscale_logins = ["you@example.com"]` lists the accounts the server signs in. A phone or a Mac that opens the server's `https://NAME.ts.net` address is
+  then in, with no sign-in link and no pasting; it keeps a cookie that is good only while its account is on the list and the token is the same, so taking an
+  account off the list signs its devices out on their next request. It needs `host = "127.0.0.1"` (the server refuses to start otherwise: on any other address
+  a program on the network could write the header and be anyone), and a page of another site cannot use the identity of the person whose browser it runs in (the
+  browser says where a request came from; a browser too old to say is not believed). A request that came through Tailscale Funnel (the public internet) is
+  refused outright. The sign-in page shows which account Tailscale sees and the line to add; Settings, *How this device signs in*, says how a device got in.
 - **`/healthz`** answers without a token with the version and whether the library folders are there (`ok` or `degraded`), for a monitor (`HEAD` works too,
   here and on every page and song).
 - **A file that is only tags** (an MP3 with no audio frames, an empty file) is found by the scan, listed with a **No audio** mark and counted apart from errors,
@@ -408,7 +415,7 @@ drive attached. The step-by-step guide, the systemd service and an example confi
 - **On a phone or a Mac** the same address is the app: open it in Safari, sign in once, and add it to the Home Screen (iPhone, iPad) or the Dock (Mac, Safari
   in macOS Sonoma or later; Chrome and Edge have *Install*). It then opens from its own icon and stays signed in. A phone needs Tailscale (see the guide),
   and `tailscale serve` for the `https` address a phone asks for. Settings, *Use it on your phone or Mac*, has the address and the steps.
-- **Not yet**: accounts and roles (everyone with the token can do everything, including moving and deleting files), transcoding for a phone on
+- **Not yet**: roles (everyone who is signed in, with the token or as a listed Tailscale account, can do everything, including moving and deleting files), transcoding for a phone on
   mobile data, a Mac app that needs no browser, downloads for offline listening, and apps that speak the Subsonic protocol (the iPhone apps that do keep the music
   going with the screen locked more reliably than a web page can, and have CarPlay). Never forward a port from the internet to it.
 
@@ -426,8 +433,9 @@ A server (`mtk serve`) listens where you tell it and answers only to the host na
 account can read, or in the environment), its cookie lasts `login_days` and is Secure over https, the service runs as an account of its own that can
 write only the music and its data folder, and `/healthz` is the only thing that answers without the token. The token is never printed or logged (the access
 log is off; `mtk dashboard` shows its link only to a terminal), a token that was shown anywhere should be replaced as `packaging/linux/README.md` says, and wrong
-tokens are counted and, after eight in a minute, refused for the rest of it. Until accounts arrive the token is the whole of the protection: keep the app on
-your own network or a private one.
+tokens are counted and, after eight in a minute, refused for the rest of it. The token (or a Tailscale account you listed, behind `tailscale serve` on a server
+that listens on its own computer only) is the whole of the protection and there are no roles: keep the app on your own network or a private one, and never
+enable Tailscale Funnel (the server refuses what comes through it).
 
 ## Development
 

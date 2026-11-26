@@ -30,17 +30,37 @@ TOKEN = "e2e-token"
 
 
 @pytest.fixture(scope="session")
-def browser():
+def _playwright():
     with sync_playwright() as playwright:
-        try:
-            instance = playwright.chromium.launch(
-                executable_path=os.environ.get("MTK_CHROMIUM") or None,
-                args=["--autoplay-policy=no-user-gesture-required"],
-            )
-        except PlaywrightError as error:
-            pytest.skip(f"Chromium is not available for Playwright: {str(error).splitlines()[0]}")
-        yield instance
-        instance.close()
+        yield playwright
+
+
+@pytest.fixture(scope="session")
+def browser(_playwright):
+    try:
+        instance = _playwright.chromium.launch(
+            executable_path=os.environ.get("MTK_CHROMIUM") or None,
+            args=["--autoplay-policy=no-user-gesture-required"],
+        )
+    except PlaywrightError as error:
+        pytest.skip(f"Chromium is not available for Playwright: {str(error).splitlines()[0]}")
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def webkit(_playwright):
+    """Safari's own engine (Playwright's WebKit build), for what only it can say: that a page works in it, and what it sends. Where it is not
+    installed (`playwright install webkit`, and on Linux `playwright install-deps webkit`) the tests that use it skip, unless MTK_REQUIRE_WEBKIT
+    is set (as it is in CI): then a WebKit that does not start is an error, not a skip nobody sees."""
+    try:
+        instance = _playwright.webkit.launch()
+    except PlaywrightError as error:
+        if os.environ.get("MTK_REQUIRE_WEBKIT"):
+            raise
+        pytest.skip(f"WebKit is not available for Playwright: {str(error).splitlines()[0]}")
+    yield instance
+    instance.close()
 
 
 @pytest.fixture
@@ -82,7 +102,7 @@ def signed_in_page(browser, live, init_script: str | None = None, device: dict |
         context.add_init_script(init_script)
     page = context.new_page()
     # MTK_E2E_CPU_SLOWDOWN=4 runs the browser as if on a machine four times slower: how to hunt a test that only fails on a busy CI runner.
-    if os.environ.get("MTK_E2E_CPU_SLOWDOWN"):
+    if os.environ.get("MTK_E2E_CPU_SLOWDOWN") and browser.browser_type.name == "chromium":  # (the throttle is Chromium's own: WebKit has no DevTools protocol of that kind)
         context.new_cdp_session(page).send("Emulation.setCPUThrottlingRate", {"rate": float(os.environ["MTK_E2E_CPU_SLOWDOWN"])})
     problems: list[str] = []
     # A song without cover art answers its image request with 404; the UI draws a placeholder.
