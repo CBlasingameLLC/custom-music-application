@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from tests.conftest import make_stub
-from tests.subsonic_support import Rest, album_named, scanned_web, songs_of
+from tests.subsonic_support import Rest, add_songs, album_named, scanned_web, songs_of
 
 ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 ALBUMS = ["Back Roads", "Low Tide", "Northern Lights", "Static Hearts"]
@@ -115,13 +115,6 @@ def test_the_folders_of_the_older_clients_are_the_artist_with_its_albums_and_the
 @pytest.mark.parametrize("given", ["1", "pl-1", "ar-QQ", "al-WyJ4IiwgInkiXQ", "nope"])
 def test_a_folder_that_is_not_an_artist_or_an_album_that_is_there_is_not_found(rest: Rest, given: str) -> None:
     rest.fails("getMusicDirectory", 70, id=given)
-
-
-def test_the_music_folder_is_the_one_library_and_the_user_is_the_person_with_every_right_there_is(rest: Rest) -> None:
-    assert rest.ok("getMusicFolders")["musicFolders"]["musicFolder"] == [{"id": 1, "name": "Music"}]
-    user = rest.ok("getUser", username="tester")["user"]
-    assert user["username"] == "tester" and user["streamRole"] is True and user["downloadRole"] is True and user["playlistRole"] is True
-    assert user["adminRole"] is False and user["uploadRole"] is False and user["folder"] == [1]
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------ genres
@@ -331,3 +324,88 @@ def test_a_file_that_is_only_tags_is_in_no_list_and_has_nothing_to_find(tmp_path
     with web.ctx.db() as conn:
         number = conn.execute("SELECT id FROM tracks WHERE title = 'Hidden Song'").fetchone()["id"]
     rest.fails("getSong", 70, id=str(number))
+
+
+# ------------------------------------------------------------------------------------------------------------------------------- limits
+
+
+def test_a_page_of_anything_is_at_most_500_and_a_client_that_asks_for_more_is_given_that(rest: Rest, web: SimpleNamespace) -> None:
+    add_songs(web, [(f"/crowd/{n}.mp3", f"Song {n}", "Crowd", f"Album {n:04d}", 1) for n in range(520)])
+    assert len(lists(rest, "alphabeticalByName", size=100000)) == 500 and len(lists(rest, "alphabeticalByName", size=500)) == 500 and len(lists(rest, "alphabeticalByName", size=499)) == 499
+    assert len(lists(rest, "alphabeticalByName", size=500, offset=500)) == 24  # (520 and the four of the library, from the 501st on)
+    assert len(rest.ok("getRandomSongs", size=100000)["randomSongs"]["song"]) == 500
+    assert len(rest.ok("getSongsByGenre", genre="folk", count=100000)["songsByGenre"]["song"]) == 2
+    found = rest.ok("search3", query="", songCount=100000, albumCount=100000, artistCount=100000)["searchResult3"]
+    assert (len(found["song"]), len(found["album"]), len(found["artist"])) == (500, 500, 4)
+    crowd = rest.ok("getArtist", id=next(a["id"] for a in found["artist"] if a["name"] == "Crowd"))["artist"]
+    assert len(crowd["album"]) == 500
+
+
+def test_an_album_gives_at_most_5000_songs(rest: Rest, web: SimpleNamespace) -> None:
+    add_songs(web, [(f"/huge/{n}.mp3", f"Song {n}", "Huge", "Huge", n) for n in range(5001)])
+    album = album_named(rest, "Huge")
+    assert album["songCount"] == 5001 and len(songs_of(rest, album["id"])) == 5000
+    assert len(rest.ok("getMusicDirectory", id=album["id"])["directory"]["child"]) == 5000
+
+
+# ---------------------------------------------------------------------------------------------------------------------------- odd records
+
+
+def test_a_song_that_nobody_dated_is_as_old_as_there_is(rest: Rest, web: SimpleNamespace) -> None:
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE tracks SET date_added = NULL")
+        conn.commit()
+    epoch = "1970-01-01T00:00:00.000Z"
+    album = album_named(rest, "Northern Lights")
+    assert album["created"] == epoch and all(song["created"] == epoch for song in songs_of(rest, album["id"]))
+    assert rest.ok("getArtist", id=album["artistId"])["artist"]["album"][0]["created"] == epoch
+
+
+def test_a_song_that_is_not_in_a_library_folder_is_known_by_its_file_name(rest: Rest, web: SimpleNamespace, tmp_path: Path) -> None:
+    web.ctx.config.library.roots = [str(tmp_path / "somewhere else")]
+    assert [song["path"] for song in songs_of(rest, album_named(rest, "Northern Lights")["id"])] == ["01 - Glacier.mp3", "02 - Polar Night.mp3", "03 - Drift.mp3"]
+
+
+def test_a_song_may_be_in_the_second_of_several_library_folders(rest: Rest, web: SimpleNamespace, music_dir: Path, tmp_path: Path) -> None:
+    web.ctx.config.library.roots = [str(tmp_path / "unrelated"), str(music_dir)]
+    assert songs_of(rest, album_named(rest, "Northern Lights")["id"])[0]["path"] == "Aurora Vale/Northern Lights/01 - Glacier.mp3"
+
+
+def test_a_song_says_its_disc_its_musicbrainz_id_and_its_genre_when_it_has_them_and_nothing_when_it_has_not(rest: Rest, web: SimpleNamespace) -> None:
+    first, second = songs_of(rest, album_named(rest, "Back Roads")["id"])
+    assert all(key not in first for key in ("discNumber", "musicBrainzId")) and first["genre"] == "Folk" and first["genres"] == [{"name": "Folk"}]
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE tracks SET disc_number = 2, musicbrainz_recording_id = 'b1a9c0e9-d987-4042-ae91-78d6a3267d69' WHERE id = ?", (int(first["id"]),))
+        conn.execute("UPDATE tracks SET genre = NULL WHERE id = ?", (int(second["id"]),))
+        conn.commit()
+    by_title = {song["title"]: song for song in songs_of(rest, album_named(rest, "Back Roads")["id"])}
+    assert by_title["Gravel Dust"]["discNumber"] == 2 and by_title["Gravel Dust"]["musicBrainzId"] == "b1a9c0e9-d987-4042-ae91-78d6a3267d69"
+    assert all(key not in by_title["Porch Light"] for key in ("genre", "genres", "discNumber", "musicBrainzId"))
+
+
+def test_a_folder_that_is_a_playlist_or_a_song_is_said_not_to_be_a_directory(rest: Rest) -> None:
+    assert rest.fails("getMusicDirectory", 70, id="pl-1") == "The requested directory was not found"
+    assert rest.fails("getMusicDirectory", 70, id="12") == "The requested directory was not found"
+
+
+def test_a_list_asked_for_without_a_size_has_the_size_the_protocol_says(rest: Rest, web: SimpleNamespace) -> None:
+    add_songs(web, [(f"/many/{n}.mp3", f"Song {n:03d}", f"Artist {n:03d}", f"Album {n:03d}", 1) for n in range(60)])
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE tracks SET genre = 'Many' WHERE file_path LIKE '/many/%'")
+        conn.commit()
+    assert len(lists(rest, "alphabeticalByName")) == 10  # (ten albums)
+    assert len(rest.ok("getRandomSongs")["randomSongs"]["song"]) == 10
+    assert len(rest.ok("getSongsByGenre", genre="many")["songsByGenre"]["song"]) == 10
+    found = rest.ok("search3", query="")["searchResult3"]
+    assert (len(found["artist"]), len(found["album"]), len(found["song"])) == (20, 20, 20)  # (twenty of each)
+    assert len(rest.ok("search3", query="many", songCount=3)["searchResult3"]["song"]) == 3  # (the genre is one of the words a song is found by)
+    again = rest.ok("search3", query="Song 0", artistCount=2, albumCount=2, songCount=2)["searchResult3"]
+    assert (len(again["artist"]), len(again["album"]), len(again["song"])) == (2, 2, 2)
+    assert names(rest.ok("search3", query="Song 0", artistCount=2, albumCount=0, songCount=0)["searchResult3"]["artist"]) == names(again["artist"])  # (the first page: no offset)
+
+
+def test_the_top_songs_are_fifty_unless_asked_for_fewer(rest: Rest, web: SimpleNamespace) -> None:
+    add_songs(web, [(f"/prolific/{n}.mp3", f"Hit {n:03d}", "Prolific", "Hits", n) for n in range(60)])
+    assert len(rest.ok("getTopSongs", artist="Prolific")["topSongs"]["song"]) == 50
+    assert len(rest.ok("getTopSongs", artist="Prolific", count=7)["topSongs"]["song"]) == 7
+    assert len(rest.ok("getTopSongs", artist="Prolific", count=100000)["topSongs"]["song"]) == 60

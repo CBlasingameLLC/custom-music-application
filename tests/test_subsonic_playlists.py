@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,10 @@ def songs(rest: Rest) -> dict[str, dict]:
     return {song["title"]: song for song in every}
 
 
+def just_now(text: str) -> bool:
+    return abs(datetime.now(timezone.utc) - datetime.fromisoformat(text.replace("Z", "+00:00"))) < timedelta(seconds=60)
+
+
 def entries(answer: dict) -> list[str]:
     return [song["title"] for song in answer["playlist"].get("entry", [])]
 
@@ -43,7 +48,7 @@ def test_a_playlist_is_made_with_a_name_and_songs_and_comes_back_with_them_in_or
     assert entries(answer) == ["Wires", "Glacier", "Drift"] and [song["id"] for song in playlist["entry"]] == ordered
     assert re.fullmatch(r"pl-\d+", playlist["id"]) and playlist["name"] == "My mix" and playlist["songCount"] == 3 and playlist["coverArt"] == playlist["id"]
     assert playlist["owner"] == "tester" and playlist["public"] is False and "readonly" not in playlist and "comment" not in playlist
-    assert ISO.match(playlist["created"]) and ISO.match(playlist["changed"])
+    assert ISO.match(playlist["created"]) and just_now(playlist["created"]) and just_now(playlist["changed"])
     with web.ctx.db() as conn:
         total = conn.execute(f"SELECT SUM(duration_seconds) AS total FROM tracks WHERE id IN ({', '.join(ordered)})").fetchone()["total"]
     assert playlist["duration"] == round(total)
@@ -186,7 +191,7 @@ def test_what_is_taken_out_goes_before_what_is_put_in_so_the_places_are_those_of
 
 def test_a_place_that_is_not_in_the_list_is_no_song_to_take_out(rest: Rest, songs: dict) -> None:
     given = make(rest, songs, "Glacier", "Drift")
-    rest.ok("updatePlaylist", playlistId=given, songIndexToRemove=[5, -1, 99999])
+    rest.ok("updatePlaylist", playlistId=given, songIndexToRemove=[2, 5, -1, 99999])  # (2 is one past the last)
     assert entries(rest.ok("getPlaylist", id=given)) == ["Glacier", "Drift"]
     assert rest.fails("updatePlaylist", 0, playlistId=given, songIndexToRemove="first") == "songIndexToRemove is not a whole number"
     assert entries(rest.ok("getPlaylist", id=given)) == ["Glacier", "Drift"]
@@ -271,3 +276,45 @@ def test_a_smart_playlist_can_be_deleted_and_the_songs_its_rules_picked_stay(res
     given = smart(web)
     rest.ok("deletePlaylist", id=given)
     assert rest.ok("getPlaylists")["playlists"] == {"playlist": []} and len(rest.ok("getRandomSongs", genre="folk")["randomSongs"]["song"]) == 2
+
+
+# ------------------------------------------------------------------------------------------------------------------------------- the words
+
+
+def test_what_is_not_found_is_said_with_what_it_is(rest: Rest, songs: dict) -> None:
+    assert rest.fails("getPlaylist", 70, id="pl-9999") == "The requested playlist was not found"
+    assert rest.fails("getPlaylist", 70, id="12") == "The requested playlist was not found"
+    assert rest.fails("createPlaylist", 70, name="x", songId="999999") == "The requested song was not found"
+    assert rest.fails("createPlaylist", 70, name="x", songId="pl-1") == "The requested song was not found"
+
+
+def test_a_playlist_with_no_name_is_given_one(rest: Rest, web: SimpleNamespace, songs: dict) -> None:
+    given = make(rest, songs, "Glacier")
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE playlists SET name = NULL WHERE id = ?", (int(given[3:]),))
+        conn.commit()
+    assert rest.ok("getPlaylist", id=given)["playlist"]["name"] == f"Playlist {given[3:]}"
+    assert rest.ok("getPlaylists")["playlists"]["playlist"][0]["name"] == f"Playlist {given[3:]}"
+
+
+def test_a_playlist_that_has_no_dates_is_as_old_as_there_is(rest: Rest, web: SimpleNamespace, songs: dict) -> None:
+    given = make(rest, songs, "Glacier")
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE playlists SET created_at = NULL, updated_at = NULL WHERE id = ?", (int(given[3:]),))
+        conn.commit()
+    playlist = rest.ok("getPlaylist", id=given)["playlist"]
+    assert (playlist["created"], playlist["changed"]) == ("1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z")
+
+
+def test_a_rename_and_a_change_of_songs_say_when_they_were_done(rest: Rest, web: SimpleNamespace, songs: dict) -> None:
+    given = make(rest, songs, "Glacier")
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE playlists SET created_at = '2020-01-01T00:00:00+00:00', updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (int(given[3:]),))
+        conn.commit()
+    rest.ok("updatePlaylist", playlistId=given, name="Renamed")
+    assert just_now(rest.ok("getPlaylist", id=given)["playlist"]["changed"])
+    with web.ctx.db() as conn:
+        conn.execute("UPDATE playlists SET updated_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (int(given[3:]),))
+        conn.commit()
+    rest.ok("updatePlaylist", playlistId=given, songIdToAdd=songs["Drift"]["id"])
+    assert just_now(rest.ok("getPlaylist", id=given)["playlist"]["changed"])

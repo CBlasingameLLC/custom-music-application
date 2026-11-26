@@ -47,7 +47,7 @@ def _password(given: str) -> str | None:
     if not given.startswith("enc:"):
         return given
     try:
-        return bytes.fromhex(given[4:]).decode("utf-8")
+        return bytes.fromhex(given[4:]).decode()
     except ValueError:
         return None
 
@@ -60,7 +60,7 @@ def _wrong(limiter: GuessLimiter, message: str = "Wrong username or password") -
 def authenticate(params: Params, token: str, limiter: GuessLimiter) -> str:
     """Check the credentials against the server's token; the name the client gave (or "" for an API key) when they are right. Raises SubsonicError."""
     user, password, hashed, salt, key = (params.get(name) for name in ("u", "p", "t", "s", "apiKey"))
-    offered = [name for name, value in (("apiKey", key), ("p", password), ("t", hashed)) if value is not None]
+    offered = [value for value in (key, password, hashed) if value is not None]  # (an API key, a password, a digest: one of them at most)
     if len(offered) > 1 or (key is not None and user is not None):
         raise SubsonicError(CONFLICTING_MECHANISMS, "Multiple conflicting authentication mechanisms provided")
     if not offered:
@@ -81,7 +81,7 @@ def authenticate(params: Params, token: str, limiter: GuessLimiter) -> str:
         raise _wrong(limiter)
     if salt is None:
         raise missing("s")
-    expected = hashlib.md5((token + salt).encode("utf-8"), usedforsecurity=False).hexdigest()  # (what the protocol asks for, not a secret kept by it)
-    if same_token((hashed or "").lower(), expected):
+    expected = hashlib.md5((token + salt).encode(), usedforsecurity=False).hexdigest()  # (what the protocol asks for, not a secret kept by it)
+    if same_token(hashed.lower(), expected):  # (a digest is what is left when there is no key and no password)
         return user
     raise _wrong(limiter)

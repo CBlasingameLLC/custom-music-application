@@ -67,9 +67,10 @@ def test_the_digest_may_be_written_in_capitals(secured: SimpleNamespace) -> None
     assert asked(secured, **key_of(secured, u="me", s="abc", t=md5(TOKEN + "abc").upper()))["status"] == "ok"
 
 
-def test_the_password_may_be_any_text_the_token_is_and_a_user_name_is_whatever_the_client_has(secured: SimpleNamespace) -> None:
-    answer = Rest(secured.client, password=TOKEN, user="é名").ok("getUser")
-    assert answer["user"]["username"] == "é名"
+@pytest.mark.parametrize("auth", ["plain", "enc", "token"])
+def test_a_user_name_is_whatever_the_client_has_whichever_way_it_signed_in(secured: SimpleNamespace, auth: str) -> None:
+    assert Rest(secured.client, password=TOKEN, auth=auth, user="é名").ok("getUser")["user"]["username"] == "é名"
+    assert Rest(secured.client, password=TOKEN, auth=auth, user="phone").ok("tokenInfo")["tokenInfo"] == {"username": "phone"}
 
 
 def test_the_form_of_a_post_carries_the_credentials_as_well(secured: SimpleNamespace) -> None:
@@ -127,6 +128,20 @@ def test_a_client_of_another_major_version_or_a_newer_minor_one_is_told_to_upgra
     sent = key_of(secured, u="me", p=TOKEN)
     sent["v"] = version
     assert failure(asked(secured, **sent))[0] == code
+
+
+def test_a_version_with_no_minor_number_is_minor_0(secured: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    from musictoolkit.web.subsonic import auth
+
+    monkeypatch.setattr(auth, "SERVER_MINOR", 0)
+    assert asked(secured, **key_of(secured, u="me", p=TOKEN, v="1"))["status"] == "ok"
+    assert asked(secured, **key_of(secured, u="me", p=TOKEN, v="1.0.9"))["status"] == "ok"
+    assert failure(asked(secured, **key_of(secured, u="me", p=TOKEN, v="1.1")))[0] == 30
+
+
+def test_a_version_that_is_not_one_is_said_in_words(secured: SimpleNamespace) -> None:
+    assert failure(asked(secured, **key_of(secured, u="me", p=TOKEN, v="abc"))) == (0, "'abc' is not a version of the API")
+    assert failure(asked(secured, **key_of(secured, u="me", p=TOKEN, v="1.x")))[1] == "'1.x' is not a version of the API"
 
 
 def test_a_call_without_the_version_or_the_name_of_the_client_is_a_missing_parameter_before_anything_else(secured: SimpleNamespace) -> None:

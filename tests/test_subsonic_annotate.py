@@ -238,3 +238,22 @@ def test_a_song_of_no_known_length_is_a_listen_of_no_time(rest: Rest, web: Simpl
         conn.commit()
     rest.ok("scrobble", id=song["id"])
     assert history(web, song["id"])[0]["ms_played"] == 0
+
+
+# ------------------------------------------------------------------------------------------------------------------------------- the words
+
+
+def test_what_is_not_found_is_said_with_what_it_is(rest: Rest) -> None:
+    song = songs_of(rest, album_named(rest, "Back Roads")["id"])[0]["id"]
+    assert rest.fails("star", 70, id="999999") == "The requested song was not found"
+    assert rest.fails("star", 70, id=song, albumId="al-WyJ4IiwgInkiXQ") == "The requested album was not found"
+    assert rest.fails("star", 70, id=song, artistId="ar-QQ") == "The requested artist was not found"
+    assert rest.fails("star", 70, id="al-WyJ4IiwgInkiXQ") == "The requested album was not found"
+    assert rest.fails("star", 70, id="ar-QQ") == "The requested artist was not found"
+    assert rest.fails("star", 70, id="pl-1") == "The requested data was not found"
+    assert rest.fails("star", 70, albumId="12") == "The requested album was not found"
+    assert rest.fails("star", 70, artistId="12") == "The requested artist was not found"
+    assert rest.fails("setRating", 70, id="999999", rating=3) == "The requested song was not found"
+    assert rest.fails("setRating", 70, id="al-x", rating=3) == "The requested song was not found"
+    assert rest.fails("scrobble", 70, id="999999") == "The requested song was not found"
+    assert rest.fails("setRating", 0, id=song, rating=9) == "rating is from 1 to 5, or 0 to take it away"

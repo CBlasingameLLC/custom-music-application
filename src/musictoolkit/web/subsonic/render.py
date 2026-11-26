@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 from xml.sax.saxutils import escape, quoteattr
 
@@ -18,13 +20,14 @@ from musictoolkit import __version__
 API_VERSION = "1.16.1"  # the version of the Subsonic API this server speaks
 NAMESPACE = "http://subsonic.org/restapi"
 SERVER_TYPE = "musictoolkit"
+NOTHING: Mapping[str, Any] = MappingProxyType({})  # (a call that answers with nothing but that it is done)
 
 # What XML 1.0 does not allow in a document at all (a tag in a song's title can hold anything): dropped, not escaped.
 _NOT_XML = re.compile("[^\x09\x0a\x0d\x20-퟿-�\U00010000-\U0010ffff]")
 _CALLBACK = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$")
 
 
-def envelope(payload: dict[str, Any] | None = None, *, failed: bool = False) -> dict[str, Any]:
+def envelope(payload: Mapping[str, Any] = NOTHING, *, failed: bool = False) -> dict[str, Any]:
     """The `subsonic-response` itself: its status and versions, and what the call answers with."""
     return {
         "status": "failed" if failed else "ok",
@@ -32,7 +35,7 @@ def envelope(payload: dict[str, Any] | None = None, *, failed: bool = False) -> 
         "type": SERVER_TYPE,
         "serverVersion": __version__,
         "openSubsonic": True,
-        **(payload or {}),
+        **payload,
     }
 
 

@@ -23,6 +23,22 @@ def rest(web: SimpleNamespace) -> Rest:
 # ------------------------------------------------------------------------------------------------------------------------ who is there
 
 
+def test_the_music_folder_is_the_one_library(rest: Rest) -> None:
+    assert rest.ok("getMusicFolders")["musicFolders"] == {"musicFolder": [{"id": 1, "name": "Music"}]}
+
+
+def test_the_user_is_the_person_who_may_do_everything_there_is_but_run_the_server(rest: Rest) -> None:
+    assert rest.ok("getUser", username="tester")["user"] == {
+        "username": "tester", "scrobblingEnabled": True, "adminRole": False, "settingsRole": False, "downloadRole": True, "uploadRole": False, "playlistRole": True,
+        "coverArtRole": True, "commentRole": False, "podcastRole": False, "streamRole": True, "jukeboxRole": False, "shareRole": False, "videoConversionRole": False, "folder": [1],
+    }
+
+
+def test_the_user_asked_about_is_the_user_asked_about_and_no_name_is_the_one_signed_in_as(rest: Rest) -> None:
+    assert rest.ok("getUser", username="somebody else")["user"]["username"] == "somebody else"  # (there is one person: whoever is asked after is her)
+    assert rest.ok("getUser")["user"]["username"] == "tester"
+
+
 def test_the_server_says_what_it_is_in_every_answer(rest: Rest) -> None:
     answer = rest.ok("ping")
     assert (answer["version"], answer["type"], answer["serverVersion"], answer["openSubsonic"]) == ("1.16.1", "musictoolkit", __version__, True)
