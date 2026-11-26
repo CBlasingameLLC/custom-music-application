@@ -318,9 +318,10 @@ function RipTab({ active }) {
   }, [tray, Boolean(drive)]);
 
   // A different disc: start from what is known about it. (The same disc read again, because the drive was busy a moment or a look at
-  // the drives failed once, keeps what has been typed.)
+  // the drives failed once, keeps what has been typed.) A layout effect: the fields appear as soon as the disc has been read, and a start
+  // made a moment later, by a passive effect, would throw away whatever was typed into them in between.
   const discId = disc?.data?.disc_id;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const data = discRef.current;
     if (!data || startedFor.current === data.disc_id) return;
     startedFor.current = data.disc_id;
@@ -398,8 +399,10 @@ function RipTab({ active }) {
   }
   const field = (name) => (e) => change({ ...form, [name]: e.target.value });
 
-  // What would be asked of the server; the same for the preview and for the rip.
-  const body = disc?.data && choices && drive ? {
+  // What would be asked of the server; the same for the preview and for the rip. Nothing, once the drives show no music disc: the list that
+  // says so can arrive in the very render in which a preview falls due, while `disc` and `form` (cleared by an effect, so a render later)
+  // are still the ejected disc's, and the server would be asked about a disc that has left the drive.
+  const body = seen && disc?.data && choices && drive ? {
     drive: drive.id, root: choices.root, scheme: choices.scheme.trim(), format: choices.format,
     quality: choices.format === 'mp3' ? choices.mp3_quality : 'standard', accuracy: choices.accuracy,
     album: form.album.trim(), album_artist: form.album_artist.trim(), year: form.year === '' ? null : Number(form.year), date: form.date || '',
