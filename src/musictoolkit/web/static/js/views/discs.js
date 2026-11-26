@@ -398,8 +398,9 @@ function RipTab({ active }) {
   }
   const field = (name) => (e) => change({ ...form, [name]: e.target.value });
 
-  // What would be asked of the server; the same for the preview and for the rip.
-  const body = disc?.data && choices && drive ? {
+  // What would be asked of the server; the same for the preview and for the rip. (Only for the disc that was read from this drive: when another
+  // drive is chosen, the songs of the first disc stay on the screen until the second has been read, and nothing is asked about them for it.)
+  const body = disc?.data && choices && drive && disc.data.drive === drive.id ? {
     drive: drive.id, root: choices.root, scheme: choices.scheme.trim(), format: choices.format,
     quality: choices.format === 'mp3' ? choices.mp3_quality : 'standard', accuracy: choices.accuracy,
     album: form.album.trim(), album_artist: form.album_artist.trim(), year: form.year === '' ? null : Number(form.year), date: form.date || '',

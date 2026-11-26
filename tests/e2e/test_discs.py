@@ -598,6 +598,29 @@ def test_an_answer_from_before_a_rip_that_comes_after_it_does_not_send_the_page_
             assert not about_a_disc(asked[before:]), f"the page asked about a disc that the drive had just said was gone: {asked[before:]}"
 
 
+def test_choosing_another_drive_does_not_ask_where_the_songs_of_the_first_disc_would_go_while_the_second_is_being_read(page, live, world) -> None:
+    add_drive(world, "F", name="Second drive", disc=audio_disc(seed=9, tracks=(50, 90), label="Audio CD"))
+    disc_helper.forget_listing()
+    add_library(page, live)
+    asked = requests_of_the_discs(page)
+    open_discs(page)
+    expect(page.get_by_label("Drive")).to_have_value("E:")
+    expect(start_button(page)).to_be_enabled()  # the three songs of the first disc, and where they would go
+    held: list = []
+    page.route("**/api/discs/drives/F%3A/disc", lambda route: held.append(route))  # the second drive is slow to say what is on its disc
+    before = len(asked)
+    page.get_by_label("Drive").select_option("F:")
+    deadline = time.monotonic() + 15
+    while not held:
+        assert time.monotonic() < deadline, "the page did not ask for the disc in the second drive"
+        page.wait_for_timeout(20)
+    page.wait_for_timeout(1200)  # (the page asks where the songs would go once the details have been still for 450 ms: a request sent wrongly would have been by now)
+    assert "POST /rip/preview" not in asked[before:], f"the page asked where the songs of the first disc would go, for the second drive: {asked[before:]}"
+    held[0].continue_()
+    page.unroute("**/api/discs/drives/F%3A/disc")
+    expect(start_button(page, 2)).to_be_enabled()  # the two songs of the disc that is in the second drive
+
+
 def test_a_rip_that_cannot_start_says_why_and_leaves_the_choices_alone(page, live, world, monkeypatch) -> None:
     page.allowed_statuses = {404, 409, 422}
     add_library(page, live)
