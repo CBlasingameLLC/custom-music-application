@@ -495,8 +495,12 @@ def test_a_slow_look_at_the_drives_after_a_rip_does_not_send_the_page_to_read_a_
         set_control(world, drives_delay=2.5)  # from here on the drives are slow to say what they hold, and the person is quicker than that
         expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
     assert (world / "E" / "eject.log").exists()
+    previews: list[str] = []  # (what the page asks the server to preview: a rip of a disc that is not in the drive is a 409, and the page has no business asking)
+    page.on("request", lambda r: previews.append(r.url) if r.method == "POST" and r.url.endswith("/api/discs/rip/preview") else None)
     page.get_by_role("button", name="Rip another disc").click()  # (the list of drives the page has is from before the rip: the disc it names has left the tray)
     expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible(timeout=20_000)
+    page.wait_for_timeout(1000)
+    assert previews == [], "the page asked for a preview of a rip of the disc that was ejected"
 
 
 def test_a_rip_that_cannot_start_says_why_and_leaves_the_choices_alone(page, live, world, monkeypatch) -> None:

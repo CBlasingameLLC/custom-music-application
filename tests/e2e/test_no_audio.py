@@ -41,7 +41,7 @@ def test_a_file_that_is_only_tags_is_marked_refused_in_words_and_left_out_of_wha
     play(page, after)
     expect(page.locator(".playerbar .pb-text .t1")).to_have_text(after)
 
-    stub.click(button="right")  # (queueing it says that it cannot be, and queues nothing)
+    stub.locator(".t1").click(button="right")  # (queueing it says that it cannot be, and queues nothing; the title: the middle of the row is a link)
     page.get_by_role("menuitem", name="Add to queue").click()
     expect(page.locator(".toast", has_text='"Hidden Song" has tags but no audio, so there is nothing to queue')).to_be_visible()
     page.get_by_role("link", name="Songs", exact=True).click()
