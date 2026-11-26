@@ -244,6 +244,8 @@ export function ToastHost() {
   </div>`;
 }
 
+const SCROLL_GRACE = 250; // milliseconds after a menu opens in which a scroll event does not close it (see MenuHost)
+
 export function MenuHost() {
   const state = useStore(menu);
   const ref = useRef();
@@ -253,17 +255,22 @@ export function MenuHost() {
     if (!state.open) return undefined;
     const close = () => closeMenu();
     const onKey = (e) => e.key === 'Escape' && closeMenu({ restore: true });
+    // A menu that hangs where a row was closes when the page scrolls. A browser sends a scroll event a frame after the page scrolled,
+    // though, so one for a scroll that came before the menu opened (a click that brought its row into view, a list still settling
+    // after a fling) arrives with the menu already open, and is not a person leaving it.
+    const openedAt = performance.now();
+    const onScroll = () => performance.now() - openedAt > SCROLL_GRACE && closeMenu();
     window.addEventListener('click', close);
     window.addEventListener('blur', close);
     window.addEventListener('resize', close);
     window.addEventListener('keydown', onKey);
-    document.addEventListener('scroll', close, true);
+    document.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('click', close);
       window.removeEventListener('blur', close);
       window.removeEventListener('resize', close);
       window.removeEventListener('keydown', onKey);
-      document.removeEventListener('scroll', close, true);
+      document.removeEventListener('scroll', onScroll, true);
     };
   }, [state.open]);
 
