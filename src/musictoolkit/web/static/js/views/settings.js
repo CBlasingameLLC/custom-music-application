@@ -335,8 +335,7 @@ function InstallCard() {
 
 function SignInCard() {
   const { data } = useAsync(() => api('/session'), []);
-  if (!data) return null;
-  const advice = signInAdvice(data);
+  const advice = signInAdvice(data); // (nothing yet, or an app that has no token: nothing to say)
   if (advice.state === 'open') return null;
   const copy = (text, what) => navigator.clipboard?.writeText(text).then(() => toast(`${what} copied`, 'success', 1800), () => toast('Select the text and copy it', 'info'));
   const who = html`<strong>${advice.login}</strong>`;

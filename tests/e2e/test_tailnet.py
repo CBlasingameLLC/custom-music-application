@@ -141,6 +141,38 @@ def test_a_device_that_tailscale_does_not_name_is_told_to_open_the_servers_own_a
     assert not problems, problems
 
 
+def test_an_app_without_a_token_has_nothing_to_say_about_signing_in(browser, tmp_path):
+    served = serve_app(tmp_path, token=None, tailscale_logins=[YOU])
+    try:
+        context, page, problems = _device(browser, SERVE)
+        page.goto(served.base + "/")
+        page.wait_for_selector(".sidebar")
+        _settings(page)
+        page.wait_for_selector(".settings")
+        assert page.evaluate("fetch('/api/session').then(r => r.json()).then(j => j.by)") == "open"  # (the card has what it needs to draw itself)
+        page.wait_for_timeout(500)
+        expect(page.get_by_role("heading", name="How this device signs in")).to_have_count(0)
+        assert not any(c["name"] == "mtk_session" for c in context.cookies())  # (and nothing was given: there is nothing to be signed in to)
+        context.close()
+        assert not problems, problems
+    finally:
+        stop_app(served)
+
+
+def test_the_desktop_window_has_no_use_for_the_card_either(browser, listed):
+    context, page, problems = _device(browser, {})
+    context.add_init_script("window.mtk = { version: 'test' };")  # (the stand-in for the desktop shell's bridge)
+    page.goto(f"{listed.base}/?token={TOKEN}")
+    page.wait_for_selector(".sidebar")
+    _settings(page)
+    page.wait_for_selector(".settings")
+    page.wait_for_timeout(500)
+    expect(page.get_by_role("heading", name="How this device signs in")).to_have_count(0)
+    assert all(path != "/api/session" for _, path, *_ in listed.log)  # (nor did the window ask the server how it signed in)
+    context.close()
+    assert not problems, problems
+
+
 def test_a_page_of_another_site_cannot_use_the_identity_of_the_person_whose_browser_it_runs_in(browser, listed):
     context, page, problems = _device(browser, SERVE)
     elsewhere = Elsewhere(listed.base)

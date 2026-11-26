@@ -34,9 +34,9 @@ class Recorder:
         await self.app(scope, receive, sending)
 
 
-def serve_app(tmp_path: Path, **options) -> SimpleNamespace:
-    """The app on a real port (`options` go to create_app: tailscale_logins ...), with its recorder."""
-    web = build_web(tmp_path, None, token=TOKEN, login_days=90, **options)
+def serve_app(tmp_path: Path, token: str | None = TOKEN, **options) -> SimpleNamespace:
+    """The app on a real port (`token`: None for an app that has none; `options` go to create_app: tailscale_logins ...), with its recorder."""
+    web = build_web(tmp_path, None, token=token, login_days=90, **options)
     log: list = []
     web.app.add_middleware(Recorder, log=log)
     server = uvicorn.Server(uvicorn.Config(web.app, host="127.0.0.1", port=0, log_level="warning"))
