@@ -85,8 +85,9 @@ export const setDensity = (density) => ui.set({ density: density === 'compact' ?
 // ------------------------------------------------------------ layout
 
 // A phone (or a phone on its side) gets a row of tabs at the bottom in place of the sidebar, and a small player that opens the big one.
-// The page says which it is on <html data-layout>, for the style sheet; the app reads it from here, to draw the right pieces.
-const phoneQuery = window.matchMedia('(max-width: 720px), (max-height: 500px) and (pointer: coarse)');
+// The page says which it is on <html data-layout>, for the style sheet; the app reads it from here, to draw the right pieces. The
+// desktop window is never a phone, however narrow it is made: its smallest size is the one the sidebar was made for.
+const phoneQuery = window.matchMedia(window.mtk ? 'not all' : '(max-width: 720px), (max-height: 500px) and (pointer: coarse)');
 export const layout = createStore({ phone: phoneQuery.matches });
 const applyLayout = () => {
   layout.set({ phone: phoneQuery.matches });

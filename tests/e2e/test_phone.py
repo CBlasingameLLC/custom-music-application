@@ -316,6 +316,20 @@ def test_the_layout_follows_the_size_of_the_window(browser, live):
     next(pages, None)
 
 
+def test_the_desktop_window_keeps_its_own_layout_however_narrow_it_is_made(browser, live):
+    """The window of the Windows app can be made as narrow as 720 px, which is where a phone's layout begins in a browser: it is never a phone."""
+    narrow = {"viewport": {"width": 700, "height": 700}}
+    pages = signed_in_page(browser, live, init_script="window.mtk = { version: 'test' };", device=narrow)
+    page = next(pages)
+    assert page.evaluate("document.documentElement.dataset.layout") == "desktop"
+    assert page.locator(".sidebar").count() == 1 and page.locator(".tabbar").count() == 0 and page.locator(".playerbar").count() == 1
+    next(pages, None)
+    pages = signed_in_page(browser, live, device=narrow)  # (the same width in a browser tab is a phone's)
+    page = next(pages)
+    assert page.evaluate("document.documentElement.dataset.layout") == "phone" and page.locator(".sidebar").count() == 0
+    next(pages, None)
+
+
 def test_where_a_finger_and_a_pointer_that_hovers_are_both_there_a_click_selects_and_does_not_play(browser, live):
     """A tablet with a trackpad: its pointer is coarse but it can hover, so it is not a screen where a tap is all there is. (Blink's own
     settings say what the pointer is; Playwright has no switch for it.)"""
