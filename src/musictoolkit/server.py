@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from musictoolkit.web.hosts import clean_names
+from musictoolkit.web.tailnet import clean_logins
 
 LOOPBACK_BINDS = frozenset({"127.0.0.1", "::1", "localhost"})
 MIN_TOKEN_LENGTH = 20  # `openssl rand -base64 32` is 44 characters, token_urlsafe(32) is 43
@@ -43,6 +44,27 @@ def allowed_names(bind: str, allowed_hosts: list[str]) -> list[str]:
             'devices reach it by (for example allowed_hosts = ["musicpi.local"]); a request that names anything else is refused.'
         )
     return names
+
+
+def tailscale_logins(bind: str, entries: object) -> list[str]:
+    """The Tailscale logins that are signed in without the token, checked. Only a server that listens on this computer alone may do that:
+    Tailscale Serve, which says whose request it is, runs here and passes the request on, and on any other address a program on the
+    network could write the same header and be anyone."""
+    if not entries:
+        return []
+    if isinstance(entries, str) or not isinstance(entries, (list, tuple)):
+        raise ServeError('[server] tailscale_logins must be a list of logins in quotes, for example tailscale_logins = ["you@example.com"].')
+    try:
+        logins = clean_logins(entries)
+    except ValueError as error:
+        raise ServeError(f"[server] tailscale_logins: {error}.") from None
+    if not is_loopback_bind(bind):
+        raise ServeError(
+            f'[server] tailscale_logins needs host = "127.0.0.1" (it would listen on {bind}): the login comes in a header that Tailscale Serve '
+            "writes on this computer, and on any other address a program on the network could write it and be anyone. Empty the list, or "
+            "listen on this computer only and reach the server through `tailscale serve`."
+        )
+    return logins
 
 
 def check_port(port: int) -> int:

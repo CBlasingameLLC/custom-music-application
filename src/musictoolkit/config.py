@@ -100,6 +100,7 @@ class ServerConfig:
     allowed_hosts: list[str] = field(default_factory=list)  # the names this server is reached by besides the loopback ones, e.g. "musicpi.local"
     rescan_hours: int = 0  # look for new songs by itself every this many hours (0: only at the start, and when asked)
     login_days: int = 90  # how long a device that opened the link with the token stays signed in
+    tailscale_logins: list[str] = field(default_factory=list)  # Tailscale accounts signed in without the token (needs `tailscale serve`, and host = "127.0.0.1")
 
 
 @dataclass

@@ -404,6 +404,7 @@ def serve(
     try:
         number = server_ops.check_port(port if port is not None else settings.port)
         names = server_ops.allowed_names(bind, settings.allowed_hosts)
+        logins = server_ops.tailscale_logins(bind, settings.tailscale_logins)
         token, source = server_ops.server_token(_data_dir(), os.environ)
     except server_ops.ServeError as error:
         typer.echo(f"Cannot start the server: {error}", err=True)
@@ -418,10 +419,13 @@ def serve(
         allowed_hosts=names,
         login_days=settings.login_days,
         rescan_hours=settings.rescan_hours,
+        tailscale_logins=logins,
     )
     typer.echo(f"Music Toolkit server listening on {bind}:{number}")
     typer.echo(f"  answers to the names: {', '.join(['127.0.0.1', 'localhost', *names])}")
     typer.echo(f"  token: {source}  (the link that signs a device in: mtk token --url https://NAME)")
+    if logins:  # (how many, not who: a log is not the place for people's accounts)
+        typer.echo(f"  signs in {len(logins)} Tailscale account{'s' if len(logins) != 1 else ''} without the token  (behind `tailscale serve`)")
     typer.echo(f"  data folder: {_data_dir()}")
     if (warning := server_ops.token_file_warning(_data_dir())) and source != "the MTK_TOKEN environment variable":
         typer.echo(f"  WARNING: {warning}", err=True)
