@@ -23,6 +23,9 @@ device_scheme = "{album_artist}/{album}/{track:02d} - {title}.{ext}"
 
 [database]
 path = "./data/library.db"   # relative paths resolve against this file's folder, not the working directory
+backup_hours = 24            # a copy of the database by itself this often (0: none by itself); they go in "backups" next to this file
+backup_keep = 7              # the newest this many copies are kept in each folder
+backup_folders = []          # more folders for each copy, on another drive, for example ["D:/Backups"] (a drive that is not connected is skipped)
 
 [logging]
 level = "INFO"

@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
 
+from musictoolkit import backup
 from musictoolkit.web.hosts import clean_names
 from musictoolkit.web.tailnet import clean_logins
 
@@ -44,6 +45,14 @@ def allowed_names(bind: str, allowed_hosts: list[str]) -> list[str]:
             'devices reach it by (for example allowed_hosts = ["musicpi.local"]); a request that names anything else is refused.'
         )
     return names
+
+
+def backup_settings(database: object) -> backup.Settings:
+    """The settings for copies of the database, checked: the server does not start with ones that would leave it without the copies the person asked for."""
+    try:
+        return backup.settings_of(database)
+    except backup.BackupError as error:
+        raise ServeError(str(error)) from None
 
 
 def tailscale_logins(bind: str, entries: object) -> list[str]:

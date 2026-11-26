@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import platform
 import shutil
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,19 +59,23 @@ def cancel_job(job_id: str, ctx: AppContext = Depends(get_ctx)) -> dict:
 
 @router.post("/system/backup")
 def backup_database(ctx: AppContext = Depends(get_ctx)) -> dict:
-    """Consistent copy of the library database (play history, playlists, ratings
-    live only here), via SQLite's online backup so WAL contents are included."""
-    target_dir = ctx.data_dir / "backups"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"library-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    source = sqlite3.connect(ctx.db_path, timeout=30)
-    dest = sqlite3.connect(target)
-    try:
-        source.backup(dest)
-    finally:
-        dest.close()
-        source.close()
-    return {"path": str(target), "size": target.stat().st_size}
+    """A copy of the library database now (play history, playlists, ratings and favorites live only there), in the app's `backups` folder and in each of
+    `[database] backup_folders`: made with SQLite's online backup, so that what the app has written is in it. `path` and `size` are those of the first copy
+    that was made; a folder that could not be written says why in `problems`."""
+    outcomes = ctx.backups.run_now()
+    made = next((outcome for outcome in outcomes if outcome.path), None)
+    if made is None:
+        raise HTTPException(status_code=500, detail=f"No copy was made: {outcomes[0].problem}")
+    return {
+        "path": str(made.path), "size": made.size, "copies": [str(outcome.path) for outcome in outcomes if outcome.path],
+        "problems": [{"folder": str(outcome.folder), "problem": outcome.problem} for outcome in outcomes if outcome.problem],
+    }
+
+
+@router.get("/system/backups")
+def backups(ctx: AppContext = Depends(get_ctx)) -> dict:
+    """The copies of the database: how often they are made, what each folder holds, when the last was made, and whether they are late."""
+    return ctx.backups.status()
 
 
 @router.get("/system/logs")

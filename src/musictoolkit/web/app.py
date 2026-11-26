@@ -69,6 +69,7 @@ from musictoolkit.web.routers import (
 from musictoolkit.net.proxy import Slots
 from musictoolkit.radio.hub import RadioHub
 from musictoolkit.web import tailnet
+from musictoolkit.web.backup_job import BackupSchedule
 from musictoolkit.web.hosts import LOOPBACK_HOSTS, clean_names, hostname_of
 from musictoolkit.web.podcast_job import PodcastSchedule
 from musictoolkit.web.radar_job import RadarSchedule
@@ -149,6 +150,7 @@ def create_app(
     ctx.podcast_slots = Slots(6)
     ctx.podcasts = PodcastSchedule(ctx)
     ctx.rescan = RescanSchedule(ctx, rescan_hours)
+    ctx.backups = BackupSchedule(ctx)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -158,9 +160,11 @@ def create_app(
         ctx.radar.start()
         ctx.podcasts.start()
         ctx.rescan.start()
+        ctx.backups.start()
         try:
             yield
         finally:
+            ctx.backups.stop()
             ctx.rescan.stop()
             ctx.podcasts.stop()
             ctx.radar.stop()
@@ -330,13 +334,15 @@ def create_app(
 
     @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     def healthz() -> dict:
-        """For a monitor: the app is up, and whether the library folders are there. No token (a monitor has none), no paths."""
+        """For a monitor: the app is up, whether the library folders are there, and whether the copies of the database are being made. No token (a monitor has none), no paths."""
         with ctx.db() as conn:
             there = [unavailable_reason(conn, Path(root)) is None for root in ctx.config.library.roots]
+        overdue = ctx.backups.overdue()
         return {
-            "status": "ok" if all(there) else "degraded",
+            "status": "ok" if all(there) and not overdue else "degraded",
             "version": __version__,
             "library": {"folders": len(there), "available": sum(there)},
+            "backups": "overdue" if overdue else "ok" if ctx.backups.settings().hours > 0 else "off",
         }
 
     answer_head(app.routes)  # (the page, the sign-in address and the health check are the app's own routes)
