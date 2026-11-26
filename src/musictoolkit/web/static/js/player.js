@@ -14,11 +14,18 @@
 // An item is a song (the default), a radio station (`kind: 'station'`: live, so nothing to seek in, no gapless, no play log) or a
 // podcast episode (`kind: 'episode'`: it resumes where listening stopped, and where it has got to is sent to the app as it plays).
 // See items.js. Only songs are joined to each other ahead of time and counted in the listening history.
-import { api, createStore } from './lib.js';
+import { api, createStore, IOS } from './lib.js';
 import { SPEEDS, describe, isEpisode, isStation, isTrack, itemKey, kindOf, sameItem, streamUrl, artSrc } from './items.js';
 import { GAPLESS_BLEND, MAX_CROSSFADE, blendSeconds, equalPowerCurves, itemAt, planNext, shuffledOrder } from './transitions.js';
 
 const STORAGE_KEY = 'mtk.player.v1';
+
+// On an iPhone or an iPad the page plays through the plain <audio> element and not through the Web Audio graph. Safari stops the Web
+// Audio of a page when the screen locks or the app is left, and the music stops with it; an <audio> element carries on. What the graph
+// is for is not there: the volume is the phone's own (the volume of an element is read-only on iOS), and the equalizer, the loudness
+// levelling, the crossfade and the join that has no gap are all made of the graph. A song that ends is followed by the next one loaded
+// into the same element, because that is what iOS lets a page do with the screen locked.
+export const PLAIN = IOS;
 export const EQ_BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 export const EQ_PRESETS = {
   Flat: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -155,7 +162,7 @@ function ensureGraph() {
   return graph;
 }
 
-export const getAnalyser = () => ensureGraph().analyser;
+export const getAnalyser = () => (PLAIN ? null : ensureGraph().analyser);
 
 function applyVolume() {
   if (!graph) return;
@@ -178,7 +185,7 @@ function applyDeckGain(deck) {
 /** Work out the loudness correction (ReplayGain) of the song on a deck, and apply it once the graph exists. */
 async function syncGain(deck, force = false) {
   const track = deck.track;
-  if (!track || (!force && deck.gainFor === itemKey(track))) return;
+  if (PLAIN || !track || (!force && deck.gainFor === itemKey(track))) return; // (no graph, nothing to apply it to)
   deck.gainFor = itemKey(track);
   let gain = 1;
   if (isTrack(track) && player.get().normalize) { // radio and podcasts carry no loudness tags: they play as they come
@@ -305,10 +312,12 @@ export async function restoreQueue() {
 // ------------------------------------------------------------ playback
 
 async function play() {
-  ensureGraph();
   try {
-    await graph.ctx.resume();
-    await active.el.play();
+    if (!PLAIN) {
+      ensureGraph();
+      await graph.ctx.resume();
+    }
+    await active.el.play(); // (plain: nothing is waited for before this, so that it is still inside the tap, or the event, that asked for it)
   } catch (error) {
     if (error.name !== 'AbortError') onFailure(error.message || String(error));
   }
@@ -457,7 +466,7 @@ const failureText = (error) =>
 /** Make sure the spare deck holds the song that follows, so it can start without waiting to load. (Only a song joins a song: a station
  *  is live and would only be listened to later, and a podcast is not joined to the music before it.) */
 function maybePreload(s = player.get()) {
-  if (transition) return;
+  if (transition || PLAIN) return; // (plain: one element, and nothing to join with)
   const deck = spare();
   const now = current(s);
   const ahead = now && isTrack(now) && s.repeat !== 'one' && (s.gapless || s.crossfade > 0) ? itemAt(s, planNext(s, { preview: true })) : null;
@@ -563,17 +572,30 @@ function stopTick() {
 
 // -- queue operations ---------------------------------------------------
 
-export function playQueue(tracks, startIndex = 0, { shuffle, source = '' } = {}) {
-  if (!tracks.length) return;
+const NO_AUDIO = 'it has tags but no audio in it';
+
+/** What of a list there is to play: a file that is only tags stays in the list (dimmed, marked) but is left out of the queue, so that
+ *  playing a whole album, or a shuffle of everything, never stops at it. */
+const withSound = (items) => items.filter((item) => !item.no_audio);
+
+export function playQueue(allTracks, startIndex = 0, { shuffle, source = '' } = {}) {
+  if (!allTracks.length) return;
+  const asked = allTracks[Math.min(Math.max(startIndex, 0), allTracks.length - 1)];
+  if (asked.no_audio) {
+    player.set({ error: `Can't play "${asked.title}": ${NO_AUDIO}.` });
+    return;
+  }
+  const tracks = withSound(allTracks);
   const wantShuffle = shuffle ?? player.get().shuffle;
-  const first = Math.min(Math.max(startIndex, 0), tracks.length - 1);
+  const first = tracks.indexOf(asked);
   const order = wantShuffle ? shuffledOrder(tracks.length, first) : tracks.map((_, i) => i);
   consecutiveErrors = 0;
-  player.set({ items: tracks.slice(), order, pos: wantShuffle ? 0 : first, shuffle: wantShuffle, source });
+  player.set({ items: tracks, order, pos: wantShuffle ? 0 : first, shuffle: wantShuffle, source, error: null });
   return loadCurrent(true);
 }
 
-export function addToQueue(tracks, { next = false } = {}) {
+export function addToQueue(all, { next = false } = {}) {
+  const tracks = withSound(all);
   if (!tracks.length) return;
   const s = player.get();
   if (!s.items.length) {
@@ -892,26 +914,72 @@ export function setSleepTimer(minutes) {
 
 // ------------------------------------------------------------ OS media controls
 
+// Safari 16.4 and later: say that this page plays music, so that the sound carries on with the screen locked and the ring switch does not silence it.
+try {
+  if (navigator.audioSession) navigator.audioSession.type = 'playback';
+} catch {
+  /* not there, or not allowed */
+}
+
+let artwork = { key: '', url: null, type: '' }; // the picture of what is playing, once it has arrived, as an address of this page's own (a blob)
+
+/** The picture of an item as a blob. The system asks for the address in a media session itself, and a picture that wants the cookie may never arrive. */
+async function fetchArtwork(item) {
+  const src = artSrc(item, 512);
+  if (!src) return null;
+  try {
+    const response = await fetch(src);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || 'image/jpeg' };
+  } catch {
+    return null;
+  }
+}
+
+/** Skipping by seconds is for an episode; a phone's lock screen has room for one pair of buttons, skipping by seconds or the song before and after, so a song only registers the second. */
+function setSeekHandlers(item) {
+  for (const [action, seconds] of [['seekbackward', -SKIP_BACK], ['seekforward', SKIP_FORWARD]]) {
+    try {
+      navigator.mediaSession.setActionHandler(action, isEpisode(item) ? () => seekBy(seconds) : null);
+    } catch {
+      /* not every action exists everywhere */
+    }
+  }
+}
+
 function updateMediaSession(item, liveTitle = '') {
   if (!item || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
   const shown = describe(item, liveTitle);
-  const picture = artSrc(item, 512);
+  const key = itemKey(item);
   navigator.mediaSession.metadata = new MediaMetadata({
     title: shown.title,
     artist: shown.subtitle,
     album: isTrack(item) ? item.album : '',
-    artwork: picture ? [{ src: picture, sizes: '512x512', type: 'image/jpeg' }] : [],
+    artwork: artwork.key === key && artwork.url ? [{ src: artwork.url, sizes: '512x512', type: artwork.type }] : [],
+  });
+  setSeekHandlers(item);
+  if (artwork.key === key) return; // (asked for already: it is on its way, or it has none)
+  if (artwork.url) URL.revokeObjectURL(artwork.url);
+  artwork = { key, url: null, type: '' };
+  fetchArtwork(item).then((got) => {
+    if (!got) return;
+    if (artwork.key !== key) {
+      URL.revokeObjectURL(got.url); // another song came on while it was on its way
+      return;
+    }
+    artwork = { key, ...got };
+    const now = current();
+    if (now && itemKey(now) === key) updateMediaSession(now, player.get().liveTitle);
   });
 }
 
 if ('mediaSession' in navigator) {
   const handlers = {
-    play: () => toggle(),
+    play: () => { if (!player.get().playing) toggle(); }, // (a Play from the lock screen while this thinks it is playing is not a Pause)
     pause: () => pause(),
     previoustrack: () => previous(),
     nexttrack: () => next(),
-    seekbackward: () => seekBy(isEpisode(current()) ? -SKIP_BACK : -10),
-    seekforward: () => seekBy(isEpisode(current()) ? SKIP_FORWARD : 10),
     seekto: (d) => seek(d.seekTime),
     stop: () => pause(),
   };

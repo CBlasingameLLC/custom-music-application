@@ -414,7 +414,8 @@ function RipTab({ active }) {
   const ripping = Boolean(current) || running;
 
   useEffect(() => {
-    // (nor is a disc previewed that the drives no longer show: the list that says the rip ejected it arrives while the form still holds its songs)
+    // (`seen`: the drives as they are now say there is a music disc in the one that is chosen. The disc the page holds is the one before the
+    // rip, which has been ejected when the list comes in: previewing a rip of it is a refusal from the server for a disc that is not there.)
     if (!active || !listed || !seen || !wanted || ripping || previewing || wanted !== key || !form.tracks.length || (plan && plan.key === wanted)) return undefined;
     const asked = JSON.parse(wanted);
     if (!asked.scheme) {

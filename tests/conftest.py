@@ -9,7 +9,7 @@ import musicbrainzngs
 import pytest
 from fastapi.testclient import TestClient
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import APIC, ID3
+from mutagen.id3 import APIC, ID3, TALB, TCON, TDRC, TIT2, TPE1, TRCK
 from PIL import Image
 
 from musictoolkit.config import Config
@@ -39,6 +39,27 @@ def make_track(directory: Path, filename: str, source: str = "complete_tags.mp3"
     for key, value in tags.items():
         audio[key] = str(value)
     audio.save()
+    return path
+
+
+def make_stub(
+    directory: Path, name: str = "stub.mp3", *, title: str = "Hidden Song", artist: str = "Some Band", album: str = "Some Album", track: int = 4,
+    genre: str | None = None, year: str | None = None,
+) -> Path:
+    """An MP3 that is only an ID3 tag (what the Pi's library had 22 of): the tag is real, there is not one frame of audio after it."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.unlink(missing_ok=True)  # (saving a tag into a file that has audio keeps the audio: this is to be only the tag)
+    tags = ID3()
+    tags.add(TIT2(encoding=3, text=[title]))
+    tags.add(TPE1(encoding=3, text=[artist]))
+    tags.add(TALB(encoding=3, text=[album]))
+    tags.add(TRCK(encoding=3, text=[str(track)]))
+    if genre:
+        tags.add(TCON(encoding=3, text=[genre]))
+    if year:
+        tags.add(TDRC(encoding=3, text=[year]))
+    tags.save(path)
     return path
 
 
@@ -76,14 +97,15 @@ def music_dir(tmp_path: Path) -> Path:
     return build_music_dir(tmp_path / "music")
 
 
-def build_web(tmp_path: Path, music_dir: Path | None, token: str | None = None) -> SimpleNamespace:
+def build_web(tmp_path: Path, music_dir: Path | None, token: str | None = None, **options: object) -> SimpleNamespace:
+    """`options` go to create_app as they are (allowed_hosts, login_days, rescan_hours ...)."""
     config = Config()
     config.database.path = str(tmp_path / "data" / "library.db")
     config.logging.dir = str(tmp_path / "logs")
     if music_dir is not None:
         config.library.roots = [str(music_dir)]
     app = create_app(
-        db_path=Path(config.database.path), config_path=tmp_path / "config.toml", config=config, token=token
+        db_path=Path(config.database.path), config_path=tmp_path / "config.toml", config=config, token=token, **options
     )
     client = TestClient(app, raise_server_exceptions=False)
     return SimpleNamespace(app=app, client=client, ctx=app.state.ctx, config=config)

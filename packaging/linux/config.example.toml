@@ -1,0 +1,26 @@
+# /var/lib/musictoolkit/config.toml for a server. Relative paths (database, logs) are relative to this file's folder.
+[library]
+roots = ["/srv/music/library"]      # the folder the songs are in; more can be added from the app (Settings, Add music folder)
+
+[musicbrainz]
+contact = ""                        # your email or a project address: MusicBrainz asks every app to say who is asking
+
+[database]
+path = "./data/library.db"          # keep it on the system disk, not on the music drive
+
+[logging]
+level = "INFO"
+dir = "./logs"
+
+[app]
+rescan_on_launch = true             # look for new songs when the server starts (a folder that is not there is skipped, never "all deleted")
+auto_update = false                 # the Windows desktop app's updater: not used here
+
+[server]
+host = "127.0.0.1"                  # "0.0.0.0" listens for other devices directly; "127.0.0.1" is for a proxy on this machine (Tailscale Serve)
+port = 4533
+# Every name the devices reach this server by, besides localhost. A request that names anything else is refused.
+# For Tailscale add the machine's name from `tailscale status`, for example "musicpi.tail1234.ts.net".
+allowed_hosts = ["musicpi.local"]
+rescan_hours = 6                    # look for new songs by itself every this many hours (0: only at the start, and when asked)
+login_days = 90                     # how long a device that opened the sign-in link stays signed in

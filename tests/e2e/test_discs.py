@@ -496,8 +496,12 @@ def test_a_slow_look_at_the_drives_after_a_rip_does_not_send_the_page_to_read_a_
         set_control(world, drives_delay=2.5)  # from here on the drives are slow to say what they hold, and the person is quicker than that
         expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
     assert (world / "E" / "eject.log").exists()
+    previews: list[str] = []  # (what the page asks the server to preview: a rip of a disc that is not in the drive is a 409, and the page has no business asking)
+    page.on("request", lambda r: previews.append(r.url) if r.method == "POST" and r.url.endswith("/api/discs/rip/preview") else None)
     page.get_by_role("button", name="Rip another disc").click()  # (the list of drives the page has is from before the rip: the disc it names has left the tray)
     expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible(timeout=20_000)
+    page.wait_for_timeout(1000)
+    assert previews == [], "the page asked for a preview of a rip of the disc that was ejected"
 
 
 class HeldLooks:
@@ -549,26 +553,6 @@ def requests_of_the_discs(page) -> list[str]:
 def about_a_disc(asked: list[str]) -> list[str]:
     """Of what was asked, what reads the disc in a drive or previews ripping it: neither can be answered once the disc has been ejected."""
     return [a for a in asked if a == "POST /rip/preview" or re.fullmatch(r"GET /drives/[^/]+/disc", a)]
-
-
-def test_an_answer_that_says_the_disc_is_gone_does_not_leave_the_page_previewing_its_songs(page, live, world, monkeypatch) -> None:
-    add_library(page, live)
-    asked = requests_of_the_discs(page)
-    with musicbrainz(live, monkeypatch, *albums("The Real Name")):
-        open_discs(page)
-        expect(start_button(page)).to_be_enabled()
-        with HeldLooks(page) as looks:  # from here on the drives answer when the test says
-            start_button(page).click()
-            expect(page.locator(".callout", has_text="Ripped 3 songs")).to_be_visible(timeout=60_000)
-            assert (world / "E" / "eject.log").exists()
-            looks.wait_for(1)  # the page has heard that the rip is over, and has asked what the drives hold now
-            page.get_by_role("button", name="Rip another disc").click()  # (the form still has the songs of the disc that was ejected)
-            looks.wait_for(2)
-            before = len(asked)
-            looks.answer(looks.fresh[0])  # the answer to that look: the drive is empty
-            expect(page.get_by_role("heading", name="Put an audio CD in the drive")).to_be_visible()
-            page.wait_for_timeout(500)  # (a request that was wrongly sent would have been sent, and refused, by now)
-            assert not about_a_disc(asked[before:]), f"the page asked about a disc that the drive had just said was gone: {asked[before:]}"
 
 
 def test_an_answer_from_before_a_rip_that_comes_after_it_does_not_send_the_page_to_read_the_disc_that_was_ejected(page, live, world, monkeypatch) -> None:

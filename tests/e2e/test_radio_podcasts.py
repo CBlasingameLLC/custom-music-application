@@ -15,7 +15,7 @@ from playwright.sync_api import expect
 
 from musictoolkit.net import guard
 from musictoolkit.radio import directory as radio_directory
-from tests.e2e.conftest import add_library, api, play, wait_until
+from tests.e2e.conftest import WATCH_MEDIA_SESSION, add_library, api, play, wait_until
 from tests.fake_streams import PodcastSite, json_script, live_script, mp3_frames, serve_script
 
 expect.set_options(timeout=10_000)
@@ -548,6 +548,46 @@ def test_episodes_have_skip_buttons_and_a_speed_that_songs_and_stations_do_not_u
     expect(bar(page).get_by_role("button", name="Shuffle: off")).to_be_visible()
     expect(bar(page).get_by_role("button", name=re.compile("^Playback speed"))).to_have_count(0)
     assert state(page)["rates"] == [1, 1], "songs always play at their own speed"
+
+
+def test_the_lock_screen_has_skip_buttons_for_an_episode_and_the_song_before_and_after_for_a_song(page, live, show):
+    """A phone's lock screen has room for one pair: skipping by seconds is for an episode, and a song gets previous and next."""
+    page.add_init_script(WATCH_MEDIA_SESSION)
+    page.reload()
+    page.wait_for_selector(".sidebar")
+    add_library(page, live)
+    podcast_id = follow_show(page, show)
+    skips = "[window.__handlers.seekbackward, window.__handlers.seekforward]"
+    tracks = "[window.__handlers.previoustrack, window.__handlers.nexttrack]"
+
+    page.evaluate("location.hash = '#/songs'")
+    page.wait_for_selector(".trow:not(.skeleton)")
+    play(page, "Glacier")
+    wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+    assert page.evaluate(skips) == [None, None] and page.evaluate(tracks) == ["function", "function"]
+
+    page.evaluate(f"location.hash = '#/podcast/{podcast_id}'")
+    page.get_by_role("button", name="Play Episode 6").click()
+    expect(bar(page).locator(".pb-text .t1")).to_have_text("Episode 6")
+    assert page.evaluate(skips) == ["function", "function"] and page.evaluate(tracks) == ["function", "function"]
+    # pressed on the lock screen: forward 30 seconds (past the end of 12: the episode ends), and back 15 (before the start: to the start, and it plays on)
+    ends = f"{PLAYER}.then((m) => m.deckState().hardEnds)"
+    before = page.evaluate(ends)
+    page.evaluate(f"{PLAYER}.then((m) => m.seek(5))")
+    page.evaluate("window.__press.seekforward()")
+    wait_until(page, f"{PLAYER}.then((m) => m.deckState().hardEnds === {before + 1})")
+    page.evaluate("window.__press.play()")
+    wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
+    before = page.evaluate(ends)
+    page.evaluate(f"{PLAYER}.then((m) => m.seek(9))")
+    page.evaluate("window.__press.seekbackward()")
+    page.wait_for_timeout(700)
+    assert page.evaluate(ends) == before and state(page)["playing"] is True  # (back to the start, still playing: forward by mistake would have been the end of it)
+
+    page.evaluate("location.hash = '#/songs'")
+    play(page, "Drift")
+    wait_until(page, f"{PLAYER}.then((m) => m.current(m.player.get()).title === 'Drift')")
+    assert page.evaluate(skips) == [None, None]  # (back to a song: the skip buttons are taken away again)
 
 
 def test_a_podcast_can_be_unfollowed(page, show):

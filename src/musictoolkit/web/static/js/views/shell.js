@@ -2,14 +2,45 @@
 import { api, fmt, html, useEffect, useLayoutEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Cover, IconButton } from '../components.js';
-import { current, cycleRepeat, next, player, previous, seek, seekBy, setSpeed, setVolume, SKIP_BACK, SKIP_FORWARD, toggle, toggleMute, toggleShuffle } from '../player.js';
+import { current, next, PLAIN, player, setSpeed, setVolume, toggle, toggleMute } from '../player.js';
 import { describe, isEpisode, isStation, isTrack, nextSpeed, pageOf, speedLabel } from '../items.js';
 import { QueueList } from './nowplaying.js';
-import { setStationFavorite } from '../radio.js';
-import { setFavorite, startRadio } from '../tracks.js';
-import { desktop, enc, go, href, jobs, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
+import { Heart, Seek, Transport } from './transport.js';
+import { startRadio } from '../tracks.js';
+import { desktop, enc, go, href, jobs, layout, library, loadPlaylists, notifyError, route, setTheme, ui, updates } from '../state.js';
 
 // ------------------------------------------------------------ sidebar
+
+const starts = (prefix) => (path) => path === prefix || path.startsWith(prefix + '/');
+const startsWithAny = (...prefixes) => (path) => prefixes.some((prefix) => starts(prefix)(path));
+
+// Where the app goes: the sidebar lists all of it, and on a phone the row of tabs has the first four and the More sheet has the rest.
+const NAV_MAIN = [
+  { to: '/', icon: 'home', label: 'Home' },
+  { to: '/songs', icon: 'music', label: 'Songs', match: starts('/songs') },
+  { to: '/albums', icon: 'disc', label: 'Albums', match: startsWithAny('/albums', '/album') },
+  { to: '/artists', icon: 'user', label: 'Artists', match: startsWithAny('/artists', '/artist') },
+  { to: '/playlists', icon: 'list', label: 'Playlists', match: startsWithAny('/playlists', '/playlist') },
+  { to: '/favorites', icon: 'heart', label: 'Favorites' },
+];
+const NAV_LISTEN = [
+  { to: '/recent', icon: 'clock', label: 'Recently played' },
+  { to: '/radio', icon: 'radio', label: 'Radio' },
+  { to: '/podcasts', icon: 'mic', label: 'Podcasts', match: startsWithAny('/podcasts', '/podcast') },
+  { to: '/discover', icon: 'compass', label: 'Discover' },
+  { to: '/stats', icon: 'chart', label: 'Stats' },
+  { to: '/history', icon: 'calendar', label: 'Listening history', match: starts('/history') },
+];
+const NAV_MANAGE = [
+  { to: '/tools', icon: 'wrench', label: 'Library tools', match: starts('/tools') },
+  { to: '/discs', icon: 'cd', label: 'Discs', match: starts('/discs') },
+  { to: '/devices', icon: 'drive', label: 'Devices', match: starts('/devices') },
+  { to: '/settings', icon: 'sliders', label: 'Settings' },
+];
+const TABS = [NAV_MAIN[0], NAV_MAIN[1], NAV_MAIN[2], NAV_MAIN[4]]; // Home, Songs, Albums, Playlists
+const MORE = { library: [NAV_MAIN[3], NAV_MAIN[5]], listen: NAV_LISTEN, manage: NAV_MANAGE }; // what the tabs leave out
+
+const isActive = (item, path) => (item.match ? item.match(path) : path === item.to);
 
 function NavItem({ to, icon, label, match }) {
   const { path } = useStore(route);
@@ -23,34 +54,20 @@ export function Sidebar() {
   const about = useStore(library, (s) => s.about);
   const update = useStore(updates, (s) => s.status);
   useEffect(() => { loadPlaylists().catch(() => {}); }, []);
-  const starts = (prefix) => (path) => path === prefix || path.startsWith(prefix + '/');
   return html`<nav class="sidebar" aria-label="Main">
     <a class="brand" href=${href('/')}>
       <span class="logo"><${Icon} name="music" size=${18} /></span><span>Music Toolkit</span>
     </a>
     <div class="nav-group">
-      <${NavItem} to="/" icon="home" label="Home" />
-      <${NavItem} to="/songs" icon="music" label="Songs" match=${starts('/songs')} />
-      <${NavItem} to="/albums" icon="disc" label="Albums" match=${(p) => starts('/albums')(p) || starts('/album')(p)} />
-      <${NavItem} to="/artists" icon="user" label="Artists" match=${(p) => starts('/artists')(p) || starts('/artist')(p)} />
-      <${NavItem} to="/playlists" icon="list" label="Playlists" match=${(p) => starts('/playlists')(p) || starts('/playlist')(p)} />
-      <${NavItem} to="/favorites" icon="heart" label="Favorites" />
+      ${NAV_MAIN.map((item) => html`<${NavItem} key=${item.to} ...${item} />`)}
     </div>
     <div class="nav-group" role="group" aria-labelledby="nav-listen">
       <div class="nav-label" id="nav-listen">Listen</div>
-      <${NavItem} to="/recent" icon="clock" label="Recently played" />
-      <${NavItem} to="/radio" icon="radio" label="Radio" />
-      <${NavItem} to="/podcasts" icon="mic" label="Podcasts" match=${(p) => starts('/podcasts')(p) || starts('/podcast')(p)} />
-      <${NavItem} to="/discover" icon="compass" label="Discover" />
-      <${NavItem} to="/stats" icon="chart" label="Stats" />
-      <${NavItem} to="/history" icon="calendar" label="Listening history" match=${starts('/history')} />
+      ${NAV_LISTEN.map((item) => html`<${NavItem} key=${item.to} ...${item} />`)}
     </div>
     <div class="nav-group" role="group" aria-labelledby="nav-manage">
       <div class="nav-label" id="nav-manage">Manage</div>
-      <${NavItem} to="/tools" icon="wrench" label="Library tools" match=${starts('/tools')} />
-      <${NavItem} to="/discs" icon="cd" label="Discs" match=${starts('/discs')} />
-      <${NavItem} to="/devices" icon="drive" label="Devices" match=${starts('/devices')} />
-      <${NavItem} to="/settings" icon="sliders" label="Settings" />
+      ${NAV_MANAGE.map((item) => html`<${NavItem} key=${item.to} ...${item} />`)}
     </div>
     ${playlists.length > 0 && html`<div class="nav-group playlists-nav" role="group" aria-labelledby="nav-playlists">
       <div class="nav-label" id="nav-playlists">Playlists</div>
@@ -130,6 +147,7 @@ function summarize(job) {
 
 export function TopBar() {
   const { path, parts } = useStore(route);
+  const { phone } = useStore(layout);
   const [term, setTerm] = useState(parts[0] === 'search' ? parts[1] || '' : '');
   const input = useRef();
   const { theme } = useStore(ui);
@@ -150,60 +168,28 @@ export function TopBar() {
     else if (parts[0] === 'search') go('/');
   };
 
+  // A phone has no browser around the page when it is installed: a way back is on the page itself (its edge swipe is there too), the
+  // forward arrow and the shortcut's hint are not, and the theme is chosen in the settings.
   return html`<header class="topbar">
-    <div class="nav-arrows">
-      <${IconButton} icon="chevron-left" title="Back" onClick=${() => history.back()} />
-      <${IconButton} icon="chevron-right" title="Forward" onClick=${() => history.forward()} />
-    </div>
+    ${phone
+      ? path !== '/' && html`<${IconButton} icon="chevron-left" title="Back" onClick=${() => history.back()} />`
+      : html`<div class="nav-arrows">
+          <${IconButton} icon="chevron-left" title="Back" onClick=${() => history.back()} />
+          <${IconButton} icon="chevron-right" title="Forward" onClick=${() => history.forward()} />
+        </div>`}
     <label class="search-box top">
       <${Icon} name="search" size=${16} />
-      <input ref=${input} type="search" value=${term} placeholder="Search your library   ( / )" aria-label="Search your library"
+      <input ref=${input} type="search" value=${term} placeholder=${phone ? 'Search your library' : 'Search your library   ( / )'} aria-label="Search your library"
+        enterkeyhint="search" autocapitalize="off" autocorrect="off" spellcheck="false"
         onInput=${(e) => search(e.target.value)} onKeyDown=${(e) => e.key === 'Escape' && (setTerm(''), e.target.blur())} />
     </label>
     <span class="spacer"></span>
     <${TasksPill} />
-    <${IconButton} icon=${theme === 'dark' ? 'sun' : 'moon'} title=${theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick=${() => setTheme(theme === 'dark' ? 'light' : 'dark')} />
+    ${!phone && html`<${IconButton} icon=${theme === 'dark' ? 'sun' : 'moon'} title=${theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} onClick=${() => setTheme(theme === 'dark' ? 'light' : 'dark')} />`}
   </header>`;
 }
 
 // ------------------------------------------------------------ player bar
-
-function Seek({ track }) {
-  const position = useStore(player, (s) => s.position);
-  const duration = useStore(player, (s) => s.duration || track?.duration || 0);
-  const [dragging, setDragging] = useState(null);
-  const shown = dragging ?? position;
-  const pct = duration ? Math.min(100, (shown / duration) * 100) : 0;
-  // A station is live: there is no length and nothing to seek in.
-  if (track && isStation(track)) return html`<div class="seek live"><span class="live-badge">LIVE</span><span class="subtle">${fmt.time(position)} listened</span></div>`;
-  return html`<div class="seek">
-    <span class="time">${fmt.time(shown)}</span>
-    <input class="slider" type="range" min="0" max=${duration || 0} step="0.1" value=${shown} disabled=${!track} aria-label="Seek"
-      aria-valuetext=${`${fmt.time(shown)} of ${fmt.time(duration)}`} style=${{ '--pct': pct + '%' }}
-      onInput=${(e) => setDragging(Number(e.target.value))}
-      onChange=${(e) => { seek(Number(e.target.value)); setDragging(null); }} />
-    <span class="time">${fmt.time(duration)}</span>
-  </div>`;
-}
-
-/** A station is kept among the favorites with the heart; an episode has none; a song has its own. */
-function Heart({ item }) {
-  if (isStation(item)) {
-    return html`<button class="icon-btn heart ${item.favorite ? 'on' : ''}" aria-label=${item.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${Boolean(item.favorite)}
-      onClick=${() => setStationFavorite(item, !item.favorite).catch(notifyError)}><${Icon} name="heart" size=${18} fill=${Boolean(item.favorite)} /></button>`;
-  }
-  if (!isTrack(item)) return null;
-  return html`<button class="icon-btn heart ${item.favorite ? 'on' : ''}" aria-label=${item.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${item.favorite}
-    onClick=${() => setFavorite([item], !item.favorite).catch(notifyError)}><${Icon} name="heart" size=${18} fill=${item.favorite} /></button>`;
-}
-
-/** A button that skips through an episode by a few seconds. */
-function Skip({ seconds }) {
-  const back = seconds < 0;
-  const label = `${back ? 'Back' : 'Forward'} ${Math.abs(seconds)} seconds`;
-  return html`<button class="icon-btn skip" title=${label} aria-label=${label} onClick=${() => seekBy(seconds)}>
-    <${Icon} name=${back ? 'rewind' : 'fast-forward'} size=${18} /><span class="skip-n" aria-hidden="true">${Math.abs(seconds)}</span></button>`;
-}
 
 export function PlayerBar() {
   const s = useStore(player);
@@ -229,15 +215,7 @@ export function PlayerBar() {
     </div>
 
     <div class="pb-center">
-      <div class="controls">
-        ${episode ? html`<${Skip} seconds=${-SKIP_BACK} />` : track && isStation(track) ? html`<span class="ctl-gap"></span>` : html`<${IconButton} icon="shuffle" title=${s.shuffle ? 'Shuffle: on' : 'Shuffle: off'} active=${s.shuffle} onClick=${toggleShuffle} />`}
-        <${IconButton} icon="prev" title="Previous" size=${20} onClick=${previous} />
-        <button class="play-btn" aria-label=${s.playing ? 'Pause' : 'Play'} disabled=${!track} onClick=${toggle}>
-          ${s.loading && (s.playing || (track && isStation(track))) ? html`<span class="spinner small"></span>` : html`<${Icon} name=${s.playing ? 'pause' : 'play'} size=${22} />`}
-        </button>
-        <${IconButton} icon="next" title="Next" size=${20} onClick=${next} />
-        ${episode ? html`<${Skip} seconds=${SKIP_FORWARD} />` : track && isStation(track) ? html`<span class="ctl-gap"></span>` : html`<${IconButton} icon=${s.repeat === 'one' ? 'repeat-one' : 'repeat'} title=${`Repeat: ${s.repeat}`} active=${s.repeat !== 'off'} onClick=${cycleRepeat} />`}
-      </div>
+      <${Transport} s=${s} track=${track} />
       <${Seek} track=${track} />
     </div>
 
@@ -246,12 +224,90 @@ export function PlayerBar() {
       ${episode && html`<button class="speed-btn" title="Playback speed" aria-label=${`Playback speed ${speedLabel(s.speed)}. Press to change it`} onClick=${() => setSpeed(nextSpeed(s.speed))}>${speedLabel(s.speed)}</button>`}
       <${IconButton} icon="mic" title=${song ? 'Now Playing and lyrics' : 'Now Playing'} onClick=${() => go('/now')} />
       <${IconButton} icon="queue" title="Queue" active=${queueOpen} onClick=${() => ui.set({ queueOpen: !queueOpen })} />
-      <${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />
-      <input class="slider volume" type="range" min="0" max="1" step="0.01" value=${s.muted ? 0 : s.volume} aria-label="Volume"
-        aria-valuetext=${s.muted ? 'Muted' : `${Math.round(s.volume * 100)} percent`}
-        style=${{ '--pct': (s.muted ? 0 : s.volume) * 100 + '%' }} onInput=${(e) => setVolume(Number(e.target.value))} />
+      ${!PLAIN && html`<${IconButton} icon=${volumeIcon} title=${s.muted ? 'Unmute' : 'Mute'} onClick=${toggleMute} />
+        <input class="slider volume" type="range" min="0" max="1" step="0.01" value=${s.muted ? 0 : s.volume} aria-label="Volume"
+          aria-valuetext=${s.muted ? 'Muted' : `${Math.round(s.volume * 100)} percent`}
+          style=${{ '--pct': (s.muted ? 0 : s.volume) * 100 + '%' }} onInput=${(e) => setVolume(Number(e.target.value))} />`}
     </div>
   </section>`;
+}
+
+// ------------------------------------------------------------ a phone's player and tabs
+
+/** The small player over the tabs: what is playing, play and pause, next, and a thin line for how far it has got. It opens Now Playing. */
+export function MiniPlayer() {
+  // One value each: the whole player changes four times a second while a song plays (the line below watches the position by itself).
+  const track = useStore(player, (s) => current(s));
+  const liveTitle = useStore(player, (s) => s.liveTitle);
+  const playing = useStore(player, (s) => s.playing);
+  const loading = useStore(player, (s) => s.loading);
+  if (!track) return null;
+  const shown = describe(track, liveTitle);
+  const song = isTrack(track);
+  return html`<section class="miniplayer" aria-label="Player">
+    <a class="mini-main" href=${href('/now')} aria-label=${`Now Playing: ${shown.title}, ${shown.subtitle}`}>
+      <span class="mini-art"><${Cover} item=${track} name=${shown.name} size=48 /></span>
+      <span class="mini-text"><span class="t1">${shown.title}</span><span class="t2">${song ? track.artist : shown.subtitle}</span></span>
+    </a>
+    <button class="mini-btn play" aria-label=${playing ? 'Pause' : 'Play'} onClick=${toggle}>
+      ${loading && (playing || isStation(track)) ? html`<span class="spinner small"></span>` : html`<${Icon} name=${playing ? 'pause' : 'play'} size=${24} />`}
+    </button>
+    <button class="mini-btn" aria-label="Next" onClick=${next}><${Icon} name="next" size=${22} /></button>
+    <${MiniProgress} track=${track} />
+  </section>`;
+}
+
+function MiniProgress({ track }) {
+  const position = useStore(player, (s) => s.position);
+  const duration = useStore(player, (s) => s.duration || track?.duration || 0);
+  const live = isStation(track);
+  const pct = !live && duration ? Math.min(100, (position / duration) * 100) : 0;
+  return html`<span class="mini-progress ${live ? 'live' : ''}" style=${{ '--pct': pct + '%' }} aria-hidden="true"></span>`;
+}
+
+export function TabBar() {
+  const { path } = useStore(route);
+  const { moreOpen } = useStore(ui);
+  const inMore = [...MORE.library, ...MORE.listen, ...MORE.manage].some((item) => isActive(item, path));
+  return html`<nav class="tabbar" aria-label="Tabs">
+    ${TABS.map((tab) => {
+      const active = isActive(tab, path);
+      return html`<a class="tabbar-item ${active ? 'active' : ''}" key=${tab.to} href=${href(tab.to)} aria-current=${active ? 'page' : undefined}>
+        <${Icon} name=${tab.icon} size=${22} /><span>${tab.label}</span></a>`;
+    })}
+    <button class="tabbar-item ${moreOpen || inMore ? 'active' : ''}" aria-haspopup="dialog" aria-expanded=${moreOpen} onClick=${() => ui.set({ moreOpen: !moreOpen })}>
+      <${Icon} name="grid" size=${22} /><span>More</span></button>
+  </nav>`;
+}
+
+/** Every page the tabs leave out, as a sheet that comes up from the bottom. */
+export function MoreSheet() {
+  const { moreOpen } = useStore(ui);
+  const { path } = useStore(route);
+  const about = useStore(library, (s) => s.about);
+  const box = useRef();
+  useEffect(() => { ui.set({ moreOpen: false }); }, [path]); // going to a page puts the sheet away
+  useLayoutEffect(() => {
+    if (!moreOpen) return undefined;
+    const onKey = (e) => e.key === 'Escape' && ui.set({ moreOpen: false });
+    window.addEventListener('keydown', onKey);
+    box.current?.querySelector('a')?.focus({ preventScroll: true });
+    return () => window.removeEventListener('keydown', onKey);
+  }, [moreOpen]);
+  if (!moreOpen) return null;
+  const item = (n) => html`<a class="more-item ${isActive(n, path) ? 'active' : ''}" key=${n.to} href=${href(n.to)} aria-current=${isActive(n, path) ? 'page' : undefined}>
+    <${Icon} name=${n.icon} size=${22} /><span>${n.label}</span></a>`;
+  return html`<div class="sheet-backdrop" onClick=${(e) => e.target === e.currentTarget && ui.set({ moreOpen: false })}>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="More" ref=${box}>
+      <div class="sheet-head"><h2>More</h2><${IconButton} icon="x" title="Close" onClick=${() => ui.set({ moreOpen: false })} /></div>
+      <div class="more-grid">${MORE.library.map(item)}</div>
+      <h3 class="more-label">Listen</h3>
+      <div class="more-grid">${MORE.listen.map(item)}</div>
+      <h3 class="more-label">Manage</h3>
+      <div class="more-grid">${MORE.manage.map(item)}</div>
+      ${about && html`<p class="more-foot subtle">Music Toolkit v${about.version} · ${fmt.plural(about.tracks, 'song')}</p>`}
+    </div>
+  </div>`;
 }
 
 export function QueueDrawer() {

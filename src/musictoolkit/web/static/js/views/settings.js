@@ -1,11 +1,12 @@
 // Settings: music folders, accounts, folder layouts, appearance, data.
-import { api, fmt, html, useEffect, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, useEffect, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
 import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 import { checkForNewEpisodes } from '../podcasts.js';
+import { installAdvice, openedAsApp } from '../install.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -296,6 +297,40 @@ function WindowCard({ settings }) {
   <//>`;
 }
 
+// ------------------------------------------------------------ on a phone or a Mac
+
+function InstallCard() {
+  const address = location.origin;
+  const { installed, note } = installAdvice({ protocol: location.protocol, hostname: location.hostname, standalone: openedAsApp() });
+  function copy() {
+    navigator.clipboard?.writeText(address).then(() => toast('Address copied', 'success', 1800), () => toast('Select the address and copy it', 'info'));
+  }
+  return html`<${Card} icon="phone" title="Use it on your phone or Mac" hint=${installed ? 'This is the installed app: it opens from its icon, with no browser around it.' : 'Open this app from an icon on a Home Screen or in a Dock, like any other app.'}>
+    <label class="field"><span>This server's address</span>
+      <span class="inline-form">
+        <input type="text" readonly value=${address} onFocus=${(e) => e.target.select()} aria-label="This server's address" />
+        <${Button} icon="copy" onClick=${copy}>Copy<//>
+      </span></label>
+    ${note === 'local' && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address works only on the computer that runs the app. To use the app from a phone, the server has to be reached by a name or address the phone can open (the server guide, <code>packaging/linux/README.md</code>, shows how to do that with Tailscale).</span></p>`}
+    ${note === 'http' && html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This address is <code>http</code>, not <code>https</code>. A phone can still put it on its Home Screen, but it opens like a bookmark, and the page that says the server cannot be reached is not available. <code>tailscale serve</code> gives the server an <code>https</code> address.</span></p>`}
+    ${!installed && html`<${Fragment}>
+      <h3 class="install-h">iPhone or iPad</h3>
+      <ol class="steps">
+        <li>Put the Tailscale app on the phone and sign in to the account the server is on.</li>
+        <li>Open this address in Safari and sign in (with the sign-in link, or by pasting the token).</li>
+        <li>Press Share, then <strong>Add to Home Screen</strong>.</li>
+        <li>Open <strong>Music Kit</strong> from the Home Screen. It stays signed in. If it says it cannot reach the server, open the Tailscale app and check that it is connected.</li>
+      </ol>
+      <h3 class="install-h">Mac</h3>
+      <ol class="steps">
+        <li>Safari (macOS Sonoma or later): <strong>File, Add to Dock</strong>. Chrome and Edge: the menu, then <strong>Install</strong>.</li>
+        <li>Open it from the Dock. It opens in its own window, and the media keys work.</li>
+      </ol>
+    <//>`}
+    <p class="subtle">On an iPhone the volume is the phone's own buttons, and the equalizer, the loudness levelling and the crossfade are not offered: they are what would stop the music when the screen locks.</p>
+  <//>`;
+}
+
 // ------------------------------------------------------------ diagnostics
 
 const KEY_NAMES = { playpause: 'Play/Pause', next: 'Next', previous: 'Previous', stop: 'Stop' };
@@ -460,6 +495,7 @@ export function SettingsView() {
       <${DiscsCard} settings=${settings} />
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
+      ${!desktop && html`<${InstallCard} />`}
       <${AppearanceCard} />
       <${DiagnosticsCard} />
       <${DataCard} about=${about} />

@@ -1,6 +1,6 @@
 // Track lists: a virtualized table that stays fast with tens of thousands of songs,
 // plus the actions (menu, favorite, rating) that apply to tracks anywhere in the app.
-import { api, fmt, html, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
+import { api, fmt, html, touchOnly, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
 import { Icon } from './icons.js';
 import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
@@ -42,14 +42,26 @@ export async function startRadio(track) {
   }
 }
 
+/** Put songs in the queue (next, or last) and say what went in: a file that is only tags does not, and is not "added". */
+function enqueue(tracks, next) {
+  const sound = tracks.filter((t) => !t.no_audio);
+  if (!sound.length) {
+    toast(tracks.length === 1 ? `"${tracks[0].title}" has tags but no audio, so there is nothing to queue` : 'None of these has any audio, so nothing was queued', 'info');
+    return;
+  }
+  addToQueue(sound, { next });
+  const what = sound.length === 1 ? `"${sound[0].title}"` : fmt.plural(sound.length, 'song');
+  toast(next ? `Playing ${what} next` : `Added ${what} to the queue`);
+}
+
 export function trackMenu(tracks, { playNow, onPatched, onRemove, removeLabel = 'Remove from playlist' } = {}) {
   const single = tracks.length === 1 ? tracks[0] : null;
   const allFavorite = tracks.every((t) => t.favorite);
   const label = single ? '' : ` (${tracks.length})`;
   const items = [
     { label: `Play${label}`, icon: 'play', action: () => (playNow ? playNow() : playQueue(tracks, 0)) },
-    { label: 'Play next', icon: 'chevron-right', action: () => { addToQueue(tracks, { next: true }); toast(`Playing ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} next`); } },
-    { label: 'Add to queue', icon: 'queue', action: () => { addToQueue(tracks); toast(`Added ${single ? `"${single.title}"` : fmt.plural(tracks.length, 'song')} to the queue`); } },
+    { label: 'Play next', icon: 'chevron-right', action: () => enqueue(tracks, true) },
+    { label: 'Add to queue', icon: 'queue', action: () => enqueue(tracks, false) },
     ...(single ? [{ label: 'Start radio', icon: 'radio', action: () => startRadio(single) }] : []),
     { divider: true },
     { label: 'Add to playlist…', icon: 'plus', action: () => openAddToPlaylist(tracks) },
@@ -99,12 +111,13 @@ const COLUMNS = {
 };
 
 // Which columns survive as the window narrows (least important first to go).
-const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating']];
+const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating'], ['num', 'artist', 'time']];
 function visibleColumns(wanted, width) {
   let hide = [];
   if (width < 1180) hide = hide.concat(DROP_ORDER[0]);
   if (width < 960) hide = hide.concat(DROP_ORDER[1]);
   if (width < 720) hide = hide.concat(DROP_ORDER[2]);
+  if (width < 520) hide = hide.concat(DROP_ORDER[3]); // a phone: the song with its artist under it, and the two buttons
   return wanted.filter((c) => !hide.includes(c));
 }
 
@@ -399,7 +412,7 @@ export function TrackTable({
     }
   }
 
-  const gridTemplate = cols.map((c) => COLUMNS[c].width).join(' ');
+  const gridTemplate = cols.map((c) => (width < 520 && (c === 'heart' || c === 'more') ? '44px' : COLUMNS[c].width)).join(' '); // (a finger needs more than 38 px)
   const selectedTracks = selected.size ? loadedSelection() : [];
   const activeId = cursor !== null && total !== null && cursor < total && cursor >= range.first && cursor <= range.last ? rowId(cursor) : undefined;
 
@@ -421,7 +434,7 @@ export function TrackTable({
       title: html`<div role="gridcell" class="tcell title">
         ${thumbs && html`<${Cover} trackId=${track.id} name=${track.album} size=40 />`}
         <div class="title-text">
-          <span class="t1">${track.title}</span>
+          <span class="t1">${track.title}${track.no_audio && html`<span class="badge warn" title="This file has tags but no audio in it, so there is nothing to play.">No audio</span>`}</span>
           ${!cols.includes('artist') && html`<span class="t2">${track.artist}</span>`}
         </div>
       </div>`,
@@ -433,19 +446,19 @@ export function TrackTable({
       added: html`<div role="gridcell" class="tcell dim">${fmt.date(track.added)}</div>`,
       rating: html`<div role="gridcell" class="tcell"><${Rating} value=${track.rating} onChange=${(r) => setRating([track], r).then(() => patchLoaded([track.id], { rating: r })).catch(notifyError)} /></div>`,
       time: html`<div role="gridcell" class="tcell dim time">${fmt.time(track.duration)}</div>`,
-      heart: html`<div role="gridcell" class="tcell">
+      heart: html`<div role="gridcell" class="tcell heart">
         <button class="icon-btn heart ${track.favorite ? 'on' : ''}" tabIndex="-1" aria-label=${track.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${track.favorite}
           onClick=${(e) => { e.stopPropagation(); setFavorite([track], !track.favorite).then(() => patchLoaded([track.id], { favorite: !track.favorite })).catch(notifyError); }}>
           <${Icon} name="heart" size=${16} fill=${track.favorite} />
         </button></div>`,
-      more: html`<div role="gridcell" class="tcell"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
+      more: html`<div role="gridcell" class="tcell more"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
         e.stopPropagation();
         const box = e.currentTarget.getBoundingClientRect();
         rowMenu({ clientX: box.left, clientY: box.bottom + 4 }, index, track);
       }}><${Icon} name="more" size=${16} /></button></div>`,
     };
     return html`<div
-      class="trow ${isCurrent ? 'current' : ''} ${isSelected ? 'selected' : ''} ${cursor === index ? 'cursor' : ''} ${dropAt === index ? 'drop-before' : ''}"
+      class="trow ${isCurrent ? 'current' : ''} ${isSelected ? 'selected' : ''} ${cursor === index ? 'cursor' : ''} ${dropAt === index ? 'drop-before' : ''} ${track.no_audio ? 'no-audio' : ''}"
       role="row"
       id=${rowId(index)}
       aria-rowindex=${index + 2}
@@ -453,7 +466,7 @@ export function TrackTable({
       key=${track.id + ':' + index}
       style=${style}
       draggable=${reorderable}
-      onClick=${(e) => select(e, index, track)}
+      onClick=${(e) => (touchOnly() ? (isCurrent ? toggle() : onPlay?.(index)) : select(e, index, track))}
       onDblClick=${() => onPlay?.(index)}
       onContextMenu=${(e) => rowMenu(e, index, track)}
       onDragStart=${(e) => { dragFrom.current = index; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(index)); }}
@@ -470,7 +483,7 @@ export function TrackTable({
     ${selected.size > 1 && html`<div class="selection-bar" role="toolbar" aria-label="Selected songs" style=${{ height: HEADER_HEIGHT + 'px', marginBottom: -HEADER_HEIGHT + 'px' }}>
         <strong>${fmt.plural(selected.size, 'song')} selected</strong>
         <button class="chip-btn" onClick=${() => playQueue(selectedTracks, 0)}><${Icon} name="play" size=${14} /> Play</button>
-        <button class="chip-btn" onClick=${() => { addToQueue(selectedTracks); toast(`Added ${fmt.plural(selectedTracks.length, 'song')} to the queue`); }}><${Icon} name="queue" size=${14} /> Queue</button>
+        <button class="chip-btn" onClick=${() => enqueue(selectedTracks, false)}><${Icon} name="queue" size=${14} /> Queue</button>
         <button class="chip-btn" onClick=${() => openAddToPlaylist(selectedTracks)}><${Icon} name="plus" size=${14} /> Playlist</button>
         <button class="chip-btn" onClick=${() => openTagEditor(selectedTracks.map((t) => t.id))}><${Icon} name="edit" size=${14} /> Edit tags</button>
         <button class="chip-btn" onClick=${() => setFavorite(selectedTracks, true).then(() => patchLoaded(selectedTracks.map((t) => t.id), { favorite: true })).catch(notifyError)}><${Icon} name="heart" size=${14} /> Favorite</button>

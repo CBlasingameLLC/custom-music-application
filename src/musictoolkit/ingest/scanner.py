@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import mutagen
+from mutagen.easyid3 import EasyID3
 
 logger = logging.getLogger("musictoolkit")
 
@@ -21,6 +22,10 @@ AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".oga", ".opus", ".
 # quarantined song stays out of the library until it is restored.
 QUARANTINE_DIR = "_duplicates_review"
 
+# A file that mutagen found no audio in, and that holds no more than this besides its tags, has no audio: a second of MP3 is 4000 bytes
+# at the lowest bitrate and 16000 at the usual one, so this is less than a quarter of a second.
+NO_AUDIO_BELOW = 4096
+
 
 @dataclass
 class ScanResult:
@@ -28,7 +33,50 @@ class ScanResult:
     updated: int = 0
     unchanged: int = 0
     missing: int = 0
-    errors: int = 0
+    errors: int = 0  # files whose audio could not be read (they are in the library all the same, without tags)
+    no_audio: int = 0  # files read now that are only tags, with no audio in them (counted in added or updated too)
+
+
+class LibraryUnavailable(RuntimeError):
+    """A library folder that cannot be scanned now: it is not there, or it is there but has nothing in it while the library knows
+    songs in it, which is what a drive that is not mounted looks like. Scanning it would mark every one of those songs missing."""
+
+
+def looks_unmounted(folder: Path | str) -> bool:
+    """Is this not a folder, or a folder with nothing in it at all (the empty place a drive is mounted on while it is not)?"""
+    try:
+        with os.scandir(folder) as entries:
+            return next(entries, None) is None
+    except OSError:
+        return True
+
+
+def folder_unavailable_for(path: Path | str, folders: list[str]) -> bool:
+    """Is `path` inside one of these library folders that looks unmounted? Then a song that is not found there is not gone, its drive is."""
+    where = Path(path)
+    return any(where.is_relative_to(Path(folder)) and looks_unmounted(folder) for folder in folders)
+
+
+def unavailable_reason(conn: sqlite3.Connection, root: Path) -> str | None:
+    """Why this library folder cannot be used now, in words, or None when it can: it is not there, or it is there but has nothing in
+    it while the library has songs in it (what a drive that is not mounted looks like). One rule for the scan, the health check and the
+    diagnostics; a song that cannot be found uses the same idea in folder_unavailable_for."""
+    if not root.is_dir():
+        return f"{root} is not there (is the drive connected?)"
+    if looks_unmounted(root) and any(
+        Path(row["file_path"]).is_relative_to(root)
+        for row in conn.execute("SELECT file_path FROM tracks WHERE is_missing = 0")
+    ):
+        return (
+            f"{root} is empty, but the library has songs in it. A drive that is not mounted looks like that, and scanning would mark "
+            "every one of those songs missing."
+        )
+    return None
+
+
+def _refuse_unavailable(conn: sqlite3.Connection, root: Path) -> None:
+    if (reason := unavailable_reason(conn, root)) is not None:
+        raise LibraryUnavailable(reason)
 
 
 def in_quarantine(path: Path, root: Path) -> bool:
@@ -55,28 +103,41 @@ def _parse_leading_int(value: str) -> int | None:
     return int(digits) if digits else None
 
 
-def _read_basic_tags(path: Path) -> dict:
-    """Best-effort tag read via mutagen's Easy interface. Never raises —
-    a file that fails to parse just yields all-None tag fields."""
-    fields: dict = {
-        "title": None, "artist": None, "album_artist": None, "album": None,
-        "track_number": None, "disc_number": None, "year": None, "genre": None,
-        "duration_seconds": None, "format": path.suffix.lower().lstrip("."), "bitrate": None,
-    }
+def _id3v2_length(head: bytes) -> int:
+    """The bytes an ID3v2 tag takes (its header, its frames and padding, and its footer if it has one), from the first 10 bytes of the
+    file; 0 when the file does not start with one."""
+    if len(head) < 10 or head[:3] != b"ID3":
+        return 0
+    body = (head[6] << 21) | (head[7] << 14) | (head[8] << 7) | head[9]  # (four bytes of seven bits each)
+    return 10 + body + (10 if head[5] & 0x10 else 0)
+
+
+def _audio_bytes(path: Path, size: int) -> int:
+    """How much of the file is not a tag. Only an MP3 has tags that can be all there is: ID3v2 tags at the start (some files have two)
+    and an ID3v1 tag, 128 bytes, at the end. For another kind of file all of it counts. A file that cannot be looked into is not
+    called empty."""
+    if path.suffix.lower() != ".mp3":
+        return size
     try:
-        audio = mutagen.File(path, easy=True)
-    except Exception:
-        logger.warning("Failed to read tags from %s", path, exc_info=True)
-        return fields
+        with path.open("rb") as handle:
+            start = 0
+            while True:  # (one tag after another: each says how long it is)
+                handle.seek(start)
+                length = _id3v2_length(handle.read(10))
+                if not length:
+                    break
+                start += length
+            end = 0
+            if size >= start + 128:
+                handle.seek(size - 128)
+                end = 128 if handle.read(3) == b"TAG" else 0
+    except OSError:
+        return size
+    return max(size - start - end, 0)
 
-    if audio is None:
-        return fields
 
-    if audio.info is not None:
-        fields["duration_seconds"] = getattr(audio.info, "length", None)
-        fields["bitrate"] = getattr(audio.info, "bitrate", None)
-
-    tags = audio.tags or {}
+def _fields_from_tags(tags, fields: dict) -> None:
+    """Fill `fields` from an Easy tag object (mutagen's names for them)."""
 
     def first(key: str) -> str | None:
         values = tags.get(key)
@@ -100,6 +161,51 @@ def _read_basic_tags(path: Path) -> dict:
     if date_raw:
         fields["year"] = _parse_leading_int(date_raw[:4])
 
+
+def _read_basic_tags(path: Path) -> dict:
+    """Best-effort tag read via mutagen's Easy interface. Never raises: a file that fails to parse yields all-None tag fields.
+
+    `no_audio` says the file is only tags (an MP3 that is just an ID3 tag, or an empty file): its tags are read all the same.
+    `unreadable` says something else kept the audio from being read (damage, no permission, a kind of file mutagen does not know).
+    Neither is logged with a traceback: a library of a thousand songs can hold a few of these, and a log of tracebacks hides real trouble."""
+    fields: dict = {
+        "title": None, "artist": None, "album_artist": None, "album": None,
+        "track_number": None, "disc_number": None, "year": None, "genre": None,
+        "duration_seconds": None, "format": path.suffix.lower().lstrip("."), "bitrate": None,
+        "no_audio": False, "unreadable": False,
+    }
+    try:
+        audio = mutagen.File(path, easy=True)
+    except mutagen.MutagenError as error:  # (it is the kind of file it says it is, but the audio in it could not be read)
+        try:  # (its tags can be read all the same, whatever the kind of file: they say what the song is)
+            _fields_from_tags(EasyID3(path), fields)
+        except mutagen.MutagenError:
+            pass  # (no ID3 tag: an empty file, or a kind of file whose tags are not ID3)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = None
+        if size is not None and _audio_bytes(path, size) < NO_AUDIO_BELOW:
+            fields["no_audio"] = True
+            logger.debug("%s has tags but no audio in it", path)
+        else:
+            fields["unreadable"] = True
+            logger.warning("Could not read the audio in %s (%s)", path, error)
+        return fields
+    except Exception as error:  # (no permission, the drive went away ...)
+        fields["unreadable"] = True
+        logger.warning("Could not read %s (%s)", path, error)
+        return fields
+
+    if audio is None:
+        fields["unreadable"] = True
+        logger.warning("Could not read %s: it is not a kind of audio file this app knows", path)
+        return fields
+
+    if audio.info is not None:
+        fields["duration_seconds"] = getattr(audio.info, "length", None)
+        fields["bitrate"] = getattr(audio.info, "bitrate", None)
+    _fields_from_tags(audio.tags or {}, fields)
     return fields
 
 
@@ -126,14 +232,14 @@ def _store(conn: sqlite3.Connection, path: Path, stat, tags: dict, now: str, exi
                 file_path, file_size, file_mtime, duration_seconds,
                 title, artist, album_artist, album, track_number,
                 disc_number, year, genre, format, bitrate,
-                tag_source, date_added, date_last_scanned, is_missing
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, 0)
+                tag_source, date_added, date_last_scanned, is_missing, no_audio
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'original', ?, ?, 0, ?)
             """,
             (
                 str(path), stat.st_size, stat.st_mtime, tags["duration_seconds"],
                 tags["title"], tags["artist"], tags["album_artist"], tags["album"],
                 tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
-                tags["format"], tags["bitrate"], now, now,
+                tags["format"], tags["bitrate"], now, now, int(tags["no_audio"]),
             ),
         )
         return "added"
@@ -143,14 +249,14 @@ def _store(conn: sqlite3.Connection, path: Path, stat, tags: dict, now: str, exi
             file_hash = NULL, file_size = ?, file_mtime = ?, duration_seconds = ?,
             title = ?, artist = ?, album_artist = ?, album = ?,
             track_number = ?, disc_number = ?, year = ?, genre = ?,
-            format = ?, bitrate = ?, date_last_scanned = ?, is_missing = 0
+            format = ?, bitrate = ?, date_last_scanned = ?, is_missing = 0, no_audio = ?
         WHERE id = ?
         """,
         (
             stat.st_size, stat.st_mtime, tags["duration_seconds"],
             tags["title"], tags["artist"], tags["album_artist"], tags["album"],
             tags["track_number"], tags["disc_number"], tags["year"], tags["genre"],
-            tags["format"], tags["bitrate"], now, existing["id"],
+            tags["format"], tags["bitrate"], now, int(tags["no_audio"]), existing["id"],
         ),
     )
     return "updated"
@@ -160,10 +266,16 @@ def scan_library(
     conn: sqlite3.Connection,
     root: Path,
     on_progress: Callable[[int, int], None] | None = None,
+    force: bool = False,
 ) -> ScanResult:
     """`on_progress(done, total)` is called before each file and once more at
-    the end with done == total, so a UI can show "N of M files"."""
+    the end with done == total, so a UI can show "N of M files".
+
+    Raises LibraryUnavailable for a folder that is not there, or is empty while the library has songs in it, unless `force`
+    (then every song that is not found is marked missing)."""
     root = root.resolve()
+    if not force:
+        _refuse_unavailable(conn, root)
     result = ScanResult()
     now = datetime.now(timezone.utc).isoformat()
     seen_paths: set[str] = set()
@@ -200,6 +312,8 @@ def scan_library(
             continue
 
         tags = _read_basic_tags(path)
+        result.no_audio += tags["no_audio"]
+        result.errors += tags["unreadable"]
         if _store(conn, path, stat, tags, now, existing) == "added":
             result.added += 1
         else:

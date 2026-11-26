@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from musictoolkit import __version__
 from musictoolkit.discs import helper as disc_helper
+from musictoolkit.ingest.scanner import unavailable_reason
 from musictoolkit.sync import device_detect, mtp
 from musictoolkit.web.context import AppContext, get_ctx
 
@@ -106,6 +107,7 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
                 "schema_version": count("PRAGMA user_version"),
                 "songs": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 0"),
                 "missing": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 1"),
+                "no_audio": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 0 AND no_audio = 1"),
                 "in_review_folder": count("SELECT COUNT(*) FROM tracks WHERE is_missing = 2"),
                 "plays": count("SELECT COUNT(*) FROM play_history"),
                 "playlists": count("SELECT COUNT(*) FROM playlists"),
@@ -113,16 +115,17 @@ def diagnostics(ctx: AppContext = Depends(get_ctx)) -> dict:
 
     def library() -> list[dict]:
         out = []
-        for root in ctx.config.library.roots:
-            folder = Path(root)
-            info: dict[str, Any] = {"path": root, "available": folder.is_dir(), "free": None, "total": None}
-            if info["available"]:
-                try:
-                    usage = shutil.disk_usage(folder)
-                    info["free"], info["total"] = usage.free, usage.total
-                except OSError:
-                    pass
-            out.append(info)
+        with ctx.db() as conn:
+            for root in ctx.config.library.roots:
+                folder = Path(root)
+                info: dict[str, Any] = {"path": root, "available": unavailable_reason(conn, folder) is None, "free": None, "total": None}
+                if info["available"]:
+                    try:
+                        usage = shutil.disk_usage(folder)
+                        info["free"], info["total"] = usage.free, usage.total
+                    except OSError:
+                        pass
+                out.append(info)
         return out
 
     def drives() -> list[dict]:

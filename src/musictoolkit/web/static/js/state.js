@@ -57,6 +57,7 @@ export const ui = createStore({
   density: prefs.density === 'compact' ? 'compact' : 'comfortable',
   queueOpen: false,
   jobsOpen: false,
+  moreOpen: false, // the sheet of every other page, on a phone
   songColumns: prefs.songColumns || null,
 });
 
@@ -68,6 +69,7 @@ function applyLook(s) {
   root.dataset.density = s.density;
   const vars = accentVars(s.accent, s.theme);
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', s.theme === 'light' ? '#f5f6fb' : '#0d0f14'); // the colour of the frame around the page on a phone: --bg
   try {
     localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns, accent: s.accent, density: s.density, vars }));
   } catch {
@@ -79,6 +81,20 @@ applyLook(ui.get());
 export const setTheme = (theme) => ui.set({ theme });
 export const setAccent = (accent) => ui.set({ accent: normalizeAccent(accent) });
 export const setDensity = (density) => ui.set({ density: density === 'compact' ? 'compact' : 'comfortable' });
+
+// ------------------------------------------------------------ layout
+
+// A phone (or a phone on its side) gets a row of tabs at the bottom in place of the sidebar, and a small player that opens the big one.
+// The page says which it is on <html data-layout>, for the style sheet; the app reads it from here, to draw the right pieces. The
+// desktop window is never a phone, however narrow it is made: its smallest size is the one the sidebar was made for.
+const phoneQuery = window.matchMedia(window.mtk ? 'not all' : '(max-width: 720px), (max-height: 500px) and (pointer: coarse)');
+export const layout = createStore({ phone: phoneQuery.matches });
+const applyLayout = () => {
+  layout.set({ phone: phoneQuery.matches });
+  document.documentElement.dataset.layout = phoneQuery.matches ? 'phone' : 'desktop';
+};
+phoneQuery.addEventListener('change', applyLayout);
+applyLayout();
 
 // ------------------------------------------------------------ shared library data
 
@@ -161,7 +177,8 @@ onJobFinished((job) => {
   if (job.status === 'error') toast(`${job.title} failed: ${job.error}`, 'error', 10000);
   else if (job.status === 'done' && job.kind === 'scan') {
     const r = job.result || {};
-    toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing`, 'success');
+    const bare = r.no_audio ? ` ${r.no_audio.toLocaleString()} ${r.no_audio === 1 ? 'file has' : 'files have'} tags but no audio.` : '';
+    toast(`Library updated: ${r.added || 0} added, ${r.updated || 0} changed, ${r.missing || 0} missing.${bare}`, r.no_audio ? 'info' : 'success');
   } else if (job.status === 'done' && job.kind === 'sync') {
     const r = job.result || {};
     const note = r.errors_total ? ` ${r.errors_total} could not be copied.` : '';

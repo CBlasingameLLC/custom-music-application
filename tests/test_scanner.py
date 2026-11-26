@@ -86,6 +86,7 @@ def test_deleted_file_marked_missing_not_removed(tmp_path: Path) -> None:
     library.mkdir()
     target = library / "song_a.mp3"
     _copy_fixture("complete_tags.mp3", target)
+    _copy_fixture("complete_tags.mp3", library / "song_b.mp3")  # (a folder with nothing left in it looks like a drive that is not mounted: see test_library_safety)
 
     conn = connect(tmp_path / "test.db")
     scan_library(conn, library)
@@ -98,7 +99,7 @@ def test_deleted_file_marked_missing_not_removed(tmp_path: Path) -> None:
         "SELECT is_missing FROM tracks WHERE file_path = ?", (str(target.resolve()),)
     ).fetchone()
     assert row["is_missing"] == 1
-    assert conn.execute("SELECT COUNT(*) AS c FROM tracks").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) AS c FROM tracks").fetchone()["c"] == 2
     conn.close()
 
 
@@ -107,6 +108,7 @@ def test_file_reappearing_clears_missing_flag(tmp_path: Path) -> None:
     library.mkdir()
     target = library / "song_a.mp3"
     _copy_fixture("complete_tags.mp3", target)
+    _copy_fixture("complete_tags.mp3", library / "song_b.mp3")  # (the folder is never empty: an empty one is not scanned, see test_library_safety)
 
     conn = connect(tmp_path / "test.db")
     scan_library(conn, library)
