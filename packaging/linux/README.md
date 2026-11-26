@@ -23,7 +23,7 @@ you listed (see *Sign in with Tailscale*).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.12.0 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.13.0 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -110,7 +110,7 @@ A monitor should ask `/healthz` (it needs no token); `/` answers `401` to a devi
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.12.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.13.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -194,10 +194,40 @@ What an iPhone does and does not do:
 - The volume is the phone's own buttons, and the equalizer, the loudness levelling (ReplayGain), the crossfade and the gapless join are not there: they are made of Web Audio. The
   next song is loaded when a song ends, so there is a short gap (a fraction of a second on a good connection).
 - What cannot be promised from here: how long iOS lets a Home Screen app keep running with the screen locked. If the music stops between two songs after the phone has
-  been locked for a long time, that is iOS stopping the page, and an iPhone app that speaks the Subsonic protocol (planned) is the way to be sure.
+  been locked for a long time, that is iOS stopping the page, and an iPhone app that speaks the Subsonic protocol (next section) is the way to be sure.
 - The phone is away from the server, so everything is streamed: on mobile data a song is its whole file (transcoding to a smaller one is planned).
 
 **Mac.** Safari (macOS Sonoma or later): *File, Add to Dock*. Chrome and Edge: the menu, then *Install*. It opens in a window of its own and answers the media keys.
+
+## An app that speaks Subsonic (iPhone, iPad, Mac)
+
+The server also answers the Subsonic / OpenSubsonic protocol at `/rest`, which a whole family of music apps speaks: on an iPhone, for example, Amperfy, play:Sub,
+Substreamer and Narjo; on a Mac, Supersonic and Feishin. A native app is the sure way to have the music go on with the screen locked, and some bring CarPlay and
+downloads for offline listening. **None of these apps has been tried against this server yet** (the tests use a client library of the protocol and the schemas of the
+OpenSubsonic project): if one of them does not work, the app and what it says is what is wanted.
+
+In the app's settings for a server:
+
+| Box | What to write |
+|---|---|
+| Server address | `https://musicpi.<your tailnet>.ts.net` (the same address as for the web page: with `https`, with no port and nothing after the name). The phone needs Tailscale on |
+| User name | Anything you like (`me`). The server has no users; it is shown as the name of the person who listens |
+| Password | The token (`mtk token` shows it). Some apps have an *API key* box instead: the token goes there, and then the user name is left empty |
+| Salted password, "legacy" or "token" authentication | Either works. Leave the app's own choice alone |
+
+With *Sign in with Tailscale* (above), a phone that is on the tailnet is let in without the token: the app still wants something in the password box, and anything will do. A
+wrong password is only counted when the server needs the password.
+
+What an app can do: browse by artist, album, genre and year and by the lists (newest, most played, recently played, random, starred); search; play a song (the original file,
+and seeking inside it); show covers (in the size it asks for) and lyrics (from the file, a `.lrc` beside it, or lrclib.net if you turned that on in Settings); star and
+rate songs (a star is a favorite, in the web page as well); count a listen (it goes into the history, and to ListenBrainz if that is on, once even if the app sends it twice with the same time on it);
+make, change and delete playlists (a smart playlist can be played, and not changed from an app); list the radio stations kept in the app; and ask for a scan.
+
+What an app cannot: ask for a smaller file (`maxBitRate` and `format` are ignored, so on mobile data a song is the whole file); keep a play queue that follows you from one device to
+another, bookmarks, podcasts, sharing; rate an album (a rating belongs to a song); read an artist's biography (there is none). A Subsonic player that is a web page of another site cannot use the server
+(it answers no other site: that is what keeps a page you visit from using your library).
+
+The ids an app shows are the server's own and mean nothing outside it.
 
 ## Move the library over from the Windows PC
 
@@ -232,6 +262,10 @@ What an iPhone does and does not do:
 | "Too many wrong tokens. Try again in N seconds." (`429`) | Eight wrong tokens came in within a minute (a typo, a program with an old token). Wait; devices that are signed in are not affected |
 | A page that says **Can't reach your music server**, with a *Try again* button | The phone or Mac got no answer from the server within eight seconds (the installed app shows this instead of the browser's own error). Tailscale is off on the phone, the phone is on a different account, or the server is off: check each, then press *Try again* |
 | The app on the Home Screen asks for the token | Its cookies are not Safari's: before iOS 17 they are not copied when the app is added, and a cookie that was cleared is gone. Paste the token once; the app then stays signed in for `login_days` |
+| A Subsonic app says *Wrong username or password* | The password is the token (`mtk token`), or the API key box is the token with the user name empty. Not the Tailscale login |
+| A Subsonic app says *Too many wrong passwords. Try again in N seconds.* | Eight wrong ones came in within a minute (an app trying an old token again and again). The same limit as for the web page's sign-in. Wait, then fix the app's password |
+| A Subsonic app says *Server must upgrade* or *Client must upgrade* | The app speaks a version of the protocol that is not 1.x, or newer than 1.16. Tell me which app it is |
+| A Subsonic app shows no covers or no artists | Covers come from the pictures in the files and from `cover.jpg`/`folder.jpg` beside them; run a scan (Settings, *Scan for new music*, or the app's own *scan* button) so the library knows the files. A file that is only tags is left out of every list |
 | A song with a **No audio** mark | The file is only tags (an MP3 with no audio frames, or an empty file): nothing to play. It is left out of queues, mixes and what is copied to a device. Filter on "Has tags but no audio" to list them; the scan counts them apart from errors |
 | `Could not read the audio in ...` in the log | The file has more than tags but its audio could not be read (damage). One line, no traceback; the song stays in the library |
 | `Cannot start the server: it would listen on 0.0.0.0 ... allowed_hosts is empty` | Listening beyond this computer needs the names; see Configure |

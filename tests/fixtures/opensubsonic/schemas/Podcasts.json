@@ -1,0 +1,17 @@
+{
+    "type": "object",
+    "description": "Podcasts.",
+    "externalDocs": {
+        "description": "Podcasts",
+        "url": "https://opensubsonic.github.io/docs/responses/podcasts/"
+    },
+    "properties": {
+        "channel": {
+            "type": "array",
+            "items": {
+                "$ref": "./PodcastChannel.json"
+            },
+            "description": "Podcast channel(s)"
+        }
+    }
+}

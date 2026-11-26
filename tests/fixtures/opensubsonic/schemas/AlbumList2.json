@@ -1,0 +1,16 @@
+{
+    "type": "object",
+    "properties": {
+        "album": {
+            "type": "array",
+            "items": {
+                "$ref": "./AlbumID3.json"
+            },
+            "description": "Artist albums",
+            "externalDocs": {
+                "description": "AlbumList2",
+                "url": "https://opensubsonic.github.io/docs/responses/albumlist2/"
+            }
+        }
+    }
+}

@@ -26,6 +26,9 @@ dependencies = [
 dev = [
     "pytest",
     "responses",
+    # The tests of the Subsonic API check its answers against the schemas of the OpenSubsonic project, and use a client library of that protocol.
+    "jsonschema>=4.18",
+    "py-sonic",
 ]
 e2e = [
     "playwright",

@@ -15,6 +15,8 @@ must not be able to drive it):
   * a server that is told which Tailscale accounts to trust (`tailscale_logins`, behind
     `tailscale serve`) signs those in without the token, and refuses what came
     through Tailscale Funnel: see tailnet.py;
+  * /rest, the Subsonic API for the phone and Mac apps made for that protocol, is not /api: it takes the credentials that protocol has (see
+    subsonic/auth.py), or a login Tailscale vouches for;
   * the app's own files (/static, and /sw.js, which an installed app needs from
     the root) hold nothing private and are sent to anyone who asks, the way a
     browser asks for them before it has a cookie.
@@ -73,6 +75,7 @@ from musictoolkit.web.radar_job import RadarSchedule
 from musictoolkit.web.rescan_job import RescanSchedule
 from musictoolkit.web.scrobbler import Scrobbler
 from musictoolkit.web.signin import GuessLimiter, same_token, sign_in_page
+from musictoolkit.web.subsonic import router as subsonic_router
 
 logger = logging.getLogger("musictoolkit")
 
@@ -184,6 +187,13 @@ def create_app(
         """What Tailscale says about the device that made the request (nothing, unless this server runs behind `tailscale serve`)."""
         return tailnet.look(request.headers, logins)
 
+    def vouched_login(request: Request) -> str | None:
+        """The login Tailscale vouches for in this request, if this server signs that account in (for the calls that do not carry the cookie)."""
+        said = seen(request)
+        return said.login if said.vouched else None
+
+    app.state.vouched = vouched_login
+
     def try_token(candidate: str) -> tuple[bool, int]:
         """(is it the token, seconds before the next try). A wrong one is counted; while too many have been wrong none is looked at."""
         if pause := limiter.wait():
@@ -256,6 +266,7 @@ def create_app(
     for module in ROUTERS:
         answer_head(module.router.routes)  # (before the router is included: how FastAPI keeps an included router's routes differs between its versions)
         app.include_router(module.router)
+    app.include_router(subsonic_router)  # (/rest: the Subsonic API, which says who may ask in its own way)
 
     @app.get("/", include_in_schema=False)
     def index(request: Request, token: str | None = None):

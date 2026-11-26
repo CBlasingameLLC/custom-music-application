@@ -65,7 +65,7 @@ class PlaylistCreate(BaseModel):
     track_ids: list[int] = Field(default_factory=list, max_length=MAX_TRACKS)
 
 
-def _write_order(conn: sqlite3.Connection, playlist_id: int, track_ids: list[int]) -> None:
+def write_order(conn: sqlite3.Connection, playlist_id: int, track_ids: list[int]) -> None:
     conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,))
     conn.executemany(
         "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
@@ -74,7 +74,7 @@ def _write_order(conn: sqlite3.Connection, playlist_id: int, track_ids: list[int
     conn.execute("UPDATE playlists SET updated_at = ? WHERE id = ?", (_now(), playlist_id))
 
 
-def _ordered_ids(conn: sqlite3.Connection, playlist_id: int) -> list[int]:
+def ordered_ids(conn: sqlite3.Connection, playlist_id: int) -> list[int]:
     rows = conn.execute(
         "SELECT track_id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position, rowid", (playlist_id,)
     ).fetchall()
@@ -99,7 +99,7 @@ def create_playlist(body: PlaylistCreate, ctx: AppContext = Depends(get_ctx)) ->
         )
         playlist_id = cursor.lastrowid
         if body.kind == "manual" and body.track_ids:
-            _write_order(conn, playlist_id, body.track_ids)
+            write_order(conn, playlist_id, body.track_ids)
         conn.commit()
         return _summary(conn, _playlist_row(conn, playlist_id))
 
@@ -163,9 +163,9 @@ def add_tracks(playlist_id: int, body: AddTracks, ctx: AppContext = Depends(get_
             r["id"] for r in conn.execute(f"SELECT id FROM tracks WHERE id IN ({placeholders})", list(set(body.ids)))
         }
         incoming = [i for i in body.ids if i in known]
-        current = _ordered_ids(conn, playlist_id)
+        current = ordered_ids(conn, playlist_id)
         index = len(current) if body.position is None else max(0, min(body.position, len(current)))
-        _write_order(conn, playlist_id, current[:index] + incoming + current[index:])
+        write_order(conn, playlist_id, current[:index] + incoming + current[index:])
         conn.commit()
     return {"added": len(incoming), "skipped": len(body.ids) - len(incoming)}
 
@@ -179,10 +179,10 @@ def remove_tracks(playlist_id: int, body: RemoveTracks, ctx: AppContext = Depend
     """Remove by position, since the same track may appear in a playlist more than once."""
     with ctx.db() as conn:
         _require_manual(_playlist_row(conn, playlist_id))
-        current = _ordered_ids(conn, playlist_id)
+        current = ordered_ids(conn, playlist_id)
         drop = set(body.positions)
         kept = [track_id for position, track_id in enumerate(current) if position not in drop]
-        _write_order(conn, playlist_id, kept)
+        write_order(conn, playlist_id, kept)
         conn.commit()
     return {"removed": len(current) - len(kept)}
 
@@ -196,12 +196,12 @@ class MoveTrack(BaseModel):
 def move_track(playlist_id: int, body: MoveTrack, ctx: AppContext = Depends(get_ctx)) -> dict:
     with ctx.db() as conn:
         _require_manual(_playlist_row(conn, playlist_id))
-        current = _ordered_ids(conn, playlist_id)
+        current = ordered_ids(conn, playlist_id)
         if body.from_position >= len(current):
             raise HTTPException(status_code=422, detail="position out of range")
         moved = current.pop(body.from_position)
         current.insert(min(body.to_position, len(current)), moved)
-        _write_order(conn, playlist_id, current)
+        write_order(conn, playlist_id, current)
         conn.commit()
     return {"ok": True}
 
