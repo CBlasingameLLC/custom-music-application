@@ -34,7 +34,7 @@ def stream(call: Call) -> Response:
 
 def _size(call: Call) -> int:
     """The smallest size the app keeps covers in that is as big as the client asked for (the biggest, when it asked for no size)."""
-    asked = call.params.integer("size", low=1)
+    asked = call.params.integer("size")
     if asked is None:
         return art.THUMBNAIL_SIZES[-1]
     return next((size for size in art.THUMBNAIL_SIZES if size >= asked), art.THUMBNAIL_SIZES[-1])

@@ -11,8 +11,10 @@ import pytest
 from PIL import Image
 
 from musictoolkit.media import lrclib
-from tests.conftest import FIXTURES_DIR, make_stub
-from tests.subsonic_support import Rest, album_named, scanned_web, songs_of
+from mutagen.id3 import APIC, ID3
+
+from tests.conftest import FIXTURES_DIR, jpeg_bytes, make_stub, make_track
+from tests.subsonic_support import Rest, add_songs, album_named, scanned_web, songs_of
 
 GLACIER = Path("Aurora Vale") / "Northern Lights" / "01 - Glacier.mp3"
 
@@ -130,6 +132,71 @@ def test_a_playlist_has_the_cover_of_the_first_of_its_songs_that_has_one(rest: R
     bare = rest.ok("createPlaylist", name="Bare", songId=[plain["id"]])["playlist"]
     rest.fails("getCoverArt", 70, id=bare["id"])
     rest.fails("getCoverArt", 70, id="pl-9999")
+
+
+GREEN = (40, 200, 40)
+
+
+@pytest.fixture
+def big(tmp_path: Path, music_dir: Path) -> SimpleNamespace:
+    """The library, and one more album whose picture is green and 1500 pixels across (the pictures of the others are red, and 300)."""
+    track = make_track(music_dir / "Big Art" / "Huge Cover", "01 - Huge.mp3", title="Huge", artist="Big Art", albumartist="Big Art", album="Huge Cover", tracknumber=1, date="2018")
+    tags = ID3(track)
+    tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="cover", data=jpeg_bytes(GREEN, size=1500)))
+    tags.save()
+    web = scanned_web(tmp_path / "big", music_dir)
+    return SimpleNamespace(web=web, rest=Rest(web.client))
+
+
+def colour(response) -> tuple[int, int, int]:
+    return Image.open(io.BytesIO(response.content)).getpixel((5, 5))
+
+
+@pytest.mark.parametrize("asked,made", [(None, 1024), (1, 64), (512, 512), (513, 1024), (1000, 1024), (1024, 1024), (1025, 1024), (5000, 1024)])
+def test_a_picture_bigger_than_any_size_is_given_in_the_biggest_the_app_keeps_when_none_or_more_is_asked_for(big: SimpleNamespace, asked: int | None, made: int) -> None:
+    response = big.rest.get("getCoverArt", id=album_named(big.rest, "Huge Cover")["id"], size=asked)
+    assert dimensions(response.content) == (made, made)
+
+
+def test_the_cover_of_a_playlist_is_the_first_of_its_songs_that_has_one_in_the_order_of_the_playlist(big: SimpleNamespace) -> None:
+    rest = big.rest
+    huge = songs_of(rest, album_named(rest, "Huge Cover")["id"])[0]["id"]
+    glacier_id = songs_of(rest, album_named(rest, "Northern Lights")["id"])[0]["id"]
+    green_first = rest.ok("createPlaylist", name="Green first", songId=[huge, glacier_id])["playlist"]["id"]
+    red_first = rest.ok("createPlaylist", name="Red first", songId=[glacier_id, huge])["playlist"]["id"]
+    assert colour(rest.get("getCoverArt", id=green_first, size=64))[1] > 150 and colour(rest.get("getCoverArt", id=red_first, size=64))[0] > 150
+
+
+def early_albums(web: SimpleNamespace, count: int) -> None:
+    """Albums by Aurora Vale from before the year of Northern Lights (the one with a picture), none of them with one."""
+    add_songs(web, [
+        {"file_path": f"/none/{n}.mp3", "title": f"Early {n}", "artist": "Aurora Vale", "album_artist": "Aurora Vale", "album": f"Early {n}", "year": 2000 + n} for n in range(count)])
+
+
+def test_the_cover_of_an_artist_is_looked_for_in_its_first_six_albums(rest: Rest, web: SimpleNamespace) -> None:
+    early_albums(web, 5)  # (Northern Lights is the sixth by year)
+    assert rest.get("getCoverArt", id=album_named(rest, "Northern Lights")["artistId"]).headers["content-type"] == "image/jpeg"
+
+
+def test_the_cover_of_an_artist_is_not_looked_for_beyond_its_first_six_albums(rest: Rest, web: SimpleNamespace) -> None:
+    early_albums(web, 6)  # (Northern Lights is the seventh)
+    rest.fails("getCoverArt", 70, id=album_named(rest, "Northern Lights")["artistId"])
+
+
+def songs_before_one_with_a_picture(rest: Rest, web: SimpleNamespace, count: int) -> str:
+    early_albums(web, count)
+    found = {song["title"]: song["id"] for song in rest.ok("search3", query="", songCount=500)["searchResult3"]["song"]}
+    return rest.ok("createPlaylist", name="Covers", songId=[found[f"Early {n}"] for n in range(count)] + [glacier(rest)["id"]])["playlist"]["id"]
+
+
+def test_the_cover_of_a_playlist_is_looked_for_in_its_first_six_songs(rest: Rest, web: SimpleNamespace) -> None:
+    given = songs_before_one_with_a_picture(rest, web, 5)  # (the song with the picture is the sixth)
+    assert rest.get("getCoverArt", id=given).headers["content-type"] == "image/jpeg"
+
+
+def test_the_cover_of_a_playlist_is_not_looked_for_beyond_its_first_six_songs(rest: Rest, web: SimpleNamespace) -> None:
+    given = songs_before_one_with_a_picture(rest, web, 6)  # (the song with the picture is the seventh)
+    rest.fails("getCoverArt", 70, id=given)
 
 
 @pytest.mark.parametrize("asked,made", [(None, 300), (1, 64), (64, 64), (65, 128), (128, 128), (129, 256), (256, 256), (257, 300), (5000, 300)])

@@ -100,13 +100,17 @@ def live(app: FastAPI) -> Iterator[int]:
         thread.join(timeout=10)
 
 
-def add_songs(web: SimpleNamespace, rows: list[tuple[str, str, str, str, int]]) -> None:
-    """Songs written straight into the library, for a library bigger than files would make: (file, title, artist, album, track). They are playable, and have no file."""
+def add_songs(web: SimpleNamespace, rows: list[tuple[str, str, str, str, int] | dict[str, Any]]) -> None:
+    """Songs written straight into the library, for a library bigger than files would make, or a record that scanning would not make. A row is (file, title, artist,
+    album, track), or a dict of the columns of the song. They are playable, 60 seconds long, and have no file."""
     with web.ctx.db() as conn:
-        conn.executemany(
-            "INSERT INTO tracks (file_path, title, artist, album_artist, album, track_number, duration_seconds, date_added) VALUES (?, ?, ?, ?, ?, ?, 60.0, '2024-01-01T00:00:00+00:00')",
-            [(file, title, artist, artist, album, track) for file, title, artist, album, track in rows],
-        )
+        for row in rows:
+            columns = dict(zip(("file_path", "title", "artist", "album", "track_number"), row)) if isinstance(row, tuple) else dict(row)
+            if isinstance(row, tuple):
+                columns["album_artist"] = columns["artist"]
+            columns.setdefault("duration_seconds", 60.0)
+            columns.setdefault("date_added", "2024-01-01T00:00:00+00:00")
+            conn.execute(f"INSERT INTO tracks ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})", list(columns.values()))
         conn.commit()
 
 

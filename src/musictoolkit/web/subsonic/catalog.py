@@ -20,7 +20,6 @@ from musictoolkit.web.queries import (
     UNKNOWN_ARTIST,
     Selection,
     album_key,
-    parse_album_key,
 )
 from musictoolkit.web.routers.playback import MEDIA_TYPES
 from musictoolkit.web.subsonic import ids
@@ -77,7 +76,7 @@ def song(row: sqlite3.Row, roots: Sequence[str]) -> dict[str, Any]:
     album_artist = row["album_artist"] or row["artist"] or UNKNOWN_ARTIST
     album = row["album"] or UNKNOWN_ALBUM
     album_id = ids.album_id(album_key(album_artist, album))
-    suffix = Path(path).suffix.lower().lstrip(".")
+    suffix = Path(path).suffix.lower()[1:]  # (without the dot)
     created = iso(row["date_added"]) or EPOCH
     bitrate = row["bitrate"]
     return {
@@ -124,23 +123,11 @@ def songs(conn: sqlite3.Connection, sel: Selection, offset: int, limit: int, roo
     return [song(row, roots) for row in rows]
 
 
-def songs_by_id(conn: sqlite3.Connection, numbers: Sequence[int], roots: Sequence[str]) -> list[dict[str, Any]]:
-    """The songs asked for, in the order asked for them; one that is not there is left out."""
-    if not numbers:
-        return []
-    marks = ", ".join("?" * len(numbers))
-    rows = conn.execute(
-        f"SELECT {SONG_COLUMNS} FROM tracks t {queries.HISTORY_JOIN} WHERE t.is_missing = 0 AND t.no_audio = 0 AND t.id IN ({marks})", list(numbers)
-    ).fetchall()
-    by_number = {row["id"]: song(row, roots) for row in rows}
-    return [by_number[number] for number in numbers if number in by_number]
-
-
 def one_song(conn: sqlite3.Connection, number: int, roots: Sequence[str]) -> dict[str, Any]:
-    found = songs_by_id(conn, [number], roots)
-    if not found:
+    row = conn.execute(f"SELECT {SONG_COLUMNS} FROM tracks t {queries.HISTORY_JOIN} WHERE t.is_missing = 0 AND t.no_audio = 0 AND t.id = ?", (number,)).fetchone()
+    if row is None:
         raise not_found("song")
-    return found[0]
+    return song(row, roots)
 
 
 def playable(conn: sqlite3.Connection, numbers: Sequence[int]) -> dict[int, float]:
@@ -214,9 +201,8 @@ def artist_selection(name: str) -> Selection:
 def album_selection(key: str) -> Selection:
     """The songs of an album, by the key the library gave it (a key that is not one is an album that is not there)."""
     try:
-        parse_album_key(key)
         sel = only_playable(queries.build_selection(None, album=key))  # type: ignore[arg-type]
-    except HTTPException:
+    except HTTPException:  # (a key that is not one)
         raise not_found("album") from None
     return sel
 

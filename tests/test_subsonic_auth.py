@@ -260,5 +260,5 @@ def test_a_call_that_fails_unexpectedly_is_answered_as_a_failure_and_the_log_has
     with caplog.at_level(logging.ERROR, logger="musictoolkit"):
         answer = asked(secured, "getArtists", **key_of(secured, u="me", p=TOKEN))
     assert failure(answer) == (0, "The server could not answer that")
-    assert "Unhandled error answering /rest/getArtists" in caplog.text and "boom" in caplog.text
+    assert [(record.name, record.getMessage()) for record in caplog.records] == [("musictoolkit", "Unhandled error answering /rest/getArtists")] and "boom" in caplog.text
     assert TOKEN not in caplog.text and "p=" not in caplog.text

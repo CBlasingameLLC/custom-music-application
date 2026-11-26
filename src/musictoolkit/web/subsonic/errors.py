@@ -1,4 +1,4 @@
-"""The errors a Subsonic client knows, by number (the table at subsonic.org/pages/api.jsp, and OpenSubsonic's additions for API keys)."""
+"""The errors a Subsonic client knows, by number (the table at subsonic.org/pages/api.jsp, and OpenSubsonic's additions for API keys): those this server says."""
 
 from __future__ import annotations
 
@@ -9,12 +9,9 @@ MISSING = 10  # a required parameter is missing
 CLIENT_MUST_UPGRADE = 20
 SERVER_MUST_UPGRADE = 30
 WRONG_CREDENTIALS = 40
-TOKEN_NOT_SUPPORTED = 41
-MECHANISM_NOT_SUPPORTED = 42
 CONFLICTING_MECHANISMS = 43
 INVALID_API_KEY = 44
 NOT_AUTHORIZED = 50
-TRIAL_OVER = 60
 NOT_FOUND = 70
 
 

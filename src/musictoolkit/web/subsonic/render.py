@@ -82,13 +82,9 @@ def _element(tag: str, value: Any, out: list[str]) -> None:
 
 
 def to_xml(reply: dict[str, Any]) -> bytes:
-    out: list[str] = ['<?xml version="1.0" encoding="UTF-8"?>']
-    clean = _without_none(reply)
     body: list[str] = []
-    _element("subsonic-response", clean, body)
-    out.append(body[0].replace("<subsonic-response", f'<subsonic-response xmlns="{NAMESPACE}"', 1))
-    out.extend(body[1:])
-    return "".join(out).encode("utf-8")
+    _element("subsonic-response", {"xmlns": NAMESPACE, **_without_none(reply)}, body)
+    return ('<?xml version="1.0" encoding="UTF-8"?>' + "".join(body)).encode()
 
 
 def to_json(reply: dict[str, Any], callback: str | None = None) -> bytes:
@@ -97,4 +93,4 @@ def to_json(reply: dict[str, Any], callback: str | None = None) -> bytes:
         if not _CALLBACK.match(callback):
             raise ValueError("not a function name")
         text = f"{callback}({text})"
-    return text.encode("utf-8")
+    return text.encode()

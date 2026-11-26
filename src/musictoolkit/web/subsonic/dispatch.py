@@ -16,7 +16,7 @@ from starlette.responses import Response
 from musictoolkit.web.context import AppContext
 from musictoolkit.web.subsonic import render
 from musictoolkit.web.subsonic.auth import authenticate, check_version
-from musictoolkit.web.subsonic.errors import GENERIC, MISSING, SubsonicError, from_http
+from musictoolkit.web.subsonic.errors import GENERIC, SubsonicError, from_http, missing
 from musictoolkit.web.subsonic.params import Params
 
 logger = logging.getLogger("musictoolkit")
@@ -33,7 +33,7 @@ class Call:
     user: str
 
 
-Handler = Callable[[Call], "dict[str, Any] | Response"]
+Handler = Callable[[Call], dict[str, Any] | Response]
 REGISTRY: dict[str, Handler] = {}
 PUBLIC: set[str] = set()  # the calls that need no credentials (OpenSubsonic says that of getOpenSubsonicExtensions: a client asks it before it signs in)
 
@@ -78,14 +78,15 @@ async def _params(request: Request) -> Params:
 
 
 def _answer(reply: dict[str, Any], params: Params) -> Response:
-    form = (params.get("f") or "xml").lower()
+    form = (params.get("f") or "").lower()  # (json, jsonp; anything else is the XML that is the protocol's own)
     headers = {"Cache-Control": "no-store"}
     if form == "json":
         return Response(render.to_json(reply), media_type="application/json", headers=headers)
     if form == "jsonp":
         callback = params.get("callback")
         if callback is None:
-            return Response(render.to_json(render.failure(MISSING, "Required parameter is missing: callback")), media_type="application/json", headers=headers)
+            error = missing("callback")
+            return Response(render.to_json(render.failure(error.code, error.message)), media_type="application/json", headers=headers)
         try:
             return Response(render.to_json(reply, callback), media_type="text/javascript", headers=headers)
         except ValueError:
@@ -93,7 +94,7 @@ def _answer(reply: dict[str, Any], params: Params) -> Response:
     return Response(render.to_xml(reply), media_type="text/xml", headers=headers)
 
 
-@router.api_route("/rest/{name}", methods=["GET", "POST", "HEAD"], include_in_schema=False)
+@router.api_route("/rest/{name}", methods=["GET", "POST", "HEAD"])
 async def rest(name: str, request: Request) -> Response:
     params = await _params(request)
     name = name.removesuffix(".view")  # (the older clients write every call that way)

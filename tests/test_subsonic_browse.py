@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,7 +46,7 @@ def test_the_artists_are_in_sections_by_the_first_letter_with_the_article_left_o
 def test_the_older_call_for_the_same_artists_has_no_album_counts_and_says_when_the_list_was_last_changed(rest: Rest) -> None:
     answer = rest.ok("getIndexes")["indexes"]
     assert [section["name"] for section in answer["index"]] == ["A", "F", "M"]
-    assert answer["ignoredArticles"] == "The El La Los Las Le Les" and isinstance(answer["lastModified"], int) and answer["lastModified"] > 1_700_000_000_000
+    assert answer["ignoredArticles"] == "The El La Los Las Le Les" and isinstance(answer["lastModified"], int) and abs(answer["lastModified"] - time.time() * 1000) < 60_000
     assert all(set(artist) == {"id", "name"} for section in answer["index"] for artist in section["artist"])
 
 
@@ -64,6 +65,18 @@ def test_an_artist_has_its_albums_by_year(rest: Rest) -> None:
 @pytest.mark.parametrize("given,code", [("ar-" + "QQ", 70), ("12", 70), ("al-xx", 70), ("pl-1", 70), ("zzz", 70), ("ar-!!", 70)])
 def test_an_artist_that_is_not_there_or_an_id_that_is_not_an_artists_is_not_found(rest: Rest, given: str, code: int) -> None:
     rest.fails("getArtist", code, id=given)
+
+
+def test_what_is_not_found_is_said_with_what_it_is(rest: Rest) -> None:
+    assert rest.fails("getArtist", 70, id="ar-QQ") == "The requested artist was not found"
+    assert rest.fails("getArtist", 70, id="12") == "The requested artist was not found"
+    assert rest.fails("getAlbum", 70, id="al-WyJ4IiwgInkiXQ") == "The requested album was not found"
+    assert rest.fails("getAlbum", 70, id="12") == "The requested album was not found"
+    assert rest.fails("getAlbum", 70, id="al-!!!") == "The requested album was not found"  # (not a key of an album at all)
+    assert rest.fails("getSong", 70, id="999999") == "The requested song was not found"
+    assert rest.fails("getSong", 70, id="al-x") == "The requested song was not found"
+    assert rest.fails("getMusicDirectory", 70, id="ar-QQ") == "The requested artist was not found"
+    assert rest.fails("getMusicDirectory", 70, id="al-WyJ4IiwgInkiXQ") == "The requested album was not found"
 
 
 def test_a_call_that_needs_an_id_says_so_when_it_has_none(rest: Rest) -> None:
@@ -218,7 +231,7 @@ def test_the_older_list_gives_folders_of_songs_where_the_newer_one_gives_albums(
 
 
 def test_random_songs_are_as_many_as_asked_for_and_can_be_kept_to_a_genre_and_to_years(rest: Rest) -> None:
-    assert len(rest.ok("getRandomSongs", size=3)["randomSongs"]["song"]) == 3
+    assert len(rest.ok("getRandomSongs", size=3)["randomSongs"]["song"]) == 3 and len(rest.ok("getRandomSongs", size=0)["randomSongs"]["song"]) == 1
     assert len(rest.ok("getRandomSongs", size=500)["randomSongs"]["song"]) == 9
     assert sorted(titles(rest.ok("getRandomSongs", genre="folk")["randomSongs"]["song"])) == ["Gravel Dust", "Porch Light"]
     assert sorted(titles(rest.ok("getRandomSongs", fromYear=2021, toYear=2021)["randomSongs"]["song"])) == ["Neon Rain", "Signal Fade", "Wires"]
@@ -231,6 +244,9 @@ def test_the_songs_of_a_genre_are_paged(rest: Rest) -> None:
     every = titles(rest.ok("getSongsByGenre", genre="Electronic", count=50)["songsByGenre"]["song"])
     assert sorted(every) == ["Drift", "Glacier", "Polar Night"]
     assert titles(rest.ok("getSongsByGenre", genre="electronic", count=2, offset=1)["songsByGenre"]["song"]) == every[1:]
+    assert titles(rest.ok("getSongsByGenre", genre="electronic", count=1, offset=1)["songsByGenre"]["song"]) == every[1:2]
+    assert titles(rest.ok("getSongsByGenre", genre="electronic", count=0)["songsByGenre"]["song"]) == every[:1]  # (at least one)
+    assert titles(rest.ok("getSongsByGenre", genre="electronic", count=2, offset=-4)["songsByGenre"]["song"]) == every[:2]  # (from the first)
     rest.fails("getSongsByGenre", 10)
 
 
@@ -302,6 +318,14 @@ def test_the_characters_of_a_pattern_are_only_characters_in_a_search(rest: Rest)
     for query in ("%", "_", "100%", "a_b", "\\", "'", '"', "a' OR '1'='1", "; DROP TABLE tracks; --"):
         assert rest.ok("search3", query=query)["searchResult3"] == {"artist": [], "album": [], "song": []}, query
     assert len(rest.ok("getRandomSongs", size=500)["randomSongs"]["song"]) == 9
+
+
+def test_the_songs_that_are_found_are_the_most_listened_to_first(rest: Rest) -> None:
+    found = rest.ok("search3", query="", songCount=500)["searchResult3"]["song"]
+    by_title = {song["title"]: song["id"] for song in found}
+    for title in ("Neon Rain", "Neon Rain", "Wires", "Neon Rain", "Wires", "Glacier"):
+        rest.ok("scrobble", id=by_title[title])
+    assert titles(rest.ok("search3", query="", songCount=500)["searchResult3"]["song"])[:3] == ["Neon Rain", "Wires", "Glacier"]
 
 
 def test_the_older_search_gives_the_albums_as_folders_and_the_artists_as_names(rest: Rest) -> None:
@@ -408,4 +432,5 @@ def test_the_top_songs_are_fifty_unless_asked_for_fewer(rest: Rest, web: SimpleN
     add_songs(web, [(f"/prolific/{n}.mp3", f"Hit {n:03d}", "Prolific", "Hits", n) for n in range(60)])
     assert len(rest.ok("getTopSongs", artist="Prolific")["topSongs"]["song"]) == 50
     assert len(rest.ok("getTopSongs", artist="Prolific", count=7)["topSongs"]["song"]) == 7
+    assert len(rest.ok("getTopSongs", artist="Prolific", count=0)["topSongs"]["song"]) == 1  # (at least one)
     assert len(rest.ok("getTopSongs", artist="Prolific", count=100000)["topSongs"]["song"]) == 60

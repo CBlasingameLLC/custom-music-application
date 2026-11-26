@@ -106,7 +106,7 @@ def test_jsonp_wraps_the_answer_in_the_function_the_client_named() -> None:
 
 @pytest.mark.parametrize("callback", ["1abc", "a b", "a(b)", "a;b", "a-b", "</script>", "a\nb", "a'b", "a.", ".a", "a..b", "a.1b"])
 def test_a_name_that_is_not_a_function_is_not_written_into_the_answer(callback: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not a function name"):
         render.to_json(render.envelope(), callback)
 
 
@@ -161,6 +161,10 @@ def test_an_artist_id_may_come_back_with_the_padding_the_client_added() -> None:
 # ---------------------------------------------------------------------------------------------------------------------------------- errors
 
 
+def test_an_error_is_its_words_when_it_is_written_out() -> None:
+    assert str(SubsonicError(70, "gone")) == "gone" and str(not_found("song")) == "The requested song was not found"
+
+
 def test_the_errors_that_are_made_in_one_place_say_the_number_and_the_words() -> None:
     assert (missing("id").code, missing("id").message) == (10, "Required parameter is missing: id")
     assert (not_found().code, not_found().message) == (70, "The requested data was not found")
@@ -211,23 +215,25 @@ def rest(web: SimpleNamespace) -> Rest:
 def test_a_call_is_answered_in_xml_unless_the_client_asks_for_something_else(rest: Rest) -> None:
     root = rest.xml("ping")
     assert tag(root) == "subsonic-response" and root.attrib["status"] == "ok" and root.attrib["version"] == "1.16.1"
-    assert rest.get("ping", f="xml").headers["content-type"].startswith("text/xml")
-    assert rest.get("ping", f="XML").headers["content-type"].startswith("text/xml")
-    assert rest.get("ping", f="nonsense").headers["content-type"].startswith("text/xml")
+    for asked in (None, "xml", "XML", "nonsense"):
+        assert rest.get("ping", f=asked).headers["content-type"] == "text/xml; charset=utf-8"
 
 
 def test_f_json_is_answered_in_json_and_jsonp_in_the_function_the_client_named(rest: Rest) -> None:
     response = rest.get("ping", f="json")
     assert response.headers["content-type"] == "application/json" and response.json()["subsonic-response"]["status"] == "ok"
     response = rest.get("ping", f="jsonp", callback="handle")
-    assert response.headers["content-type"].startswith("text/javascript") and response.text.startswith("handle({") and response.text.endswith("})")
+    assert response.headers["content-type"] == "text/javascript; charset=utf-8" and response.text.startswith("handle({") and response.text.endswith("})")
 
 
 def test_jsonp_without_a_function_name_or_with_one_that_is_not_a_name_fails_as_json(rest: Rest) -> None:
-    answer = rest.get("ping", f="jsonp").json()["subsonic-response"]
-    assert answer["status"] == "failed" and answer["error"]["code"] == 10 and "callback" in answer["error"]["message"]
+    response = rest.get("ping", f="jsonp")
+    answer = response.json()["subsonic-response"]
+    assert response.headers["content-type"] == "application/json" and answer["status"] == "failed"
+    assert (answer["error"]["code"], answer["error"]["message"]) == (10, "Required parameter is missing: callback")
     response = rest.get("ping", f="jsonp", callback="a(b)")
-    assert response.headers["content-type"] == "application/json" and response.json()["subsonic-response"]["error"]["code"] == 0
+    assert response.headers["content-type"] == "application/json"
+    assert (response.json()["subsonic-response"]["error"]["code"], response.json()["subsonic-response"]["error"]["message"]) == (0, "callback is not a function name")
 
 
 def test_a_failure_is_still_http_200_and_a_page_that_is_never_kept(rest: Rest) -> None:
