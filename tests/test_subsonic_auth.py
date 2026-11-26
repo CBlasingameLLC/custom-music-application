@@ -130,6 +130,23 @@ def test_a_client_of_another_major_version_or_a_newer_minor_one_is_told_to_upgra
     assert failure(asked(secured, **sent))[0] == code
 
 
+def test_the_digest_is_made_as_the_protocol_asks_and_not_as_something_that_keeps_a_secret(secured: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """(MD5 is what the protocol has: a system that forbids it for security still allows it for this, when it is said that it is not for security.)"""
+    import hashlib
+
+    sent = Rest(secured.client, password=TOKEN, auth="token").params(f="json")
+    said: list[bool] = []
+    real = hashlib.md5
+
+    def md5(data: bytes = b"", *, usedforsecurity: bool = True):
+        said.append(usedforsecurity)
+        return real(data, usedforsecurity=False)
+
+    monkeypatch.setattr(hashlib, "md5", md5)
+    assert secured.client.get("/rest/ping", params=sent).json()["subsonic-response"]["status"] == "ok"
+    assert said == [False]
+
+
 def test_a_version_with_no_minor_number_is_minor_0(secured: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     from musictoolkit.web.subsonic import auth
 

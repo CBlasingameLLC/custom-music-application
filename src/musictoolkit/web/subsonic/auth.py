@@ -57,8 +57,8 @@ def _wrong(limiter: GuessLimiter, message: str = "Wrong username or password") -
     return SubsonicError(WRONG_CREDENTIALS, message)
 
 
-def authenticate(params: Params, token: str, limiter: GuessLimiter) -> str:
-    """Check the credentials against the server's token; the name the client gave (or "" for an API key) when they are right. Raises SubsonicError."""
+def authenticate(params: Params, token: str, limiter: GuessLimiter) -> str | None:
+    """Check the credentials against the server's token; the name the client gave (None for an API key, which has none) when they are right. Raises SubsonicError."""
     user, password, hashed, salt, key = (params.get(name) for name in ("u", "p", "t", "s", "apiKey"))
     offered = [value for value in (key, password, hashed) if value is not None]  # (an API key, a password, a digest: one of them at most)
     if len(offered) > 1 or (key is not None and user is not None):
@@ -69,7 +69,7 @@ def authenticate(params: Params, token: str, limiter: GuessLimiter) -> str:
         raise SubsonicError(WRONG_CREDENTIALS, f"Too many wrong passwords. Try again in {pause} seconds.")
     if key is not None:
         if same_token(key, token):
-            return ""
+            return None
         limiter.wrong()
         raise SubsonicError(INVALID_API_KEY, "Invalid API key")
     if user is None:

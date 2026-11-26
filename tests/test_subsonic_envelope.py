@@ -106,7 +106,7 @@ def test_jsonp_wraps_the_answer_in_the_function_the_client_named() -> None:
 
 @pytest.mark.parametrize("callback", ["1abc", "a b", "a(b)", "a;b", "a-b", "</script>", "a\nb", "a'b", "a.", ".a", "a..b", "a.1b"])
 def test_a_name_that_is_not_a_function_is_not_written_into_the_answer(callback: str) -> None:
-    with pytest.raises(ValueError, match="not a function name"):
+    with pytest.raises(ValueError, match="^not a function name$"):
         render.to_json(render.envelope(), callback)
 
 
@@ -131,31 +131,32 @@ def test_the_ids_of_songs_albums_and_playlists_are_told_apart_by_what_they_start
 
 
 @pytest.mark.parametrize("given", ["", "abc", "12a", "-1", "1.5", "al-", "ar-", "pl-", " 12", "٣", "AL-x"])
-def test_what_is_no_id_of_ours_is_not_found(given: str) -> None:
-    with pytest.raises(SubsonicError) as caught:
-        ids.kind_of(given)
-    assert caught.value.code == NOT_FOUND
+def test_what_is_no_id_of_ours_is_of_no_kind(given: str) -> None:
+    assert ids.kind_of(given) is None
 
 
-@pytest.mark.parametrize("convert,given", [
-    (ids.to_song, "al-abc"), (ids.to_song, "pl-1"), (ids.to_album, "12"), (ids.to_album, "ar-QQ"), (ids.to_artist, "12"), (ids.to_artist, "pl-1"),
-    (ids.to_playlist, "12"), (ids.to_playlist, "al-x"), (ids.to_playlist, "pl-x"), (ids.to_playlist, "pl-1x"), (ids.to_playlist, "pl-٣"),
+@pytest.mark.parametrize("convert,given,what", [
+    (ids.to_song, "al-abc", "song"), (ids.to_song, "pl-1", "song"), (ids.to_song, "", "song"), (ids.to_song, "٣", "song"), (ids.to_song, "1a", "song"),
+    (ids.to_album, "12", "album"), (ids.to_album, "ar-QQ", "album"), (ids.to_album, "al-", "album"), (ids.to_album, "nope", "album"),
+    (ids.to_artist, "12", "artist"), (ids.to_artist, "pl-1", "artist"), (ids.to_artist, "ar-", "artist"), (ids.to_artist, "nope", "artist"),
+    (ids.to_playlist, "12", "playlist"), (ids.to_playlist, "al-x", "playlist"), (ids.to_playlist, "pl-x", "playlist"), (ids.to_playlist, "pl-1x", "playlist"),
+    (ids.to_playlist, "pl-٣", "playlist"), (ids.to_playlist, "pl-", "playlist"), (ids.to_playlist, "nope", "playlist"), (ids.to_playlist, "", "playlist"),
 ])
-def test_an_id_of_the_wrong_kind_is_not_found_whatever_it_is_asked_as(convert, given: str) -> None:
+def test_an_id_of_the_wrong_kind_is_not_found_whatever_it_is_asked_as_and_it_is_said_what_was_asked_for(convert, given: str, what: str) -> None:
     with pytest.raises(SubsonicError) as caught:
         convert(given)
-    assert caught.value.code == NOT_FOUND
+    assert (caught.value.code, caught.value.message) == (NOT_FOUND, f"The requested {what} was not found")
 
 
-@pytest.mark.parametrize("given", ["ar-!!!!", "ar-_w", "ar-/w==", "ar-/", "ar-é"])
+@pytest.mark.parametrize("given", ["ar-!!!!", "ar-_w", "ar-/w==", "ar-/", "ar-é", "ar-QQ~", "ar-QQ=~", "ar-Q", "ar-Q Q"])
 def test_an_artist_id_that_is_not_a_name_in_base_64_is_not_found(given: str) -> None:
     with pytest.raises(SubsonicError) as caught:
         ids.to_artist(given)
-    assert caught.value.code == NOT_FOUND
+    assert (caught.value.code, caught.value.message) == (NOT_FOUND, "The requested artist was not found")
 
 
 def test_an_artist_id_may_come_back_with_the_padding_the_client_added() -> None:
-    assert ids.to_artist(ids.artist_id("ab") + "==") == "ab"
+    assert ids.to_artist(ids.artist_id("ab") + "==") == "ab" and ids.to_artist("ar-QQ===") == "A"
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- errors
