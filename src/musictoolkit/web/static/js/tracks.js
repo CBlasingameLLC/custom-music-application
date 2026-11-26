@@ -1,6 +1,6 @@
 // Track lists: a virtualized table that stays fast with tens of thousands of songs,
 // plus the actions (menu, favorite, rating) that apply to tracks anywhere in the app.
-import { api, fmt, html, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
+import { api, fmt, html, touchOnly, useCallback, useEffect, useRef, useState, useStore } from './lib.js';
 import { Icon } from './icons.js';
 import { Cover, Rating } from './components.js';
 import { addToQueue, player, playQueue, toggle, updateTrack } from './player.js';
@@ -111,12 +111,13 @@ const COLUMNS = {
 };
 
 // Which columns survive as the window narrows (least important first to go).
-const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating']];
+const DROP_ORDER = [['genre', 'added'], ['plays', 'year'], ['album', 'rating'], ['num', 'artist', 'time']];
 function visibleColumns(wanted, width) {
   let hide = [];
   if (width < 1180) hide = hide.concat(DROP_ORDER[0]);
   if (width < 960) hide = hide.concat(DROP_ORDER[1]);
   if (width < 720) hide = hide.concat(DROP_ORDER[2]);
+  if (width < 520) hide = hide.concat(DROP_ORDER[3]); // a phone: the song with its artist under it, and the two buttons
   return wanted.filter((c) => !hide.includes(c));
 }
 
@@ -411,7 +412,7 @@ export function TrackTable({
     }
   }
 
-  const gridTemplate = cols.map((c) => COLUMNS[c].width).join(' ');
+  const gridTemplate = cols.map((c) => (width < 520 && (c === 'heart' || c === 'more') ? '44px' : COLUMNS[c].width)).join(' '); // (a finger needs more than 38 px)
   const selectedTracks = selected.size ? loadedSelection() : [];
   const activeId = cursor !== null && total !== null && cursor < total && cursor >= range.first && cursor <= range.last ? rowId(cursor) : undefined;
 
@@ -445,12 +446,12 @@ export function TrackTable({
       added: html`<div role="gridcell" class="tcell dim">${fmt.date(track.added)}</div>`,
       rating: html`<div role="gridcell" class="tcell"><${Rating} value=${track.rating} onChange=${(r) => setRating([track], r).then(() => patchLoaded([track.id], { rating: r })).catch(notifyError)} /></div>`,
       time: html`<div role="gridcell" class="tcell dim time">${fmt.time(track.duration)}</div>`,
-      heart: html`<div role="gridcell" class="tcell">
+      heart: html`<div role="gridcell" class="tcell heart">
         <button class="icon-btn heart ${track.favorite ? 'on' : ''}" tabIndex="-1" aria-label=${track.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed=${track.favorite}
           onClick=${(e) => { e.stopPropagation(); setFavorite([track], !track.favorite).then(() => patchLoaded([track.id], { favorite: !track.favorite })).catch(notifyError); }}>
           <${Icon} name="heart" size=${16} fill=${track.favorite} />
         </button></div>`,
-      more: html`<div role="gridcell" class="tcell"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
+      more: html`<div role="gridcell" class="tcell more"><button class="icon-btn" tabIndex="-1" aria-label="More actions" onClick=${(e) => {
         e.stopPropagation();
         const box = e.currentTarget.getBoundingClientRect();
         rowMenu({ clientX: box.left, clientY: box.bottom + 4 }, index, track);
@@ -465,7 +466,7 @@ export function TrackTable({
       key=${track.id + ':' + index}
       style=${style}
       draggable=${reorderable}
-      onClick=${(e) => select(e, index, track)}
+      onClick=${(e) => (touchOnly() ? (isCurrent ? toggle() : onPlay?.(index)) : select(e, index, track))}
       onDblClick=${() => onPlay?.(index)}
       onContextMenu=${(e) => rowMenu(e, index, track)}
       onDragStart=${(e) => { dragFrom.current = index; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(index)); }}

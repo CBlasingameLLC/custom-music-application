@@ -3,9 +3,10 @@ import { api, fmt, Fragment, html, prefersReducedMotion, scrollBehavior, useAsyn
 import { Icon } from '../icons.js';
 import { Button, Cover, Empty, IconButton, TabPanel, Tabs } from '../components.js';
 import { confirmDialog, promptText } from '../dialogs.js';
-import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
+import { clearQueue, current, EQ_BANDS, EQ_PRESETS, getAnalyser, jumpTo, MAX_CROSSFADE, moveInQueue, PLAIN, player, removeFromQueue, seek, setCrossfade, setEq, setGapless, setNormalize, setSleepTimer } from '../player.js';
 import { describe, isEpisode, isStation, isTrack, itemKey } from '../items.js';
-import { enc, go, href, loadPlaylists, notifyError, toast } from '../state.js';
+import { enc, go, href, layout, loadPlaylists, notifyError, toast } from '../state.js';
+import { Heart, Seek, Transport } from './transport.js';
 
 // ------------------------------------------------------------ queue
 
@@ -163,7 +164,8 @@ function Lyrics({ track }) {
 function Visualizer() {
   const canvas = useRef();
   const playing = useStore(player, (s) => s.playing);
-  const still = prefersReducedMotion(); // a picture that moves all the time is not for someone who asked for less motion
+  const { phone } = useStore(layout);
+  const still = prefersReducedMotion() || PLAIN || phone; // a picture that moves all the time is not for someone who asked for less motion (an iPhone has no graph to draw it from, and a phone has the room for the controls instead)
   useEffect(() => {
     const el = canvas.current;
     if (!el || still) return undefined;
@@ -232,34 +234,39 @@ function SoundPanel() {
   const preset = Object.keys(EQ_PRESETS).find((name) => EQ_PRESETS[name].every((g, i) => g === eq.gains[i])) || 'Custom';
 
   return html`<div class="sound">
-    <h2>Equalizer</h2>
-    <div class="sound-row">
-      <label class="switch"><input type="checkbox" checked=${eq.enabled} onChange=${(e) => setEq({ enabled: e.target.checked })} /><span>On</span></label>
-      <select value=${preset} aria-label="Equalizer preset" onChange=${(e) => EQ_PRESETS[e.target.value] && setEq({ preset: e.target.value, enabled: true })}>
-        ${[...Object.keys(EQ_PRESETS), 'Custom'].map((name) => html`<option value=${name}>${name}</option>`)}
-      </select>
-    </div>
-    <div class="eq ${eq.enabled ? '' : 'off'}">
-      ${EQ_BANDS.map((f, i) => html`<label class="eq-band">
-        <span class="db">${eq.gains[i] > 0 ? '+' : ''}${eq.gains[i]}</span>
-        <input type="range" min="-12" max="12" step="1" value=${eq.gains[i]} aria-label="${labels[i]} Hz"
-          onInput=${(e) => { const gains = eq.gains.slice(); gains[i] = Number(e.target.value); setEq({ gains, enabled: true, preset: 'Custom' }); }} />
-        <span class="hz">${labels[i]}</span>
-      </label>`)}
-    </div>
-    <h2>Volume</h2>
-    <label class="switch"><input type="checkbox" checked=${normalize} onChange=${(e) => setNormalize(e.target.checked)} />
-      <span>Even out loudness between songs (ReplayGain)</span></label>
-    <p class="subtle">Uses the loudness tags stored in your files. Songs without them play unchanged.</p>
-    <h2>Between songs</h2>
-    <label class="switch"><input type="checkbox" checked=${gapless || crossfade > 0} disabled=${crossfade > 0} onChange=${(e) => setGapless(e.target.checked)} />
-      <span>Gapless playback</span></label>
-    <p class="subtle">Starts the next song just as the last one ends, with no silence between them: live albums, mixes and classical music run on unbroken.</p>
-    <label class="slider-row"><span>Crossfade</span>
-      <input type="range" min="0" max=${MAX_CROSSFADE} step="1" value=${crossfade} aria-label="Crossfade length in seconds" aria-valuetext=${crossfade ? `${crossfade} seconds` : 'Off'}
-        onInput=${(e) => setCrossfade(Number(e.target.value))} />
-      <output>${crossfade ? `${crossfade} s` : 'Off'}</output></label>
-    <p class="subtle">Fades the end of a song into the start of the next. Short songs get a shorter blend, and skipping with Next or a click is always instant.</p>
+    ${PLAIN ? html`<${Fragment}>
+      <h2>Sound</h2>
+      <p class="subtle">On an iPhone or an iPad the volume is set with the device's own buttons. The equalizer, loudness levelling, gapless joins and crossfade are not offered there: they are what would stop the music when the screen locks.</p>
+    <//>` : html`<${Fragment}>
+      <h2>Equalizer</h2>
+      <div class="sound-row">
+        <label class="switch"><input type="checkbox" checked=${eq.enabled} onChange=${(e) => setEq({ enabled: e.target.checked })} /><span>On</span></label>
+        <select value=${preset} aria-label="Equalizer preset" onChange=${(e) => EQ_PRESETS[e.target.value] && setEq({ preset: e.target.value, enabled: true })}>
+          ${[...Object.keys(EQ_PRESETS), 'Custom'].map((name) => html`<option value=${name}>${name}</option>`)}
+        </select>
+      </div>
+      <div class="eq ${eq.enabled ? '' : 'off'}">
+        ${EQ_BANDS.map((f, i) => html`<label class="eq-band">
+          <span class="db">${eq.gains[i] > 0 ? '+' : ''}${eq.gains[i]}</span>
+          <input type="range" min="-12" max="12" step="1" value=${eq.gains[i]} aria-label="${labels[i]} Hz"
+            onInput=${(e) => { const gains = eq.gains.slice(); gains[i] = Number(e.target.value); setEq({ gains, enabled: true, preset: 'Custom' }); }} />
+          <span class="hz">${labels[i]}</span>
+        </label>`)}
+      </div>
+      <h2>Volume</h2>
+      <label class="switch"><input type="checkbox" checked=${normalize} onChange=${(e) => setNormalize(e.target.checked)} />
+        <span>Even out loudness between songs (ReplayGain)</span></label>
+      <p class="subtle">Uses the loudness tags stored in your files. Songs without them play unchanged.</p>
+      <h2>Between songs</h2>
+      <label class="switch"><input type="checkbox" checked=${gapless || crossfade > 0} disabled=${crossfade > 0} onChange=${(e) => setGapless(e.target.checked)} />
+        <span>Gapless playback</span></label>
+      <p class="subtle">Starts the next song just as the last one ends, with no silence between them: live albums, mixes and classical music run on unbroken.</p>
+      <label class="slider-row"><span>Crossfade</span>
+        <input type="range" min="0" max=${MAX_CROSSFADE} step="1" value=${crossfade} aria-label="Crossfade length in seconds" aria-valuetext=${crossfade ? `${crossfade} seconds` : 'Off'}
+          onInput=${(e) => setCrossfade(Number(e.target.value))} />
+        <output>${crossfade ? `${crossfade} s` : 'Off'}</output></label>
+      <p class="subtle">Fades the end of a song into the start of the next. Short songs get a shorter blend, and skipping with Next or a click is always instant.</p>
+    <//>`}
     <h2>Sleep timer</h2>
     <div class="sound-row">
       <select value=${sleepAt ? 'on' : 'off'} aria-label="Sleep timer" onChange=${(e) => setSleepTimer(e.target.value === 'off' ? 0 : Number(e.target.value))}>
@@ -288,9 +295,16 @@ function EpisodeNotes({ episode }) {
   </div>`;
 }
 
+/** On a phone this page is the whole player: the seek bar and the buttons are here, because the small player is not (see main.js). */
+function PhoneControls({ track }) {
+  const s = useStore(player);
+  return html`<div class="np-controls"><${Seek} track=${track} /><${Transport} s=${s} track=${track} big /></div>`;
+}
+
 export function NowPlayingView() {
   const track = useStore(player, (s) => current(s)); // a song, a station or an episode
   const liveTitle = useStore(player, (s) => s.liveTitle);
+  const { phone } = useStore(layout);
   const [tab, setTab] = useState('lyrics');
   if (!track) {
     return html`<${Empty} icon="music" title="Nothing is playing" level=${1}>Pick a song, a radio station or a podcast episode to start. Lyrics, the queue and the equalizer live here.<//>`;
@@ -304,13 +318,14 @@ export function NowPlayingView() {
         ? html`<${Cover} albumKey=${track.album_key} name=${track.album} size=480 class="np-art" />`
         : html`<${Cover} item=${track} name=${shown.name} size=480 class="np-art" />`}
       <div class="np-meta">
-        <h1>${shown.title}</h1>
+        <div class="np-title-row"><h1>${shown.title}</h1>${phone && html`<${Heart} item=${track} />`}</div>
         ${isTrack(track)
           ? html`<p><a href=${href(`/artist/${enc(track.album_artist || track.artist)}`)}>${track.artist}</a> · <a href=${href(`/album/${track.album_key}`)}>${track.album}</a></p>`
           : isStation(track)
             ? html`<p><span class="live-badge">LIVE</span> <a href=${href('/radio')}>${liveTitle ? track.name : 'Live radio'}</a>${liveTitle || !track.country ? null : ` · ${track.country}`}</p>`
             : html`<p><a href=${href(`/podcast/${track.podcast_id}`)}>${track.podcast_title}</a>${track.published_at ? ` · ${fmt.date(track.published_at)}` : ''}</p>`}
       </div>
+      ${phone && html`<${PhoneControls} track=${track} />`}
       <${Visualizer} />
     </div>
     <div class="np-right">

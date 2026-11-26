@@ -2,12 +2,12 @@
 import { Fragment, html, render, useEffect, useLayoutEffect, useRef, useState, useStore } from './lib.js';
 import { Empty, MenuHost, ModalHost, ToastHost } from './components.js';
 import { cycleRepeat, current, next, pause, player, previous, restoreQueue, seekBy, setVolume, toggle, toggleMute, toggleShuffle, updateTrack } from './player.js';
-import { desktop, go, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, toast, ui } from './state.js';
+import { desktop, go, layout, loadAbout, loadFacets, loadPlaylists, loadSettings, modals, route, startJobPolling, toast, ui } from './state.js';
 import { setFavorite } from './tracks.js';
 import { describe, isStation, isTrack } from './items.js';
 import { setStationFavorite } from './radio.js';
 import { installOpenFiles } from './openfiles.js';
-import { PlayerBar, QueueDrawer, Sidebar, TopBar } from './views/shell.js';
+import { MiniPlayer, MoreSheet, PlayerBar, QueueDrawer, Sidebar, TabBar, TopBar } from './views/shell.js';
 import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, SongsView } from './views/library.js';
 import { PlaylistsView, PlaylistView } from './views/playlists.js';
 import { NowPlayingView } from './views/nowplaying.js';
@@ -154,6 +154,7 @@ function useRouteAnnouncer(view, path) {
 
 function App() {
   const { path } = useStore(route);
+  const { phone } = useStore(layout);
   const view = useRef();
   const item = useStore(player, (s) => current(s));
   const liveTitle = useStore(player, (s) => s.liveTitle);
@@ -180,14 +181,16 @@ function App() {
   return html`<${Fragment}>
     <div class="app" inert=${dialogOpen}>
       <button type="button" class="skip-link" onClick=${() => view.current?.focus()}>Skip to content</button>
-      <${Sidebar} />
+      ${!phone && html`<${Sidebar} />`}
       <div class="main-col">
         <${TopBar} />
         <main class="view" id="main" ref=${view} tabIndex="-1" data-route=${path}><${View} /><${MenuHost} /></main>
       </div>
-      <${QueueDrawer} />
-      <${PlayerBar} />
+      ${phone
+        ? html`<${Fragment}>${path !== '/now' && html`<${MiniPlayer} />`}<${TabBar} /><//>` /* (Now Playing has the whole player on its own page) */
+        : html`<${Fragment}><${QueueDrawer} /><${PlayerBar} /><//>`}
     </div>
+    ${phone && html`<${MoreSheet} />`}
     <${ToastHost} /><${ModalHost} />
     <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">${pageName}</div>
   <//>`;
@@ -203,3 +206,9 @@ loadSettings().catch(() => {});
 loadFacets().catch(() => {});
 loadPlaylists().catch(() => {});
 restoreQueue();
+
+// Installed as an app (Home Screen, Dock), the page says what is wrong when the server cannot be reached (see sw.js). Not in the
+// desktop window, which has its own server on a port of its own each time and no need of it.
+if ('serviceWorker' in navigator && !window.mtk) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {}), { once: true });
+}

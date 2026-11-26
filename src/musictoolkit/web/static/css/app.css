@@ -522,13 +522,15 @@ p a:not([class]), li a:not([class]), dd a:not([class]), .subtle a:not([class]), 
 
 /* ------------------------------------------------------------ settings and panels */
 
-.settings { display: grid; gap: 18px; max-width: 880px; padding-bottom: 24px; }
+.settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 880px; padding-bottom: 24px; }
 .card-panel { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
 .card-panel > h2 { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .card-panel > .subtle { margin-bottom: 14px; }
 .root-list { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
 .root-list li { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--bg-elev-2); }
-.root-list .path { flex: 1; }
+.root-list .path { flex: 1; min-width: 0; }
+.steps { margin: 6px 0 14px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
+.install-h { margin: 14px 0 4px; }
 .service { padding: 16px 0; border-top: 1px solid var(--border); }
 .service:first-of-type { border-top: 0; padding-top: 4px; }
 .service h3 { margin-bottom: 4px; }
@@ -1126,4 +1128,159 @@ body.dropping::after {
   .toast, .menu, .modal, .tasks-popover, .popover { border: 1px solid CanvasText; }
   .cover { outline: 1px solid CanvasText; outline-offset: -1px; }
   :focus-visible { outline: 3px solid Highlight; outline-offset: 2px; }
+}
+
+/* ------------------------------------------------------------ phone
+   A phone, or a phone on its side (see `layout` in js/state.js, which puts data-layout on <html>): the sidebar gives way to a row of
+   tabs at the bottom, the player bar to a small player over them (Now Playing is the whole player), and the pages to one column.
+   Sizes are for a thumb: nothing that is tapped is less than 44 px. Where the screen reaches under the notch or the home bar the
+   safe-area insets keep what is drawn out of them. */
+
+:root[data-layout="phone"] {
+  --topbar-h: 52px;
+  --tabbar-h: 56px;
+  --mini-h: 64px;
+  --player-h: calc(var(--tabbar-h) + var(--mini-h) + env(safe-area-inset-bottom, 0px)); /* what the toasts and the sheets stay clear of */
+}
+[data-layout="phone"] body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+[data-layout="phone"] .app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-areas: "main" "mini" "tabs";
+  height: 100vh;
+  height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+[data-layout="phone"] .view { padding: 4px 16px 24px; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+[data-layout="phone"] h1 { font-size: 24px; }
+[data-layout="phone"] .trow, [data-layout="phone"] .card, [data-layout="phone"] .qrow, [data-layout="phone"] .tabbar, [data-layout="phone"] .miniplayer { -webkit-touch-callout: none; }
+
+/* the top bar: a way back, the search box, the tasks */
+[data-layout="phone"] .topbar { height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); padding: env(safe-area-inset-top, 0px) 12px 0 8px; gap: 6px; }
+[data-layout="phone"] .topbar .spacer { display: none; }
+[data-layout="phone"] .search-box { min-width: 0; height: 40px; }
+[data-layout="phone"] .search-box.top { flex: 1; width: auto; }
+[data-layout="phone"] .icon-btn { width: 44px; height: 44px; }
+[data-layout="phone"] .tasks-pill { width: 44px; height: 44px; padding: 0; justify-content: center; }
+[data-layout="phone"] .tasks-pill > span:last-child:not(.spinner) { display: none; }
+[data-layout="phone"] .tasks-popover { position: fixed; left: 8px; right: 8px; top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px) + 4px); width: auto; }
+
+/* the row of tabs */
+.tabbar { grid-area: tabs; display: flex; background: var(--bg-elev); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom, 0px); z-index: 30; }
+.tabbar-item {
+  flex: 1 1 0; min-width: 0; height: var(--tabbar-h); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 0 2px; border: 0; background: none; color: var(--text-dim); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.tabbar-item:hover { text-decoration: none; }
+.tabbar-item.active { color: var(--accent); }
+.tabbar-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the small player */
+.miniplayer { grid-area: mini; position: relative; display: flex; align-items: center; gap: 2px; height: var(--mini-h); padding: 0 6px 0 8px; background: var(--bg-elev-2); border-top: 1px solid var(--border); z-index: 30; }
+.mini-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; height: 100%; color: inherit; }
+.mini-main:hover { text-decoration: none; }
+.mini-art { width: 48px; flex: none; }
+.mini-art .cover { border-radius: 6px; }
+.mini-text { display: flex; flex-direction: column; min-width: 0; }
+.mini-text .t1, .mini-text .t2 { display: block; }
+.mini-btn { flex: none; width: 48px; height: 48px; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--text); cursor: pointer; }
+.mini-progress { position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: linear-gradient(to right, var(--accent) var(--pct, 0%), transparent var(--pct, 0%)); pointer-events: none; }
+.mini-progress.live { background: var(--accent); opacity: 0.5; }
+
+/* the sheet of every other page */
+.sheet-backdrop { position: fixed; inset: 0; z-index: 80; display: flex; align-items: flex-end; background: rgba(5, 6, 10, 0.55); }
+.sheet {
+  width: 100%; max-height: 86vh; max-height: 86dvh; overflow-y: auto; padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-elev); border: 1px solid var(--border); border-bottom: 0; border-radius: 18px 18px 0 0; box-shadow: var(--shadow);
+}
+.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 6px; }
+.more-label { margin: 14px 0 8px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); }
+.more-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.more-item { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 52px; padding: 0 14px; border-radius: var(--radius-sm); background: var(--bg-elev-2); color: var(--text); font-weight: 600; }
+.more-item:hover { text-decoration: none; }
+.more-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.more-item.active { background: var(--accent-soft); color: var(--accent); }
+.more-foot { margin: 16px 0 0; text-align: center; font-size: 12px; }
+
+/* Now Playing: the whole player, one column */
+.np-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.np-controls { display: flex; flex-direction: column; gap: 6px; }
+.np-controls .seek { max-width: none; }
+.controls.big { justify-content: space-between; gap: 0; }
+.controls.big .play-btn { width: 64px; height: 64px; }
+[data-layout="phone"] .nowplaying { grid-template-columns: minmax(0, 1fr); gap: 12px; height: auto; padding: 6px 0 0; }
+[data-layout="phone"] .np-left { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 14px; }
+[data-layout="phone"] .np-art { width: min(80vw, 44vh, 44dvh, 360px); align-self: center; }
+[data-layout="phone"] .np-meta h1 { font-size: 22px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-layout="phone"] .np-right { min-height: 50vh; }
+[data-layout="phone"] .lyrics.synced { height: 50vh; height: 50dvh; padding: 18vh 0; }
+[data-layout="phone"] .lyrics.synced p { font-size: 20px; }
+[data-layout="phone"] .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+[data-layout="phone"] .tabs .tab { flex: none; height: 44px; }
+
+/* sliders: a track to grab, and a thumb that is always there (nothing hovers on a phone) */
+[data-layout="phone"] .slider { height: 32px; margin: 0; background: none; }
+[data-layout="phone"] .slider:hover { background: none; }
+[data-layout="phone"] .slider::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(to right, var(--accent) var(--pct, 0%), var(--bg-active) var(--pct, 0%)); }
+[data-layout="phone"] .slider::-webkit-slider-thumb { opacity: 1; width: 18px; height: 18px; margin-top: -7px; }
+[data-layout="phone"] .slider:disabled::-webkit-slider-thumb { opacity: 0.4; }
+
+/* songs, albums, artists */
+[data-layout="phone"] .page-header { padding: 10px 0 12px; gap: 12px; }
+[data-layout="phone"] .page-actions { width: 100%; }
+[data-layout="phone"] .filter-bar { gap: 8px; }
+[data-layout="phone"] .filter-bar .search-box { width: 100%; flex: 1 0 100%; }
+[data-layout="phone"] .popover { position: fixed; left: 12px; right: 12px; top: auto; bottom: calc(var(--player-h) + 8px); max-height: 60vh; max-height: 60dvh; }
+[data-layout="phone"] .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
+[data-layout="phone"] .card { padding: 6px; }
+[data-layout="phone"] .shelf-row > .card { flex: 0 0 148px; }
+[data-layout="phone"] .shelf-head .icon-btn { display: none; } /* the arrows that scroll a shelf: a finger does it */
+[data-layout="phone"] .hero { flex-direction: column; align-items: center; text-align: center; gap: 14px; padding: 12px 0 14px; }
+[data-layout="phone"] .hero-art, [data-layout="phone"] .hero-art.mosaic { width: min(60vw, 240px); }
+[data-layout="phone"] .hero-text { align-items: center; }
+[data-layout="phone"] .hero-text h1 { font-size: 26px; }
+[data-layout="phone"] .hero-actions { justify-content: center; }
+[data-layout="phone"] .selection-bar { overflow-x: auto; }
+[data-layout="phone"] .tcell.heart, [data-layout="phone"] .tcell.more { padding-right: 0; justify-content: center; overflow: visible; }
+
+/* a phone on its side has little height to spare: the tabs lose their words, and everything is a little lower */
+@media (max-height: 500px) {
+  :root[data-layout="phone"] { --topbar-h: 44px; --tabbar-h: 44px; --mini-h: 52px; }
+  [data-layout="phone"] .tabbar-item span { display: none; }
+  [data-layout="phone"] .mini-art { width: 40px; }
+}
+
+/* what is said in passing: across the width, over the small player */
+[data-layout="phone"] .toasts { left: 12px; right: 12px; transform: none; align-items: stretch; }
+[data-layout="phone"] .toasts > div { align-items: stretch; }
+[data-layout="phone"] .toast { max-width: none; }
+
+/* menus and dialogs come up from the bottom */
+[data-layout="phone"] .menu { left: 0 !important; right: 0; top: auto !important; bottom: 0; min-width: 0; max-height: 70vh; max-height: 70dvh; overflow-y: auto; padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px)); border-radius: 18px 18px 0 0; }
+[data-layout="phone"] .menu-item { min-height: 48px; padding: 0 14px; font-size: 16px; }
+[data-layout="phone"] .menu-item kbd { display: none; }
+[data-layout="phone"] .modal-backdrop { padding: 0; grid-template-columns: minmax(0, 1fr); place-items: end stretch; }
+[data-layout="phone"] .modal { max-width: none !important; max-height: 92vh; max-height: 92dvh; border-radius: 18px 18px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+[data-layout="phone"] .modal-head { padding: 12px 8px 4px 18px; }
+[data-layout="phone"] .modal-body { padding: 8px 16px 16px; }
+[data-layout="phone"] .modal-actions { flex-wrap: wrap; }
+
+/* forms and settings: one column, and fields that a phone's browser does not zoom into (it does for text smaller than 16 px) */
+[data-layout="phone"] input, [data-layout="phone"] select, [data-layout="phone"] textarea { font-size: 16px; }
+[data-layout="phone"] input[type="text"], [data-layout="phone"] input[type="url"], [data-layout="phone"] input[type="email"], [data-layout="phone"] input[type="password"],
+[data-layout="phone"] input[type="number"], [data-layout="phone"] select { height: 44px; }
+[data-layout="phone"] .btn { height: 44px; }
+[data-layout="phone"] .btn.small { height: 36px; }
+[data-layout="phone"] .chip, [data-layout="phone"] .chip-btn { height: 36px; }
+[data-layout="phone"] .settings { gap: 14px; }
+[data-layout="phone"] .card-panel { padding: 16px; }
+[data-layout="phone"] .info-grid, [data-layout="phone"] .form-grid, [data-layout="phone"] .tag-grid { grid-template-columns: minmax(0, 1fr); }
+[data-layout="phone"] .tool-grid, [data-layout="phone"] .drive-list { grid-template-columns: minmax(0, 1fr); }
+
+/* a touch screen of any size (an iPad too): what a pointer over something shows is always shown */
+@media (hover: none) {
+  .card-play { opacity: 1; transform: none; }
+  .slider::-webkit-slider-thumb { opacity: 1; }
+  .trow .star { opacity: 0.8; }
 }
