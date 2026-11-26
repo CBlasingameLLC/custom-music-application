@@ -4,78 +4,34 @@ device on the person's own tailnet; the test browsers do the same through the he
 
 from __future__ import annotations
 
-import http.server
-import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-import uvicorn
 from playwright.sync_api import expect
 
-from tests.conftest import build_web
 from tests.e2e.conftest import PHONE, TOKEN
+from tests.e2e.support import Elsewhere, serve_app, stop_app
 
 expect.set_options(timeout=10_000)
 YOU = "you@example.com"
 SERVE = {"Tailscale-User-Login": YOU, "Tailscale-User-Name": "You", "Tailscale-Headers-Info": "https://tailscale.com/s/serve-headers"}
 
 
-class _Recorder:
-    """Writes down what the server was sent and what it answered, for each call to the API: (method, path, status, Sec-Fetch-Site, whether
-    the request carried the login Tailscale writes). A browser does not let a page read the headers it adds itself, so the server does."""
-
-    def __init__(self, app, log: list) -> None:
-        self.app, self.log = app, log
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].startswith("/api/"):
-            return await self.app(scope, receive, send)
-        headers = {key.decode(): value.decode() for key, value in scope["headers"]}
-
-        async def sending(message):
-            if message["type"] == "http.response.start":
-                self.log.append((scope["method"], scope["path"], message["status"], headers.get("sec-fetch-site", ""), "tailscale-user-login" in headers))
-            await send(message)
-
-        await self.app(scope, receive, sending)
-
-
-def _serve(tmp_path: Path, **options) -> SimpleNamespace:
-    web = build_web(tmp_path, None, token=TOKEN, login_days=90, **options)
-    log: list = []
-    web.app.add_middleware(_Recorder, log=log)
-    server = uvicorn.Server(uvicorn.Config(web.app, host="127.0.0.1", port=0, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.time() + 15
-    while not server.started:
-        assert time.time() < deadline, "the test server did not start"
-        time.sleep(0.02)
-    port = server.servers[0].sockets[0].getsockname()[1]
-    return SimpleNamespace(base=f"http://127.0.0.1:{port}", port=port, server=server, thread=thread, ctx=web.ctx, log=log)
-
-
-def _stop(served: SimpleNamespace) -> None:
-    served.server.should_exit = True
-    served.thread.join(timeout=10)
-
-
 @pytest.fixture
 def listed(tmp_path: Path):
     """A server that signs YOU in with Tailscale."""
-    served = _serve(tmp_path, tailscale_logins=[YOU])
+    served = serve_app(tmp_path, tailscale_logins=[YOU])
     yield served
-    _stop(served)
+    stop_app(served)
 
 
 @pytest.fixture
 def unlisted(tmp_path: Path):
     """A server that signs nobody in with Tailscale (its own settings are the default ones)."""
-    served = _serve(tmp_path)
+    served = serve_app(tmp_path)
     yield served
-    _stop(served)
+    stop_app(served)
 
 
 def _device(browser, headers: dict[str, str], **device):
@@ -185,43 +141,9 @@ def test_a_device_that_tailscale_does_not_name_is_told_to_open_the_servers_own_a
     assert not problems, problems
 
 
-class _Elsewhere:
-    """A page of another site (another host name, as far as the browser can tell) that asks the server for things."""
-
-    def __init__(self, target: str) -> None:
-        body = f"""<!doctype html><title>elsewhere</title><script>
-        const target = {target!r};
-        window.done = (async () => {{
-          await fetch(target + '/api/about', {{ mode: 'no-cors', credentials: 'include' }});
-          await fetch(target + '/api/library/scan', {{ method: 'POST', mode: 'no-cors', credentials: 'include' }});
-          return true;
-        }})();
-        </script>""".encode()
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *args):
-                pass
-
-        self.http = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.http.serve_forever, daemon=True)
-        self.thread.start()
-        self.url = f"http://localhost:{self.http.server_address[1]}/"  # (`localhost`, not 127.0.0.1: a different site)
-
-    def stop(self) -> None:
-        self.http.shutdown()
-        self.thread.join(timeout=5)
-
-
 def test_a_page_of_another_site_cannot_use_the_identity_of_the_person_whose_browser_it_runs_in(browser, listed):
     context, page, problems = _device(browser, SERVE)
-    elsewhere = _Elsewhere(listed.base)
+    elsewhere = Elsewhere(listed.base)
     try:
         page.goto(elsewhere.url)
         assert page.evaluate("window.done") is True

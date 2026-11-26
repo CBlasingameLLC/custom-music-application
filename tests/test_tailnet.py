@@ -52,6 +52,14 @@ def test_an_entry_that_is_not_a_login_is_refused_and_named(entry: object, hint: 
     assert hint in str(refused.value)
 
 
+def test_logins_are_lowered_and_not_folded_so_that_two_spellings_are_one_login_only_where_they_differ_in_capitals() -> None:
+    assert tailnet.clean_logins(["Straße@example.com", "STRASSE@example.com"]) == ["straße@example.com", "strasse@example.com"]  # (not the same login)
+    allowed = frozenset(tailnet.clean_logins(["strasse@example.com"]))
+    assert not tailnet.look(_headers(tailscale_user_login="Straße@example.com"), allowed).allowed
+    assert tailnet.look(_headers(tailscale_user_login="STRASSE@Example.com"), allowed).allowed
+    assert tailnet.session_cookie(TOKEN, "Straße@example.com") != tailnet.session_cookie(TOKEN, "strasse@example.com")
+
+
 def test_a_login_can_be_as_long_as_any_login_is_and_not_longer() -> None:
     assert tailnet.clean_logins(["a" * 254]) == ["a" * 254]
     with pytest.raises(ValueError, match="too long"):
@@ -246,7 +254,7 @@ def test_the_line_in_the_page_is_a_line_of_toml_that_means_the_login(login: str)
     page = sign_in_page(tailscale_login=login)
     shown = html.unescape(re.search(r"<pre>(.*?)</pre>", page, re.S).group(1))  # type: ignore[union-attr]
     assert tomllib.loads(shown)["tailscale_logins"] == [login]
-    assert tailnet.clean_logins(tomllib.loads(shown)["tailscale_logins"]) == [login.casefold()]  # (and `mtk serve` takes it)
+    assert tailnet.clean_logins(tomllib.loads(shown)["tailscale_logins"]) == [login.lower()]  # (and `mtk serve` takes it)
 
 
 def test_a_login_is_shown_as_text_and_never_as_markup() -> None:

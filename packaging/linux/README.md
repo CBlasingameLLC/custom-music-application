@@ -6,7 +6,9 @@ with Python 3.11 or newer will do (x86-64 and arm64 are both tested in CI).
 
 **What it is not yet**: there are no accounts. One token signs a device in, and anyone who has it can use everything in the app,
 including moving and deleting files. Reach it only from your own network or a private network such as Tailscale, and **never forward a
-port from the internet to it**. Accounts and roles are the next round (0.11).
+port from the internet to it** (the server refuses a request that came through Tailscale Funnel, which is that). There are no accounts of its
+own: whoever is signed in can do everything. A device is signed in by the token, or, behind `tailscale serve`, because Tailscale says it belongs to an account
+you listed (see *Sign in with Tailscale*).
 
 ## What goes where
 
@@ -21,7 +23,7 @@ port from the internet to it**. Accounts and roles are the next round (0.11).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.11.0 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.12.0 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -60,6 +62,9 @@ allowed_hosts = ["musicpi.local"]
   (`musicpi.tail1234.ts.net`), an IP address. No wildcards, no ports. A request that names anything else gets `403 forbidden host`
   (this is what stops a web page on another site from using the app through your browser).
 - `rescan_hours`: look for new songs by itself this often (0: only when the server starts, and when you press Refresh).
+- `login_days`: how long a device that opened the sign-in link stays signed in (90).
+- `tailscale_logins`: the Tailscale accounts that are signed in without the token (see *Sign in with Tailscale*). Empty: only the token signs a device in. It needs
+  `host = "127.0.0.1"`, and the server refuses to start with it on any other address.
 
 ## Run it as a service
 
@@ -105,7 +110,7 @@ A monitor should ask `/healthz` (it needs no token); `/` answers `401` to a devi
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.11.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.12.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -127,6 +132,45 @@ needs one to install the app on a phone's home screen). Tailscale publishes the 
 certificate logs. The cookie that keeps a device signed in is marked Secure when the proxy says (`X-Forwarded-Proto: https`) that the page came over https; check it
 in the browser's developer tools if you care.
 
+## Sign in with Tailscale (no token on any of your devices)
+
+With `tailscale serve` in front of the server, Tailscale tells it which of your accounts each request came from, in the header `Tailscale-User-Login` (it deletes any
+such header that a client sent, and writes none for a request from a tagged device or from Funnel). A server that is told to believe it signs that account in with
+no token: your phone and your Mac open the app and it is simply there.
+
+1. Have the HTTPS address working (the section above) and `host = "127.0.0.1"` in `[server]`, with the Tailscale name in `allowed_hosts`.
+2. On a device of yours, open the server's `https://NAME.<your tailnet>.ts.net` address in a browser. The page that asks for the token now also says
+   *Tailscale says this device belongs to you@example.com* and shows the line to add. (Without that page: the account is the one you sign in to Tailscale with.)
+3. Add the line to the `[server]` section of `config.toml`, and restart the service:
+
+   ```toml
+   tailscale_logins = ["you@example.com"]
+   ```
+   ```bash
+   sudo systemctl restart musictoolkit
+   ```
+4. Open the address again: no token is asked for. Settings, *How this device signs in*, says *Tailscale signs this device in as you@example.com*. Do the same on every
+   device (nothing to type on them: each is in as soon as it is on your tailnet).
+
+What to know:
+
+- **Every listed account can do everything**, like the token. List your own accounts only. A person you *share* the Pi with in Tailscale is another account and is not signed
+  in unless you list it (and is then signed in fully).
+- **Taking an account off the list signs its devices out** on their next request, and so does changing the token (the devices that Tailscale still vouches for sign in again by
+  themselves, with a new cookie). The cookie a device gets is made from the token and the account, not the token itself.
+- **A tagged device** (a server of yours that has a Tailscale tag, not a person) carries no account: it signs in with the token. So does anything that reaches the server
+  by another address than the `tailscale serve` one (its local name, its IP address): there Tailscale says nothing.
+- **A page of another site cannot use it.** A browser says (`Sec-Fetch-Site`) whether the app's own page or another site's made a request, and only the app's own
+  page, or you typing or tapping the address, is signed in. A browser too old to say (Safari before 16.4) is not signed in this way; it uses the token. A program that
+  is not a browser (a phone app that speaks the Subsonic protocol, later) is signed in by the account.
+- **The server must listen on this computer only** (`host = "127.0.0.1"`), because whatever can reach it directly could write the header and be anyone. For the same
+  reason keep other people's programs and accounts off the Pi: anything on it that can open `127.0.0.1:4533` can say who it is.
+- **Funnel is refused**: a request that came through `tailscale funnel` (the public internet) gets `403 this server is not available through Tailscale Funnel`, whatever it
+  asks for. If you see that, Funnel is on for this port: turn it off (`sudo tailscale serve reset`, then `sudo tailscale serve --bg 4533` again).
+- **Use `tailscale serve` as the proxy, and no other** in front of the app on this computer for this. A proxy that passes on every header a client sends (most do) would
+  pass on a `Tailscale-User-Login` that the client wrote, and the client would be whoever it said. Tailscale deletes such headers; another proxy has to be told to.
+- The log says how many accounts are signed in this way, never which.
+
 ## On the phone and on the Mac
 
 The app is a web page that can be installed: it opens from an icon of its own, with no browser around it. It needs the `https` address above (a phone
@@ -135,10 +179,12 @@ gives a Home Screen app its own worker only over `https`; over plain `http` the 
 **iPhone or iPad**
 
 1. Put the Tailscale app on the phone and sign in to the account the server is on. Leave it connected: it uses next to nothing when nothing is sent.
-2. In Safari open `https://musicpi.<your tailnet>.ts.net`. The page asks for the token, once (`mtk token` shows it; copy it on a Mac or another iPhone and paste it,
-   the clipboard is shared), or open the link `mtk token --url https://musicpi.<your tailnet>.ts.net` prints.
+2. In Safari open `https://musicpi.<your tailnet>.ts.net`. If you did *Sign in with Tailscale*, it opens signed in. Otherwise the page asks for the token, once
+   (`mtk token` shows it; copy it on a Mac or another iPhone and paste it, the clipboard is shared), or open the link
+   `mtk token --url https://musicpi.<your tailnet>.ts.net` prints.
 3. Press Share, then **Add to Home Screen**. From iOS 17 Safari copies the site's cookies to the new app, so it opens signed in; if it asks for the token anyway,
-   paste it once more (the app keeps its cookies apart from Safari's). It then stays signed in for `login_days`.
+   paste it once more (the app keeps its cookies apart from Safari's). It then stays signed in for `login_days`. With *Sign in with Tailscale* the app signs
+   itself in whenever it is opened (there is nothing to copy, and no `login_days` to run out).
 4. Open **Music Kit** from the Home Screen.
 
 What an iPhone does and does not do:
@@ -178,6 +224,10 @@ What an iPhone does and does not do:
 | You see | It means |
 |---|---|
 | `403 forbidden host` | The name in the address is not in `allowed_hosts`. Add it (exactly, without the port), restart |
+| `403 this server is not available through Tailscale Funnel` | The request came through Funnel (the public internet). Turn Funnel off for this port: `sudo tailscale serve reset`, then `sudo tailscale serve --bg 4533` |
+| `Cannot start the server: [server] tailscale_logins needs host = "127.0.0.1"` | The list is set and the server would listen on another address, where a program on the network could write the header and be anyone. Listen on this computer only and reach it through `tailscale serve`, or empty the list |
+| The page asks for the token although the account is listed | Tailscale is not naming the account in this visit. Check: the address is the `https://....ts.net` one (not the local name or an IP); the device is not a tagged one; the page was not opened from a link on another site (open the address itself); the browser is not older than Safari 16.4; the service was restarted after the line was added. The page itself says *Tailscale says this device belongs to ...* when it sees an account, and nothing when it does not |
+| The sign-in page says *Tailscale says this device belongs to X. This server does not sign in that account* | X is not on `tailscale_logins`. Add it exactly as shown (capitals do not matter), restart |
 | `401 unauthorized`, or the page with the box for the token | The device is not signed in: open the link from `mtk token --url ...`, or paste the token (`mtk token`) into the box |
 | "Too many wrong tokens. Try again in N seconds." (`429`) | Eight wrong tokens came in within a minute (a typo, a program with an old token). Wait; devices that are signed in are not affected |
 | A page that says **Can't reach your music server**, with a *Try again* button | The phone or Mac got no answer from the server within eight seconds (the installed app shows this instead of the browser's own error). Tailscale is off on the phone, the phone is on a different account, or the server is off: check each, then press *Try again* |

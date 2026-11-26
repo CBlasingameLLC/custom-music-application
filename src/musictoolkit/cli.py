@@ -431,7 +431,7 @@ def serve(
         typer.echo(f"  WARNING: {warning}", err=True)
     if not server_ops.is_loopback_bind(bind):
         typer.echo(
-            "  WARNING: anyone on this network who has the token can use everything in the app, and there are no accounts yet. "
+            "  WARNING: anyone on this network who has the token can use everything in the app, and there are no accounts. "
             "Never forward a port from the internet to it; reach it from outside through a private network such as Tailscale.",
             err=True,
         )

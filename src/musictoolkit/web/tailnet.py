@@ -53,7 +53,7 @@ def clean_logins(entries: Iterable[str]) -> list[str]:
             raise ValueError(f"{text[:20]!r}... is too long to be a login")
         if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in text):
             raise ValueError(f"{raw!r} has a space or a control character in it")
-        key = text.casefold()
+        key = text.lower()
         if key not in out:
             out.append(key)
     return out
@@ -105,14 +105,14 @@ class Seen:
 def look(headers: Headers, allowed: frozenset[str]) -> Seen:
     """`allowed`: the logins the server signs in, lower case (see `clean_logins`)."""
     login = login_in(headers)
-    return Seen(login=login, allowed=login is not None and login.casefold() in allowed, own_page=from_own_page(headers))
+    return Seen(login=login, allowed=login is not None and login.lower() in allowed, own_page=from_own_page(headers))
 
 
 def session_cookie(token: str, login: str) -> str:
     """The cookie value of a device signed in as `login`: made from the token, so it is no good once the token is changed, and from the
     login, so it is no good for another one. It is not the token (a cookie that leaked is no use to the other sign-in)."""
     key = token.encode("utf-8", "surrogatepass")
-    return COOKIE_PREFIX + hmac.new(key, _SESSION_LABEL + login.casefold().encode("utf-8"), hashlib.sha256).hexdigest()
+    return COOKIE_PREFIX + hmac.new(key, _SESSION_LABEL + login.lower().encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def cookie_login(value: str, token: str, allowed: Iterable[str]) -> str | None:
