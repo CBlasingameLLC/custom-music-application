@@ -333,7 +333,8 @@ def test_the_app_can_say_how_a_device_is_signed_in_and_what_tailscale_says_about
     by_token = _device(web)
     by_token.get(f"/?token={TOKEN}")
     assert by_token.get("/api/session").json() == {"by": "token", "tailscale": {"on": True, "login": None, "allowed": False, "own_page": True}}
-    assert by_token.get("/api/session", headers=ID).json()["tailscale"] == {"on": True, "login": YOU, "allowed": True, "own_page": True}
+    both = by_token.get("/api/session", headers=ID).json()  # (the cookie got it in: that is how it is said to be signed in, though Tailscale would too)
+    assert both["by"] == "token" and both["tailscale"] == {"on": True, "login": YOU, "allowed": True, "own_page": True}
     assert by_token.get("/api/session", headers={"tailscale-user-login": "mallory@example.com"}).json()["tailscale"] == {
         "on": True, "login": "mallory@example.com", "allowed": False, "own_page": True,
     }

@@ -531,6 +531,7 @@ p a:not([class]), li a:not([class]), dd a:not([class]), .subtle a:not([class]), 
 .root-list .path { flex: 1; min-width: 0; }
 .steps { margin: 6px 0 14px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; }
 .install-h { margin: 14px 0 4px; }
+pre.line { margin: 8px 0; padding: 8px 10px; background: var(--bg); border-radius: var(--radius-sm); overflow-x: auto; user-select: all; -webkit-user-select: all; }
 .service { padding: 16px 0; border-top: 1px solid var(--border); }
 .service:first-of-type { border-top: 0; padding-top: 4px; }
 .service h3 { margin-bottom: 4px; }

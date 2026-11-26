@@ -93,7 +93,23 @@ def test_no_login_is_read_from_anything_that_is_not_one_header_that_holds_one(he
 def test_the_longest_login_that_is_read_is_the_longest_a_login_can_be() -> None:
     assert tailnet.login_in(_headers(tailscale_user_login="a" * 254)) == "a" * 254
     assert tailnet.login_in(_headers(tailscale_user_login="a" * 255)) is None
-    assert tailnet.login_in(_headers(tailscale_user_login="a" * 1016)) is None  # (and one that long is not even decoded)
+
+
+def test_a_header_too_long_to_be_a_login_even_encoded_is_not_decoded_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(The decoder is not asked to work on what anyone can send in a header as long as the server lets it be.)"""
+    asked: list[str] = []
+    real = tailnet.decode_header
+
+    def spy(value: str):
+        asked.append(value)
+        return real(value)
+
+    monkeypatch.setattr(tailnet, "decode_header", spy)
+    assert tailnet.login_in(_headers(tailscale_user_login="a" * 1016)) is None  # (the longest that is looked at: 4 times what a login is, for the encoding)
+    assert asked == ["a" * 1016]
+    assert tailnet.login_in(_headers(tailscale_user_login="a" * 1017)) is None
+    assert tailnet.login_in(_headers(tailscale_user_login="a" * 100_000)) is None
+    assert asked == ["a" * 1016]  # (not asked again)
 
 
 @pytest.mark.parametrize("fields", [{"tailscale_funnel_request": "?1"}, {"tailscale_funnel_request": ""}, {"Tailscale-Funnel-Request": "no"}])
@@ -126,6 +142,11 @@ def test_a_browser_that_says_where_the_request_came_from_is_believed_and_only_th
 def test_without_that_header_a_browser_is_told_by_its_name_and_does_not_count_while_a_program_does(agent: str, own: bool) -> None:
     assert tailnet.from_own_page(_headers(user_agent=agent)) is own
     assert tailnet.from_own_page(_headers()) is True  # (no name at all: a program)
+
+
+def test_nobody_is_signed_in_without_a_login_whatever_else_is_said() -> None:
+    assert not tailnet.Seen(login=None, allowed=True, own_page=True).vouched
+    assert tailnet.Seen(login="a@b.c", allowed=True, own_page=True).vouched
 
 
 def test_what_a_request_says_about_who_made_it_needs_all_three_to_sign_it_in() -> None:
@@ -168,6 +189,23 @@ def test_a_cookie_is_good_for_the_login_it_was_made_for_while_that_login_is_on_t
     assert tailnet.cookie_login(tailnet.session_cookie(TOKEN, "alice@example.com"), TOKEN, ["bob@example.com"]) is None  # (another login's)
 
 
+def test_the_cookie_is_compared_in_constant_time_the_way_the_token_is(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hmac
+
+    compared: list[tuple[bytes, bytes]] = []
+    real = hmac.compare_digest
+
+    def spy(a: bytes, b: bytes) -> bool:
+        compared.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    cookie = tailnet.session_cookie(TOKEN, "alice@example.com")
+    compared.clear()
+    assert tailnet.cookie_login(cookie, TOKEN, ["bob@example.com", "alice@example.com"]) == "alice@example.com"
+    assert compared == [(cookie.encode(), tailnet.session_cookie(TOKEN, "bob@example.com").encode()), (cookie.encode(), cookie.encode())]
+
+
 @pytest.mark.parametrize("value", [
     "", TOKEN, "tailnet.", "tailnet.0", "tailnet." + "0" * 64, "TAILNET." + "0" * 64, "tailnet.é" + "0" * 63, "tailnet.\udcff", " ",
 ])
@@ -197,10 +235,10 @@ def test_a_server_that_signs_nobody_in_shows_the_line_that_would_sign_this_devic
     assert "This server can sign this device in through Tailscale, with no token." in page and "<strong>alice@example.com</strong>" in page
     assert "<pre>tailscale_logins = [&quot;alice@example.com&quot;]</pre>" in page
     assert "<code>[server]</code> section of config.toml" in page and "restart it" in page
-    assert page.index('<form method="post" action="/signin">') < page.index("Tailscale")  # (the token form is first: it is what works now)
+    assert page.index('<form method="post" action="/signin">') < page.index("Tailscale") < page.index("<code>mtk token</code>")  # (the token form is first: it is what works now)
 
 
-@pytest.mark.parametrize("login", ['alice@example.com', 'a"b@example.com', "a\\b@example.com", "jürgen@example.com", "a'b@example.com", "名前@example.com"])
+@pytest.mark.parametrize("login", ['alice@example.com', 'a"b@example.com', "a\\b@example.com", "jürgen@example.com", "a'b@example.com", "名前@example.com", "😀@example.com"])
 def test_the_line_in_the_page_is_a_line_of_toml_that_means_the_login(login: str) -> None:
     import html
     import re

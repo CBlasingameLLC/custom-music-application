@@ -173,7 +173,7 @@ def create_app(
         cookie = request.cookies.get(COOKIE_NAME, "")
         if same_token(cookie, ctx.token):
             return "token"
-        if logins and tailnet.cookie_login(cookie, ctx.token, logins):
+        if tailnet.cookie_login(cookie, ctx.token, logins):
             return "tailscale"
         return None
 

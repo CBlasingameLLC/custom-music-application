@@ -117,10 +117,7 @@ def session_cookie(token: str, login: str) -> str:
 
 def cookie_login(value: str, token: str, allowed: Iterable[str]) -> str | None:
     """The login on the list that this cookie was made for, or None (not one of ours, another token's, or a login that is off the list)."""
-    if not value.startswith(COOKIE_PREFIX):
-        return None
-    found: str | None = None
     for login in allowed:
-        if same_token(value, session_cookie(token, login)):  # (every login is tried: how long it takes does not say which one is on the list)
-            found = login
-    return found
+        if same_token(value, session_cookie(token, login)):  # (in constant time: how far a wrong value matches is not told by how long it takes)
+            return login
+    return None
