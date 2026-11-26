@@ -1,0 +1,8 @@
+{
+    "type": "object",
+    "description": "searchResult. TODO",
+    "externalDocs": {
+        "description": "SearchResult",
+        "url": "https://opensubsonic.github.io/docs/responses/searchresult/"
+    }
+}

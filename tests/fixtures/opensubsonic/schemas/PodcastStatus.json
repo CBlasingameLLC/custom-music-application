@@ -1,0 +1,16 @@
+{
+    "type": "string",
+    "description": "An enumeration of possible podcast statuses",
+    "externalDocs": {
+        "description": "PodcastStatus",
+        "url": "https://opensubsonic.github.io/docs/responses/podcaststatus/"
+    },
+    "enum": [
+        "new",
+        "downloading",
+        "completed",
+        "error",
+        "deleted",
+        "skipped"
+    ]
+}

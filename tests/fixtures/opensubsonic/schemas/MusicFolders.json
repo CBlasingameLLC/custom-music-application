@@ -1,0 +1,17 @@
+{
+    "type": "object",
+    "description": "MusicFolders.",
+    "externalDocs": {
+        "description": "MusicFolders",
+        "url": "https://opensubsonic.github.io/docs/responses/musicfolders/"
+    },
+    "properties": {
+        "musicFolder": {
+            "type": "array",
+            "items": {
+                "$ref": "./MusicFolder.json"
+            },
+            "description": "The folders"
+        }
+    }
+}

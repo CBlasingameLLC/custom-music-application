@@ -157,21 +157,20 @@ class PlayLog(BaseModel):
     started_at: float | None = None  # unix seconds; defaults to now - ms_played
 
 
-@router.post("/plays")
-def log_play(body: PlayLog, ctx: AppContext = Depends(get_ctx)) -> dict:
-    """Record a listen from the in-app player. Uses the 'future_scrobble' source the
-    schema reserved for native plays, with the names copied in so the history
-    survives the file being removed and can be submitted to ListenBrainz."""
-    started = int(body.started_at if body.started_at else time.time() - body.ms_played / 1000)
+def record_play(ctx: AppContext, track_id: int, ms_played: int, started_at: float | None = None) -> dict:
+    """Record a listen (from the in-app player, or from an app that speaks Subsonic). Uses the 'future_scrobble' source the
+    schema reserved for native plays, with the names copied in so the history survives the file being removed and can be
+    submitted to ListenBrainz."""
+    started = int(started_at if started_at else time.time() - ms_played / 1000)
     with ctx.db() as conn:
-        found = tracks_by_ids(conn, [body.track_id])
+        found = tracks_by_ids(conn, [track_id])
         if not found:
             raise HTTPException(status_code=404, detail="track not found")
         track = found[0]
         cursor = conn.execute(
             "INSERT INTO play_history (track_id, source, played_at_epoch, ms_played, raw_artist_name, "
             "raw_track_name, raw_album_name) VALUES (?, 'future_scrobble', ?, ?, ?, ?, ?)",
-            (track["id"], started, body.ms_played, track["artist"], track["title"], track["album"]),
+            (track["id"], started, ms_played, track["artist"], track["title"], track["album"]),
         )
         conn.commit()
         if ctx.scrobbler:
@@ -179,16 +178,27 @@ def log_play(body: PlayLog, ctx: AppContext = Depends(get_ctx)) -> dict:
         return {"id": cursor.lastrowid, "plays": track["plays"] + 1}
 
 
+@router.post("/plays")
+def log_play(body: PlayLog, ctx: AppContext = Depends(get_ctx)) -> dict:
+    """Record a listen from the in-app player."""
+    return record_play(ctx, body.track_id, body.ms_played, body.started_at)
+
+
 class NowPlaying(BaseModel):
     track_id: int
+
+
+def announce_now_playing(ctx: AppContext, track_id: int) -> dict:
+    """Tell ListenBrainz what is playing, if the person turned that on. Never an error: it is only a courtesy."""
+    with ctx.db() as conn:
+        found = tracks_by_ids(conn, [track_id])
+    if not found or not ctx.scrobbler:
+        return {"sent": False}
+    track = found[0]
+    return {"sent": ctx.scrobbler.now_playing({"id": track["id"], "artist": track["artist"], "title": track["title"], "album": track["album"]})}
 
 
 @router.post("/now-playing")
 def now_playing(body: NowPlaying, ctx: AppContext = Depends(get_ctx)) -> dict:
     """Tell ListenBrainz what is playing, if the person turned that on. Never an error: it is only a courtesy."""
-    with ctx.db() as conn:
-        found = tracks_by_ids(conn, [body.track_id])
-    if not found or not ctx.scrobbler:
-        return {"sent": False}
-    track = found[0]
-    return {"sent": ctx.scrobbler.now_playing({"id": track["id"], "artist": track["artist"], "title": track["title"], "album": track["album"]})}
+    return announce_now_playing(ctx, body.track_id)

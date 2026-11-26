@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.12.0)
+## What it does (v0.13.0)
 
 | Area | Features |
 |---|---|
@@ -51,7 +51,7 @@ Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 | **Desktop** | A tray icon by the clock with Play/Pause, Next, Previous and Quit; closing the window keeps the music playing from the tray (or quits: your choice in Settings, Window and tray); the window opens where you left it; **Open with** in Explorer, and files or folders dropped on the window, are added to the library and played |
 | **Updates** | Checks GitHub releases, downloads in the background, installs when you close the app |
 | **Phone and Mac** | The app can be put on a phone's Home Screen or a Mac's Dock and opens like any other app, with no browser around it. On a phone it is laid out for one: a row of tabs (Home, Songs, Albums, Playlists, More), a small player over them that opens the whole player, songs that play when tapped, menus and dialogs that come up from the bottom, and sizes made for a thumb with the notch and the home bar kept clear. On an iPhone the songs play through the plain audio element so that the music carries on with the screen locked, and the lock screen shows the song, its cover and the buttons (volume is the phone's own, and the equalizer, loudness levelling and crossfade are off there). A server that cannot be reached shows a page that says so, with a button to try again. See below |
-| **Server** | Run the same app on a Raspberry Pi or any Linux computer (`mtk serve`) and use it from every device at home, and from outside through a private network such as Tailscale. It answers only to the names you list, one token signs a device in for 90 days, a library folder that is not mounted is never taken for deleted songs, new songs are found by themselves every few hours, and `mtk library reroot` carries a Windows library over with its ratings, plays and playlists. Behind `tailscale serve` it can sign in the Tailscale accounts you list, so that your own devices need no token at all. There are no accounts of its own: whoever is signed in can do everything, so reach it only from your own network or a private one. See below |
+| **Server** | Run the same app on a Raspberry Pi or any Linux computer (`mtk serve`) and use it from every device at home, and from outside through a private network such as Tailscale. It answers only to the names you list, one token signs a device in for 90 days, a library folder that is not mounted is never taken for deleted songs, new songs are found by themselves every few hours, and `mtk library reroot` carries a Windows library over with its ratings, plays and playlists. Behind `tailscale serve` it can sign in the Tailscale accounts you list, so that your own devices need no token at all. It also speaks the Subsonic / OpenSubsonic protocol (`/rest`), so the iPhone and Mac apps made for that protocol can play from it. There are no accounts of its own: whoever is signed in can do everything, so reach it only from your own network or a private one. See below |
 
 ### Library tools (Library tools in the sidebar)
 
@@ -415,9 +415,16 @@ drive attached. The step-by-step guide, the systemd service and an example confi
 - **On a phone or a Mac** the same address is the app: open it in Safari, sign in once, and add it to the Home Screen (iPhone, iPad) or the Dock (Mac, Safari
   in macOS Sonoma or later; Chrome and Edge have *Install*). It then opens from its own icon and stays signed in. A phone needs Tailscale (see the guide),
   and `tailscale serve` for the `https` address a phone asks for. Settings, *Use it on your phone or Mac*, has the address and the steps.
+- **Apps that speak Subsonic** (`/rest`): the iPhone and Mac apps made for the Subsonic / OpenSubsonic protocol (Amperfy, play:Sub, Substreamer, Narjo; Supersonic,
+  Feishin) can use the server as theirs: type its address, any user name, and the token as the password (or the token as an *API key*; a device that Tailscale signs in
+  needs none of it). They browse by artist, album, genre and year, search, stream the original file (with seeking), show covers and lyrics, star, rate and count
+  listens (which reach the history, and ListenBrainz if it is on), keep playlists (smart ones can be listened to and not changed from an app), list the radio
+  stations, and ask for a scan. A native app keeps the music going with the screen locked better than a web page can, and the ones that have CarPlay and downloads
+  for offline listening bring those. What it checks itself against: every answer is held to the schemas the OpenSubsonic project publishes, and a client library of the
+  protocol runs against a real server in the tests; **no app on the list has been tried yet**. See [`packaging/linux/README.md`](packaging/linux/README.md).
 - **Not yet**: roles (everyone who is signed in, with the token or as a listed Tailscale account, can do everything, including moving and deleting files), transcoding for a phone on
-  mobile data, a Mac app that needs no browser, downloads for offline listening, and apps that speak the Subsonic protocol (the iPhone apps that do keep the music
-  going with the screen locked more reliably than a web page can, and have CarPlay). Never forward a port from the internet to it.
+  mobile data (a Subsonic app that asks for a smaller file is sent the original), a Mac app that needs no browser, and, for Subsonic apps, the play queue that follows you
+  from one device to another, bookmarks, podcasts, sharing and the jukebox. Never forward a port from the internet to it.
 
 ## Security model
 
@@ -435,7 +442,9 @@ write only the music and its data folder, and `/healthz` is the only thing that 
 log is off; `mtk dashboard` shows its link only to a terminal), a token that was shown anywhere should be replaced as `packaging/linux/README.md` says, and wrong
 tokens are counted and, after eight in a minute, refused for the rest of it. The token (or a Tailscale account you listed, behind `tailscale serve` on a server
 that listens on its own computer only) is the whole of the protection and there are no roles: keep the app on your own network or a private one, and never
-enable Tailscale Funnel (the server refuses what comes through it).
+enable Tailscale Funnel (the server refuses what comes through it). A Subsonic app sends its password in the address of every request (that is the protocol), so
+`/rest` is for the `https` address of `tailscale serve`, or a network you trust: a wrong password is counted by the same limit as a wrong token (the access log is off, and
+the only thing a failure writes to the log is the name of the call), and a page of another site cannot borrow a Tailscale sign-in for it.
 
 ## Development
 

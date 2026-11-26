@@ -1,0 +1,8 @@
+{
+    "type": "object",
+    "description": "videos. TODO",
+    "externalDocs": {
+        "description": "Videos",
+        "url": "https://opensubsonic.github.io/docs/responses/videos/"
+    }
+}
