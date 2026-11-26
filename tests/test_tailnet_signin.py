@@ -461,7 +461,7 @@ def test_a_real_server_behind_serves_headers_signs_in_the_listed_account_and_ref
     env["PYTHONPATH"] = SRC
     process = subprocess.Popen(
         [sys.executable, "-c", "from musictoolkit.cli import app; app()", "--config", str(config), "serve"],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=tmp_path,
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=tmp_path,
     )
     # What `tailscale serve` passes on for a request from the person's own phone, in its own words (ipn/ipnlocal/serve.go).
     serve = {

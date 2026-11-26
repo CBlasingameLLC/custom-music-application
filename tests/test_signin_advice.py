@@ -55,7 +55,7 @@ def results(tmp_path_factory: pytest.TempPathFactory) -> dict:
     folder = tmp_path_factory.mktemp("signin_advice")
     (folder / "harness.mjs").write_text(HARNESS, encoding="utf-8")
     (folder / "cases.json").write_text(json.dumps(CASES), encoding="utf-8")
-    done = subprocess.run([NODE, str(folder / "harness.mjs"), str(Path(STATIC_DIR) / "js" / "install.js"), str(folder / "cases.json")], capture_output=True, text=True, timeout=60, check=False)
+    done = subprocess.run([NODE, str(folder / "harness.mjs"), str(Path(STATIC_DIR) / "js" / "install.js"), str(folder / "cases.json")], capture_output=True, encoding="utf-8", timeout=60, check=False)  # (utf-8, not the console's: node writes it, and a Windows runner reads cp1252 by default)
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
 
