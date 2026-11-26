@@ -90,6 +90,9 @@ def main() -> None:
         return response.json()
 
     year = datetime.now(timezone.utc).year
+    sub = "v=1.16.1&c=perf&u=perf&f=json"  # (what a Subsonic app asks: /rest, with the version and the name of the app)
+    first_artist = get(f"/rest/getArtists?{sub}")["subsonic-response"]["artists"]["index"][0]["artist"][0]["id"]
+    first_album = get(f"/rest/getArtist?{sub}&id={first_artist}")["subsonic-response"]["artist"]["album"][0]["id"]
     mix_ids = [m["id"] for m in get("/api/mixes?tz=0")["items"]]
     some = [r["id"] for r in client.get("/api/tracks?limit=5&sort=plays&dir=desc").json()["items"]]
     cases = [
@@ -102,6 +105,10 @@ def main() -> None:
         *((f"Mix: {mix}", f"/api/mixes/{mix}?tz=0") for mix in mix_ids),
         *((f"Radio from song {n + 1}", f"/api/radio/track/{track}") for n, track in enumerate(some[:3])),
         ("New releases", "/api/releases"),
+        ("Subsonic: artists", f"/rest/getArtists?{sub}"), ("Subsonic: an artist", f"/rest/getArtist?{sub}&id={first_artist}"), ("Subsonic: an album", f"/rest/getAlbum?{sub}&id={first_album}"),
+        *((f"Subsonic: albums, {kind}", f"/rest/getAlbumList2?{sub}&type={kind}&size=100") for kind in ("alphabeticalByName", "newest", "frequent", "recent", "random", "starred")),
+        ("Subsonic: random songs", f"/rest/getRandomSongs?{sub}&size=100"), ("Subsonic: genres", f"/rest/getGenres?{sub}"), ("Subsonic: starred", f"/rest/getStarred2?{sub}"),
+        ("Subsonic: search", f"/rest/search3?{sub}&query=Artist+0001"), ("Subsonic: search, nothing typed", f"/rest/search3?{sub}&query=&songCount=100&albumCount=100&artistCount=100"),
     ]
     over = 0
     print(f"{'screen':<34}{'first call':>12}{'slowest repeat':>17}")

@@ -171,7 +171,8 @@ def test_a_listen_goes_into_the_history_as_the_whole_song_with_the_names_kept_an
     rest.ok("scrobble", id=song["id"])
     (row,) = history(web, song["id"])
     assert (row["source"], row["raw_artist_name"], row["raw_track_name"], row["raw_album_name"]) == ("future_scrobble", "Aurora Vale", "Polar Night", "Northern Lights")
-    assert row["ms_played"] == length_of(web, song["id"]) and before - 2 <= row["played_at_epoch"] <= time.time()
+    length = length_of(web, song["id"])
+    assert row["ms_played"] == length and before - length / 1000 - 2 <= row["played_at_epoch"] <= time.time()  # (it began as long before now as the song is long)
     assert rest.ok("getSong", id=song["id"])["song"]["playCount"] == 1
 
 
