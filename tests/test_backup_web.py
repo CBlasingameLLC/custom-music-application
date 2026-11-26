@@ -468,14 +468,27 @@ def test_backup_restore_of_a_copy_from_a_newer_app_says_to_update_first_and_ends
     assert "Done." not in result.stdout and counts(installed["db"])["songs"] == 5
 
 
-def test_backup_with_no_command_shows_what_there_is_to_do(installed: dict) -> None:
-    result = run(installed)
-    assert "Usage: mtk backup" in result.output and "Missing command" not in result.output
-    for command in ("now", "list", "check", "restore"):
-        assert f"│ {command} " in result.output
+def flat(text: str) -> str:
+    """Help as it reads: without the codes that colour it (CI makes the terminal colourful), the frame of the tables, or where the lines were broken."""
+    return " ".join(re.sub(r"[│╭╮╰╯─]", " ", re.sub(r"\x1b\[[0-9;]*m", "", text)).split())
 
 
-def test_the_help_of_the_commands_says_what_the_file_is_and_what_yes_does(installed: dict) -> None:
+@pytest.mark.parametrize("environment", [{}, {"FORCE_COLOR": "1"}, {"FORCE_COLOR": "1", "COLUMNS": "200"}, {"NO_COLOR": "1", "COLUMNS": "60"}])
+def test_backup_with_no_command_shows_what_there_is_to_do(installed: dict, environment: dict) -> None:
+    result = CliRunner().invoke(cli_app, ["--config", installed["config"], "backup"], env=environment)
+    text = flat(result.output)
+    assert "Usage: mtk backup [OPTIONS] COMMAND [ARGS]..." in text and "Missing command" not in text
+    assert "now Make a copy of the database now: in the app's backups folder, and in each folder that backup_folders in config.toml names." in text
+    assert "list The copies there are, newest first, in each folder." in text
+    assert "check Whether a copy is sound, and what it holds (songs, plays, playlists, favorites)." in text
+    assert "restore Put a copy back as the database. What the database holds now is kept first, beside the copies (library-before-restore-...)." in text
+
+
+@pytest.mark.parametrize("environment", [{}, {"FORCE_COLOR": "1"}, {"NO_COLOR": "1", "COLUMNS": "60"}])
+def test_the_help_of_the_commands_says_what_the_file_is_and_what_yes_does(installed: dict, environment: dict) -> None:
+    def help_of(command: str) -> str:
+        return flat(CliRunner().invoke(cli_app, ["--config", installed["config"], "backup", command, "--help"], env=environment).output)
+
     for command in ("check", "restore"):
-        assert re.search(r"A copy of the database \[required\]", run(installed, command, "--help").output)
-    assert re.search(r"--yes\s+<bool>\s+Do it: without this it only says what it would do\s+│", run(installed, "restore", "--help").output)
+        assert "file <path> A copy of the database [required]" in help_of(command)
+    assert "--yes <bool> Do it: without this it only says what it would do" in help_of("restore")
