@@ -47,8 +47,8 @@ def test_the_page_is_an_app_a_browser_will_install(browser, live):
     manifest = cdp.send("Page.getAppManifest")
     assert manifest["errors"] == [] and manifest["url"] == live.base + "/static/manifest.webmanifest"
     assert '"display": "standalone"' in manifest["data"]
-    # (the only thing in the way is the test browser's own profile: Chromium does not offer to install from a private window)
-    assert [e["errorId"] for e in cdp.send("Page.getInstallabilityErrors")["installabilityErrors"]] == ["in-incognito"]
+    # (nothing is in the way but, in some builds, the test browser's own profile: Chromium does not offer to install from a private window)
+    assert {e["errorId"] for e in cdp.send("Page.getInstallabilityErrors")["installabilityErrors"]} <= {"in-incognito"}
     assert page.evaluate("document.querySelector('meta[name=theme-color]').content") == "#0d0f14"
     context.close()
     assert not problems, problems
