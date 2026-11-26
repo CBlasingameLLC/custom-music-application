@@ -266,7 +266,7 @@ def test_what_is_starred_is_listed_with_the_time_it_was_given_and_the_albums_tha
     answer = rest.ok("getStarred2")["starred2"]
     assert names(answer["album"]) == ["Northern Lights"] and ISO.match(answer["album"][0]["starred"]) and len(answer["song"]) == 3
     older = rest.ok("getStarred")["starred"]
-    assert older["album"][0]["isDir"] is True and titles(older["album"]) == ["Northern Lights"]
+    assert older["album"][0]["isDir"] is True and titles(older["album"]) == ["Northern Lights"] and ISO.match(older["album"][0]["starred"])
 
 
 def test_the_top_songs_of_an_artist_are_the_ones_listened_to_most(rest: Rest) -> None:

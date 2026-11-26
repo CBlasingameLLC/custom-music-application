@@ -40,7 +40,7 @@ def iso(value: Any) -> str | None:
         if isinstance(value, (int, float)):
             moment = datetime.fromtimestamp(value, timezone.utc)
         else:
-            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            moment = datetime.fromisoformat(str(value))  # (a Z at the end is read as UTC, from Python 3.11)
             if moment.tzinfo is None:
                 moment = moment.replace(tzinfo=timezone.utc)
     except (ValueError, OverflowError, OSError):
@@ -226,7 +226,7 @@ def _sort_key(name: str) -> tuple[str, str]:
     """How the names of artists are put in order: lower case, and without a leading article (The Beatles under B)."""
     lowered = name.strip().lower()
     for article in IGNORED_ARTICLES.lower().split():
-        if lowered.startswith(article + " ") and len(lowered) > len(article) + 1:
+        if lowered.startswith(article + " "):  # (what is left after the article and its space: there is some, as the name was stripped)
             return lowered[len(article) + 1:], lowered
     return lowered, lowered
 
@@ -248,7 +248,7 @@ def indexed(entries: list[dict[str, Any]], member: str = "artist") -> list[dict[
 def album_of(conn: sqlite3.Connection, key: str) -> sqlite3.Row:
     """The aggregate row of one album, or the error that there is none."""
     sel = album_selection(key)
-    found = albums(conn, sel, "aa", 1, 0)
+    found = albums(conn, sel, "aa", MAX_PAGE, 0)  # (one row: the selection is of one album)
     if not found:
         raise not_found("album")
     return found[0]
