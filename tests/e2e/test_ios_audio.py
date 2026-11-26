@@ -220,6 +220,7 @@ def _plain(browser, live, touch_points: int) -> bool:
 
 def test_an_ipad_is_known_by_its_touch_screen_since_its_browser_says_it_is_a_mac(browser, live):
     assert _plain(browser, live, touch_points=5) is True
+    assert _plain(browser, live, touch_points=2) is True  # (Apple's own test is more than one)
     assert _plain(browser, live, touch_points=0) is False  # (a Mac)
     assert _plain(browser, live, touch_points=1) is False  # (one touch point is a laptop's, not a tablet's: Apple's own test is more than one)
 

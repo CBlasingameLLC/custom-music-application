@@ -6,6 +6,7 @@ The browser is Chromium pretending to be an iPhone (its screen, its touch, its n
 
 from __future__ import annotations
 
+import os
 import re
 
 from playwright.sync_api import expect
@@ -86,6 +87,7 @@ def test_a_phone_gets_a_row_of_tabs_and_no_sidebar_and_no_player_bar_until_somet
     assert page.get_by_role("button", name="Back", exact=True).count() == 0  # (the first page has nothing behind it)
     assert page.get_by_role("button", name=re.compile("^Switch to")).count() == 0 and page.get_by_role("button", name="Forward", exact=True).count() == 0  # (the theme is chosen in Settings; a phone has no forward button)
     assert page.get_by_label("Search your library").get_attribute("placeholder") == "Search your library"  # (no keyboard shortcut to hint at)
+    assert page.evaluate("getComputedStyle(document.body).overscrollBehaviorY") == "none"  # (a pull on the page is not a bounce or a reload: it is an app)
     box = tabs.bounding_box()
     assert box["y"] + box["height"] == 844 and box["width"] == 390  # (along the bottom edge, the whole width)
     for item in tabs.locator(".tabbar-item").all():
@@ -274,13 +276,13 @@ def test_the_menu_of_a_row_comes_up_from_the_bottom_and_a_dialog_too(browser, li
     next(pages, None)
 
 
-def test_a_toast_is_as_wide_as_the_phone_and_clear_of_the_player(browser, live):
+def test_a_toast_is_as_wide_as_the_phone_even_when_it_says_little_and_is_clear_of_the_player(browser, live):
     pages, page = open_phone(browser, live)
     add_library(page, live)
     go(page, "/songs")
     page.locator(".trow:not(.skeleton)").first.tap()
     wait_until(page, f"{PLAYER}.then((m) => m.player.get().playing)")
-    page.evaluate("import('/static/js/state.js').then((m) => m.toast('This is said in passing, and is long enough to need more than one line on a phone.', 'info', 0))")
+    page.evaluate("import('/static/js/state.js').then((m) => m.toast('Saved', 'info', 0))")
     toast = page.locator(".toast")
     expect(toast).to_be_visible()
     box, mini = toast.bounding_box(), page.locator(".miniplayer").bounding_box()
@@ -298,6 +300,40 @@ def test_a_phone_on_its_side_still_gets_the_phone_layout_and_a_computer_does_not
     assert page.evaluate("document.documentElement.dataset.layout") == "phone"
     assert page.locator(".tabbar").count() == 1 and page.locator(".sidebar").count() == 0
     next(pages, None)
+
+
+def test_the_layout_follows_the_size_of_the_window(browser, live):
+    """A window dragged wider, a tablet turned: the sidebar and the player bar come back, and go again when it is narrow."""
+    pages, page = open_phone(browser, live)
+    assert page.locator(".tabbar").count() == 1 and page.locator(".sidebar").count() == 0
+    page.set_viewport_size({"width": 1360, "height": 860})
+    page.wait_for_selector(".sidebar")
+    assert page.locator(".tabbar").count() == 0 and page.evaluate("document.documentElement.dataset.layout") == "desktop"
+    assert page.locator(".playerbar").count() == 1
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.wait_for_selector(".tabbar")
+    assert page.locator(".sidebar").count() == 0 and page.evaluate("document.documentElement.dataset.layout") == "phone"
+    next(pages, None)
+
+
+def test_where_a_finger_and_a_pointer_that_hovers_are_both_there_a_click_selects_and_does_not_play(browser, live):
+    """A tablet with a trackpad: its pointer is coarse but it can hover, so it is not a screen where a tap is all there is. (Blink's own
+    settings say what the pointer is; Playwright has no switch for it.)"""
+    flags = "--blink-settings=primaryPointerType=2,availablePointerTypes=2,primaryHoverType=2,availableHoverTypes=2"
+    both = browser.browser_type.launch(executable_path=os.environ.get("MTK_CHROMIUM") or None, args=[flags, "--autoplay-policy=no-user-gesture-required"])
+    try:
+        pages = signed_in_page(both, live)
+        page = next(pages)
+        assert page.evaluate("[matchMedia('(pointer: coarse)').matches, matchMedia('(hover: hover)').matches, matchMedia('(hover: none)').matches]") == [True, True, False]
+        add_library(page, live)
+        go(page, "/songs")
+        page.locator(".trow:not(.skeleton) .t1").first.click()  # (the title: the middle of the row is a link to the album)
+        page.wait_for_timeout(400)
+        assert page.locator(".trow.selected").count() == 1  # (selected, as on a computer)
+        assert page.evaluate(f"{PLAYER}.then((m) => m.player.get().playing)") is False
+        next(pages, None)
+    finally:
+        both.close()
 
 
 def test_a_tablet_gets_the_layout_of_a_computer_with_what_a_pointer_would_show_always_shown(browser, live):

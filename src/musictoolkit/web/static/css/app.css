@@ -1252,7 +1252,7 @@ body.dropping::after {
 }
 
 /* what is said in passing: across the width, over the small player */
-[data-layout="phone"] .toasts { left: 12px; right: 12px; transform: none; }
+[data-layout="phone"] .toasts { left: 12px; right: 12px; transform: none; align-items: stretch; }
 [data-layout="phone"] .toasts > div { align-items: stretch; }
 [data-layout="phone"] .toast { max-width: none; }
 
