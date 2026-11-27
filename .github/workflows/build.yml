@@ -77,6 +77,9 @@ jobs:
       - name: Install Chromium and WebKit
         run: python -m playwright install --with-deps chromium webkit
 
+      - name: Install ffmpeg (the browser tests of a song converted on the way play the real one)
+        run: sudo apt-get install -y ffmpeg
+
       - name: Run browser tests
         env:
           MTK_REQUIRE_WEBKIT: '1'
@@ -100,6 +103,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+
+      - name: Install ffmpeg (it converts songs to a lower bitrate for a phone on mobile data, and the tests of that run the real one)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"

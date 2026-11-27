@@ -23,10 +23,22 @@ NO_LANGUAGE = "xxx"  # (what OpenSubsonic says a lyric of unknown language is wr
 # ------------------------------------------------------------------------------------------------------------------------------- the file
 
 
-@endpoint("stream", "download")
+@endpoint("stream")
 def stream(call: Call) -> Response:
-    """The file as it is: nothing is converted, so `format`, `maxBitRate` and `timeOffset` are not used. The client seeks with a Range request, which is answered."""
-    return playback.stream(ids.to_song(call.params.require("id")), call.ctx)
+    """The file, or, when the client asked for less than it is (`maxBitRate`, or `format=mp3` for a file of another format) and ffmpeg is there, the song converted
+    to MP3 (see streaming.py). `format=raw` is the file. `timeOffset` starts a converted song from a time; a file as it is is sought with a Range request, which is
+    answered. `estimateContentLength` gives a converted song the length its bitrate and its seconds make."""
+    params = call.params
+    return playback.send(
+        call.ctx, call.request, ids.to_song(params.require("id")), max_kbps=params.integer("maxBitRate", 0, low=0) or 0, format=params.get("format"),
+        offset=params.number("timeOffset"), estimate=params.boolean("estimateContentLength"),
+    )
+
+
+@endpoint("download")
+def download(call: Call) -> Response:
+    """The file as it is, whatever it is: nothing is converted."""
+    return playback.original(call.ctx, ids.to_song(call.params.require("id")))
 
 
 # ------------------------------------------------------------------------------------------------------------------------------ the cover

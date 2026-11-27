@@ -34,3 +34,7 @@ login_days = 90                     # how long a device that opened the sign-in 
 # The Tailscale accounts that are signed in without the token, behind `tailscale serve` (see "Sign in with Tailscale" in packaging/linux/README.md).
 # Each one can do everything, like the token. Needs host = "127.0.0.1". The sign-in page shows the line to add for the account it sees.
 tailscale_logins = []               # for example ["you@example.com"]
+# Songs at a lower bitrate for a phone on mobile data: converted to MP3 by ffmpeg (sudo apt install ffmpeg) when a device asks for less than the file is.
+ffmpeg = ""                         # the path of ffmpeg, or "" to find it on the path
+transcode_cache_mb = 2048           # how much room the converted songs may take, in megabytes
+transcode_jobs = 2                  # how many songs are converted at once

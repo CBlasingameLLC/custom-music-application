@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import quote
 
-from musictoolkit import backup
+from musictoolkit import backup, transcode
 from musictoolkit.web.hosts import clean_names
 from musictoolkit.web.tailnet import clean_logins
 
@@ -52,6 +52,14 @@ def backup_settings(database: object) -> backup.Settings:
     try:
         return backup.settings_of(database)
     except backup.BackupError as error:
+        raise ServeError(str(error)) from None
+
+
+def transcode_settings(server: object) -> transcode.Settings:
+    """The settings for converting songs to a lower bitrate, checked: a wrong one is said, and the server does not start with it."""
+    try:
+        return transcode.settings_of(server)
+    except transcode.TranscodeError as error:
         raise ServeError(str(error)) from None
 
 

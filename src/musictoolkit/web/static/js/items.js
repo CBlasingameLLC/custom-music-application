@@ -16,13 +16,25 @@ export const sameItem = (a, b) => Boolean(a) && Boolean(b) && itemKey(a) === ite
  * `join` numbers the times a live stream is joined: the browser would answer a second load of the same address with what it already
  * holds of the first (a station that hung up would be "rejoined" by playing its old sound again), so each join asks for an address of its own.
  */
-export function streamUrl(item, join = 0) {
+export function streamUrl(item, join = 0, kbps = 0) {
   switch (kindOf(item)) {
     case 'station': return `/api/radio/stations/${item.id}/stream?join=${join}`;
     case 'episode': return `/api/podcasts/episodes/${item.id}/stream`;
-    default: return `/api/tracks/${item.id}/stream`;
+    default: return kbps > 0 ? `/api/tracks/${item.id}/stream?kbps=${kbps}` : `/api/tracks/${item.id}/stream`;
   }
 }
+
+/** What a device may ask the server to stream a song at, in kilobits a second (0: the file as it is). A song bigger than that is converted to MP3 by the server. */
+export const STREAM_QUALITIES = [
+  { kbps: 0, label: 'Original (as stored)' },
+  { kbps: 320, label: '320 kbps' },
+  { kbps: 192, label: '192 kbps' },
+  { kbps: 128, label: '128 kbps' },
+  { kbps: 96, label: '96 kbps' },
+  { kbps: 64, label: '64 kbps' },
+  { kbps: 32, label: '32 kbps (smallest)' },
+];
+export const streamQuality = (kbps) => (STREAM_QUALITIES.some((q) => q.kbps === kbps) ? kbps : 0);
 
 /** The address of an item's picture (null when it has none). `size` only matters for songs: the others come in one size. */
 export function artSrc(item, size = 512) {

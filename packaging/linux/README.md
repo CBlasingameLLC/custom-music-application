@@ -24,7 +24,7 @@ you listed (see *Sign in with Tailscale*).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.14.1 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.15.0 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -64,6 +64,7 @@ allowed_hosts = ["musicpi.local"]
   (this is what stops a web page on another site from using the app through your browser).
 - `rescan_hours`: look for new songs by itself this often (0: only when the server starts, and when you press Refresh).
 - `login_days`: how long a device that opened the sign-in link stays signed in (90).
+- `ffmpeg`, `transcode_cache_mb`, `transcode_jobs`: songs at a lower bitrate for a phone on mobile data (see *Songs at a lower bitrate*).
 - `tailscale_logins`: the Tailscale accounts that are signed in without the token (see *Sign in with Tailscale*). Empty: only the token signs a device in. It needs
   `host = "127.0.0.1"`, and the server refuses to start with it on any other address.
 
@@ -161,7 +162,7 @@ not there (the drive is not mounted) is skipped, said in the journal, and given 
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.14.1` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.15.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -246,7 +247,8 @@ What an iPhone does and does not do:
   next song is loaded when a song ends, so there is a short gap (a fraction of a second on a good connection).
 - What cannot be promised from here: how long iOS lets a Home Screen app keep running with the screen locked. If the music stops between two songs after the phone has
   been locked for a long time, that is iOS stopping the page, and an iPhone app that speaks the Subsonic protocol (next section) is the way to be sure.
-- The phone is away from the server, so everything is streamed: on mobile data a song is its whole file (transcoding to a smaller one is planned).
+- The phone is away from the server, so everything is streamed: on mobile data a song is its whole file unless you choose a lower quality (Settings, *Streaming quality*, and
+  *Songs at a lower bitrate* below).
 
 **Mac.** Safari (macOS Sonoma or later): *File, Add to Dock*. Chrome and Edge: the menu, then *Install*. It opens in a window of its own and answers the media keys.
 A Dock app is a browser of its own: Safari copies the site's cookies (not its storage) into it when it is added, and from then on the two are separate. If it asks for the token
@@ -278,11 +280,55 @@ and seeking inside it); show covers (in the size it asks for) and lyrics (from t
 rate songs (a star is a favorite, in the web page as well); count a listen (it goes into the history, and to ListenBrainz if that is on, once even if the app sends it twice with the same time on it);
 make, change and delete playlists (a smart playlist can be played, and not changed from an app); list the radio stations kept in the app; and ask for a scan.
 
-What an app cannot: ask for a smaller file (`maxBitRate` and `format` are ignored, so on mobile data a song is the whole file); keep a play queue that follows you from one device to
+What an app can ask for beyond that: a smaller file (its streaming-quality setting is sent as `maxBitRate`; see *Songs at a lower bitrate*).
+
+What an app cannot: keep a play queue that follows you from one device to
 another, bookmarks, podcasts, sharing; rate an album (a rating belongs to a song); read an artist's biography (there is none). A Subsonic player that is a web page of another site cannot use the server
 (it answers no other site: that is what keeps a page you visit from using your library).
 
 The ids an app shows are the server's own and mean nothing outside it.
+
+## Songs at a lower bitrate (a phone on mobile data)
+
+A FLAC is about 900 kbps, which is 400 MB an hour on mobile data. The server can send a song at a lower bitrate: it converts the file with **ffmpeg**, to MP3 (every player
+there is plays MP3, an iPhone included).
+
+```bash
+sudo apt install ffmpeg                  # nothing is converted without it, and nothing breaks: the song is sent as it is stored
+sudo systemctl restart musictoolkit      # (it looks for ffmpeg once, when it is first asked)
+```
+
+Settings (on the phone, *Streaming quality*) says whether the server found ffmpeg, and with what.
+
+- **Where to choose.** In the web app: Settings, *Streaming quality*, on that device (kept by the device; it applies from the next song). In a Subsonic app: its setting for the
+  streaming quality or bitrate (often one for Wi-Fi and one for mobile data), which it sends as `maxBitRate`; some also send `format=mp3`. Choose the highest you will not notice,
+  128 or 160 kbps, or 64 on a slow connection.
+- **What is converted.** A song is converted when it is more than 10% above what was asked for (a 128 kbps MP3 asked for at 128 is sent as it is), to the highest of 32, 48, 64,
+  96, 128, 160, 192, 256 and 320 kbps that is not above the number asked for. It is MP3 at a constant bitrate, 44.1 kHz stereo, with no tags and no picture (the app has the
+  tags). `format=raw`, `download` and a quality of "original" are always the file.
+- **How long it takes.** ffmpeg is several times quicker than the song plays, so the first bytes go out at once and a song starts without waiting. The converted song is kept
+  (`/var/lib/musictoolkit/cache/transcode`), and the next time, at that quality, it is a plain file. Safari asks for a part of the song before it plays anything and wants its length in the
+  answer: for a song that is not kept yet the server holds that question until the song is whole (a few seconds), then answers it. On the PC this was built on, a
+  four-minute FLAC is made in 3.9 seconds (the first bytes after a tenth of a second), 62 times quicker than it plays; a Raspberry Pi 5 is slower, and what it does there has
+  not been measured.
+- **What it costs.** At most `transcode_jobs` songs (2) are converted at once, at a low priority, and the cache is kept to `transcode_cache_mb` megabytes (2048) by taking away the
+  songs that were played longest ago. A song is kept in memory while it is made (a song of an hour at 320 kbps is 144 MB).
+- **When it cannot.** No ffmpeg, an ffmpeg without MP3, every place taken for more than five seconds, a file ffmpeg cannot read: the song is sent as it is stored, and the
+  journal says `Song N is sent as it is`. A song that failed is not tried again for ten minutes, so a listener who was cut off in the middle of one and asks again is sent the file.
+
+```toml
+[server]
+ffmpeg = ""                # the path of ffmpeg, or "" to find it
+transcode_cache_mb = 2048  # how much room the converted songs may take
+transcode_jobs = 2         # how many songs are converted at once (a Pi 5 has four cores)
+```
+
+To see it work from the Pi itself (the token is in `server.token`; the number is a song's number in the library):
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download} bytes\n' -H "x-mtk-token: $(sudo cat /var/lib/musictoolkit/server.token)" 'http://127.0.0.1:4533/api/tracks/1/stream?kbps=64'
+ls -lh /var/lib/musictoolkit/cache/transcode
+```
 
 ## Move the library over from the Windows PC
 
@@ -326,6 +372,9 @@ The ids an app shows are the server's own and mean nothing outside it.
 | A song with a **No audio** mark | The file is only tags (an MP3 with no audio frames, or an empty file): nothing to play. It is left out of queues, mixes and what is copied to a device. Filter on "Has tags but no audio" to list them; the scan counts them apart from errors |
 | `Could not read the audio in ...` in the log | The file has more than tags but its audio could not be read (damage). One line, no traceback; the song stays in the library |
 | `Cannot start the server: it would listen on 0.0.0.0 ... allowed_hosts is empty` | Listening beyond this computer needs the names; see Configure |
+| Settings says *This server cannot convert songs* | No ffmpeg (`sudo apt install ffmpeg`, then restart the service), or an ffmpeg without the MP3 encoder (`ffmpeg -encoders \| grep mp3lame` finds nothing: install the one of the system, not a static build without it), or `ffmpeg` in `config.toml` names a file that is not there. Songs are sent as they are stored meanwhile |
+| A quality is chosen and the songs are still big | The song is within 10% of it already, or the phone is Wi-Fi at "original", or Settings says the server cannot convert. `journalctl -u musictoolkit \| grep "sent as it is"` says why a song was not converted |
+| A song at a low quality takes several seconds to start | The first time: it is being made (Safari waits for the whole song; other browsers and apps start at once). The second time it is a file. A Pi that is busy with a scan is slower: `transcode_jobs = 1` |
 | `/healthz` says `degraded`; "The library's drive is not available right now" | The music drive is not mounted. Songs are not forgotten: they play again when it is back |
 | A scan reports `1 folder(s) not found` | The same thing; the scan skips a folder that is not there or is empty while the library has songs in it |
 | `/healthz` says `"backups":"overdue"` and `degraded` | A folder has had no new copy of the database for three times `backup_hours`. `journalctl -u musictoolkit \| grep "Copy of the database"` says why for each folder, and Settings, *Data*, marks it. `the folder is not there (is the drive connected?)`: the drive is not mounted, or the name in `backup_folders` is wrong, or the folder was never made (see *Back up the database*). `Permission denied`: `mtk` cannot write there (group `music`, mode `2775`). `No space left on device`: the disk is full |

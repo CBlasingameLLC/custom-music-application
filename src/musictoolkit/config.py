@@ -105,6 +105,10 @@ class ServerConfig:
     rescan_hours: int = 0  # look for new songs by itself every this many hours (0: only at the start, and when asked)
     login_days: int = 90  # how long a device that opened the link with the token stays signed in
     tailscale_logins: list[str] = field(default_factory=list)  # Tailscale accounts signed in without the token (needs `tailscale serve`, and host = "127.0.0.1")
+    # Songs at a lower bitrate for a phone on mobile data (see transcode.py): they are converted by ffmpeg, which has to be installed (sudo apt install ffmpeg).
+    ffmpeg: str = ""  # the path of ffmpeg (empty: the one on the path)
+    transcode_cache_mb: int = 2048  # how much room the converted songs may take, in megabytes
+    transcode_jobs: int = 2  # how many songs are converted at once
 
 
 @dataclass

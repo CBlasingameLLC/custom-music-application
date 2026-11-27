@@ -43,7 +43,7 @@ from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
-from musictoolkit import __version__
+from musictoolkit import __version__, transcode
 from musictoolkit.config import Config
 from musictoolkit.convert import store as convert_store
 from musictoolkit.db.connection import connect
@@ -123,6 +123,17 @@ class _Static(StaticFiles):
         return response
 
 
+def _transcoder(ctx: AppContext) -> transcode.Transcoder:
+    """The maker of songs at a lower bitrate, as `[server]` says. The server does not start with a wrong setting; the desktop app, which has no use for them, says
+    so in the log and uses the usual ones."""
+    try:
+        settings = transcode.settings_of(ctx.config.server)
+    except transcode.TranscodeError as error:
+        logger.warning("%s The usual settings are used.", error)
+        settings = transcode.Settings()
+    return transcode.Transcoder(settings.ffmpeg, ctx.data_dir / "cache" / "transcode", settings.cache_mb, settings.jobs)
+
+
 def create_app(
     *,
     db_path: Path,
@@ -159,6 +170,7 @@ def create_app(
     ctx.podcasts = PodcastSchedule(ctx)
     ctx.rescan = RescanSchedule(ctx, rescan_hours)
     ctx.backups = BackupSchedule(ctx)
+    ctx.transcoder = _transcoder(ctx)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -170,8 +182,13 @@ def create_app(
         ctx.rescan.start()
         ctx.backups.start()
         try:
+            ctx.transcoder.prune()  # (half-made songs that a crash left, and a cache that is over its size)
+        except OSError as error:
+            logger.warning("Clearing the cache of converted songs failed: %s", error)
+        try:
             yield
         finally:
+            ctx.transcoder.close()
             ctx.backups.stop()
             ctx.rescan.stop()
             ctx.podcasts.stop()

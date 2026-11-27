@@ -1,12 +1,14 @@
 """The app in Safari's own engine (Playwright's WebKit build), as on an iPhone. Chromium stands in for Safari everywhere else in these tests; this
 is the one place that asks the engine itself: that the app starts and every screen fits, that signing in works, that the worker installs and says
 when the server cannot be reached, that a device whose cookie went is signed in again by the key the app kept, that a link from another site opens the app signed in,
-and, because the protection of a Tailscale sign-in rests on it, that Safari says where each request came from.
+that a song converted on the way is answered to the questions Safari asks first (the first bytes, a seek, the whole), and, because the protection of a Tailscale
+sign-in rests on it, that Safari says where each request came from.
 
 It skips where WebKit is not installed (`playwright install webkit`, and on Linux `playwright install-deps webkit`), unless MTK_REQUIRE_WEBKIT is set."""
 
 from __future__ import annotations
 
+import base64
 import time
 from pathlib import Path
 
@@ -206,5 +208,73 @@ def test_the_worker_in_safaris_engine_has_the_browser_make_the_pages_request_whe
     page.reload()
     page.wait_for_selector(".tabbar")
     assert [(m, s, preload, cookie) for m, s, preload, _, cookie in kept.pages] == [("GET", 200, "true" if can else "", True)], (can, kept.pages)
+    context.close()
+    assert not problems, problems
+
+
+PROBE = """async ({ id, range }) => {
+  const r = await fetch(`/api/tracks/${id}/stream?kbps=32`, { headers: range ? { Range: range } : {} });
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  const h = (name) => r.headers.get(name);
+  return { status: r.status, type: h('content-type'), range: h('content-range'), ranges: h('accept-ranges'), length: h('content-length'), body: btoa(text) };
+}"""
+
+
+def _asked(page, track: int, range: str | None = None) -> dict:
+    """What the page was told when it asked for a song at 32 kbps (`range`: the part it asked for), with the bytes it was given."""
+    got = page.evaluate(PROBE, {"id": track, "range": range})
+    got["body"] = base64.b64decode(got["body"])
+    return got
+
+
+def _made(cache: Path, before: set[Path]) -> Path:
+    """The file the server kept of the song asked for last (it is kept a moment after the song is whole)."""
+    for _ in range(100):
+        new = set(cache.glob("*-32.mp3")) - before
+        if new:
+            [made] = new
+            return made
+        time.sleep(0.1)
+    raise AssertionError(f"no song was kept in {cache}: {sorted(cache.glob('*'))}")
+
+
+def test_safaris_engine_is_answered_with_the_real_length_when_it_asks_for_the_first_bytes_of_a_song_that_is_converted_on_the_way(webkit, live, iphone):
+    """Safari asks for the first byte or two of a song before it plays anything, and wants the whole length in the answer. A song that is converted on the way
+    is not made yet when it asks, so the server holds that question until the song is whole and answers it from the kept file with its real length; a seek
+    is a part of the kept file; a player that asks for the whole song at once is handed it as it is made. Those questions are asked with fetch(), which goes
+    through the engine's own network stack, and judged by what the page was told. Playing is not asked of the engine: Playwright's WebKit on Linux cannot
+    load any audio (a page with nothing but an audio element of a `data:` address crashes it), so that a converted song plays is the Chromium test's."""
+    from musictoolkit.transcode import Transcoder
+
+    if not Transcoder().available():
+        pytest.skip("no ffmpeg with an MP3 encoder (sudo apt install ffmpeg)")
+    context, page, problems = _device(webkit, iphone)
+    page.goto(live.url)
+    page.wait_for_selector(".tabbar")
+    add_library(page, live)
+    first, second = (item["id"] for item in api(page, "/tracks?limit=5&sort=title")["items"][:2])
+    cache = live.ctx.data_dir / "cache" / "transcode"
+    assert not cache.exists() or not list(cache.glob("*-32.mp3"))  # (nothing is made yet when the first question comes)
+
+    probe = _asked(page, first, "bytes=0-1")
+    made = _made(cache, set())
+    kept, size = made.read_bytes(), made.stat().st_size
+    assert size > 10_000 and kept[:3] != b"ID3"
+    assert (probe["status"], probe["type"], probe["ranges"], probe["length"]) == (206, "audio/mpeg", "bytes", "2"), probe
+    assert probe["range"] == f"bytes 0-1/{size}" and probe["body"] == kept[:2], (probe, size)
+
+    seek = _asked(page, first, "bytes=10000-10099")
+    assert (seek["status"], seek["range"], seek["length"]) == (206, f"bytes 10000-10099/{size}", "100"), seek
+    assert seek["body"] == kept[10000:10100]
+
+    whole = _asked(page, first)
+    assert (whole["status"], whole["type"], whole["ranges"], whole["length"], whole["range"]) == (200, "audio/mpeg", "bytes", str(size), None), whole
+    assert whole["body"] == kept
+
+    live_answer = _asked(page, second)  # (a player that asks for the whole song at once: no length is known yet, and none is promised)
+    assert (live_answer["status"], live_answer["type"], live_answer["ranges"], live_answer["length"], live_answer["range"]) == (200, "audio/mpeg", "none", None, None), live_answer
+    assert live_answer["body"] == _made(cache, {made}).read_bytes()
     context.close()
     assert not problems, problems

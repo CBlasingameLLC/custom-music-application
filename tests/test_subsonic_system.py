@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import pytest
 
 from musictoolkit import __version__
 from musictoolkit.ingest import scanner
+from musictoolkit.transcode import Transcoder
 from musictoolkit.web.subsonic.dispatch import PUBLIC, REGISTRY
 from tests.conftest import make_track
 from tests.subsonic_support import Rest, album_named, scanned_web, songs_of
@@ -48,9 +50,17 @@ def test_the_license_is_valid_because_some_clients_will_not_go_on_without_one(re
     assert rest.ok("getLicense")["license"] == {"valid": True, "email": "", "licenseExpires": "2099-12-31T23:59:59.000Z"}
 
 
-def test_the_extensions_are_the_ones_that_are_there_to_use_each_in_its_first_version(rest: Rest) -> None:
-    listed = rest.ok("getOpenSubsonicExtensions")["openSubsonicExtensions"]
+def test_the_extensions_are_the_ones_that_are_there_to_use_each_in_its_first_version(web: SimpleNamespace, tmp_path: Path) -> None:
+    web.ctx.transcoder = Transcoder(ffmpeg=str(tmp_path / "no-ffmpeg"))  # (nothing to convert with: whatever this computer has)
+    listed = Rest(web.client).ok("getOpenSubsonicExtensions")["openSubsonicExtensions"]
     assert {item["name"] for item in listed} == {"apiKeyAuthentication", "formPost", "songLyrics"} and all(item["versions"] == [1] for item in listed)
+
+
+def test_a_server_that_can_convert_songs_says_that_a_time_offset_starts_a_converted_song(web: SimpleNamespace) -> None:
+    web.ctx.transcoder = Transcoder(command=[sys.executable, str(Path(__file__).with_name("fake_ffmpeg.py"))])
+    listed = Rest(web.client).ok("getOpenSubsonicExtensions")["openSubsonicExtensions"]
+    assert {item["name"] for item in listed} == {"apiKeyAuthentication", "formPost", "songLyrics", "transcodeOffset"} and all(item["versions"] == [1] for item in listed)
+    web.ctx.transcoder.close()
 
 
 def test_an_api_key_says_whose_it_is(web: SimpleNamespace) -> None:

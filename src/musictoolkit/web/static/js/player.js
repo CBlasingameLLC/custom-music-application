@@ -15,6 +15,7 @@
 // podcast episode (`kind: 'episode'`: it resumes where listening stopped, and where it has got to is sent to the app as it plays).
 // See items.js. Only songs are joined to each other ahead of time and counted in the listening history.
 import { api, createStore, IOS } from './lib.js';
+import { ui } from './state.js';
 import { SPEEDS, describe, isEpisode, isStation, isTrack, itemKey, kindOf, sameItem, streamUrl, artSrc } from './items.js';
 import { GAPLESS_BLEND, MAX_CROSSFADE, blendSeconds, equalPowerCurves, itemAt, planNext, shuffledOrder } from './transitions.js';
 
@@ -213,7 +214,7 @@ function loadInto(deck, item) {
   deck.gain = null;
   deck.gainFor = null;
   deck.failed = false;
-  deck.el.src = streamUrl(item, ++joins);
+  deck.el.src = streamUrl(item, ++joins, ui.get().streamKbps);
   if (isEpisode(item) && item.position > RESUME_AFTER) {
     const at = item.position - REWIND;
     deck.el.addEventListener('loadedmetadata', () => { if (sameItem(deck.track, item)) deck.el.currentTime = at; }, { once: true });
@@ -299,7 +300,7 @@ export async function restoreQueue() {
     const deck = active;
     deck.track = track;
     deck.gainFor = null;
-    deck.el.src = streamUrl(track);
+    deck.el.src = streamUrl(track, 0, ui.get().streamKbps);
     const resumeAt = saved.position || 0;
     deck.el.addEventListener('loadedmetadata', () => { if (deck.track === track) deck.el.currentTime = resumeAt; }, { once: true });
     player.set({ position: resumeAt, duration: track.duration || 0 });
