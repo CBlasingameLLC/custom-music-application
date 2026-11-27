@@ -1,7 +1,12 @@
 """Signing in from a browser: the page that asks for the token, and the small limit on wrong ones.
 
 A device that has the sign-in link (`mtk token --url ...`) is signed in by opening it. A device that has only the address, or
-whose cookie ended, gets this page instead and pastes the token. Either way what it gets back is the same cookie.
+whose cookie ended, gets this page instead and pastes the token. Either way what it gets back is the same cookie. (A device whose browser lost
+the cookie but kept the key that the app saved is signed in by the page's script before anyone is asked: see remember.py.)
+
+The page also says, in a fold-out, what the request for it carried (a cookie or not, and where the browser says the request came from), so that
+"it asked again" is something a person can read the reason of. Nothing of a request is copied into the page but a few words that a browser
+writes in its own headers.
 """
 
 from __future__ import annotations
@@ -9,10 +14,12 @@ from __future__ import annotations
 import hmac
 import json
 import math
+import re
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from html import escape
 
 
@@ -69,6 +76,7 @@ input, button {{ font: inherit; padding: .6rem .75rem; }}
 .problem {{ color: #b3261e; font-weight: 600; }}
 .note {{ opacity: .75; font-size: .9rem; }}
 pre {{ overflow-x: auto; padding: .5rem .75rem; border: 1px solid; border-radius: .4rem; user-select: all; -webkit-user-select: all; }}
+details.note summary {{ cursor: pointer; }}
 </style></head>
 <body>
 <h1>Music Toolkit</h1>
@@ -79,10 +87,79 @@ pre {{ overflow-x: auto; padding: .5rem .75rem; border: 1px solid; border-radius
 <input id="token" name="token" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" required autofocus>
 <button type="submit">Sign in</button>
 </form>
+{restore}
 {tailnet}
 <p class="note">{where}</p>
+{why}
 </body></html>
 """
+
+
+_WORD = re.compile(r"[a-z]{1,12}(-[a-z]{1,12})?")
+
+
+def _word(value: str | None) -> str:
+    """What a browser wrote in one of its `Sec-Fetch-*` headers, as a word the page and the log may repeat: those headers hold a few lower-case words, and
+    anything else (not from a browser) is "other". "" when the header was not there."""
+    value = (value or "").strip().lower()
+    return value if _WORD.fullmatch(value) else ("other" if value else "")
+
+
+@dataclass(frozen=True)
+class Arrival:
+    """How a request for the page that asks for the token came, as far as it tells why this device is asked: whether a sign-in cookie came with it ("none", or
+    "refused": one came and the server does not take it), and what the browser said about where the request came from and what it is for."""
+
+    cookie: str
+    site: str
+    mode: str
+    dest: str
+    preload: bool  # (the worker asked the browser to start the page's request early, and this is that request)
+
+    def line(self) -> str:
+        """The facts on one line, for a log and for a report: `cookie=none site=none mode=navigate dest=document preload=yes`."""
+        unsaid = "unsaid"
+        return f"cookie={self.cookie} site={self.site or unsaid} mode={self.mode or unsaid} dest={self.dest or unsaid} preload={'yes' if self.preload else 'no'}"
+
+
+def arrival(headers: Mapping[str, str], cookie: str | None) -> Arrival:
+    """What the request with these (lower-case) `headers` carried; `cookie` is the sign-in cookie it had, if any."""
+    return Arrival(
+        cookie="refused" if cookie else "none",
+        site=_word(headers.get("sec-fetch-site")),
+        mode=_word(headers.get("sec-fetch-mode")),
+        dest=_word(headers.get("sec-fetch-dest")),
+        preload="service-worker-navigation-preload" in headers,
+    )
+
+
+HOW = {
+    "none": "The page was opened by hand: typed, from a bookmark, or from the app's icon.",
+    "same-origin": "The page was opened from a page of this app (a reload, or a link inside it).",
+    "same-site": "The page was opened from another page of the same site.",
+    "cross-site": "The page was opened from a page of another site.",
+    "": "The browser did not say how the page was opened.",
+    "other": "The browser said something unusual about how the page was opened.",
+}
+
+
+def why_note(arrived: Arrival) -> str:
+    """The fold-out that says why the page asks: the cookie, and how the page was opened."""
+    if arrived.cookie == "refused":
+        cookie = "A sign-in cookie came with this request, but the server does not take it: the token was changed after this device signed in, or the cookie is from another server."
+    else:
+        cookie = "No sign-in cookie came with this request. This browser has none for this address (it never signed in here, or its data for this site was cleared), or it did not send the one it has."
+    return (
+        '<details class="note"><summary>Why does it ask for the token?</summary>'
+        f"<p>{escape(cookie)}</p><p>{escape(HOW.get(arrived.site, HOW['other']))}</p>"
+        f"<p>For a report: <code>{escape(arrived.line())}</code></p></details>"
+    )
+
+
+RESTORE = (
+    '<p class="note" id="restore-note" role="status" hidden></p>'
+    '<script src="/static/js/restore.js" defer></script>'
+)
 
 
 def tailnet_note(login: str | None, *, on: bool, allowed: bool) -> str:
@@ -109,12 +186,18 @@ def tailnet_note(login: str | None, *, on: bool, allowed: bool) -> str:
     )
 
 
-def sign_in_page(*, problem: str = "", login_days: int = 0, tailscale_login: str | None = None, tailscale_on: bool = False, tailscale_allowed: bool = False) -> str:
+def sign_in_page(
+    *, problem: str = "", login_days: int = 0, tailscale_login: str | None = None, tailscale_on: bool = False, tailscale_allowed: bool = False,
+    arrived: Arrival | None = None,
+) -> str:
     """The page with the box for the token. `problem` says what went wrong with the last try (nothing on the first visit). The `tailscale_`
-    arguments say what Tailscale told the server about the device (see `tailnet_note`)."""
-    stays = f" The device then stays signed in for {login_days} days." if login_days > 0 else ""
+    arguments say what Tailscale told the server about the device (see `tailnet_note`). `arrived`, for the first visit, is what the request carried (it is
+    explained in a fold-out). Where devices are kept signed in (`login_days`), the page's script tries the key that the app saved before anyone has to type."""
+    stays = f" The device then stays signed in for {login_days} day{'s' if login_days != 1 else ''}." if login_days > 0 else ""
     return PAGE.format(
         problem=f'<p class="problem" role="alert">{escape(problem)}</p>' if problem else "",
+        restore=RESTORE if login_days > 0 else "",
         tailnet=tailnet_note(tailscale_login, on=tailscale_on, allowed=tailscale_allowed),
         where="On the computer that runs the server, <code>mtk token</code> shows the token." + stays,
+        why=why_note(arrived) if arrived is not None and not problem else "",
     )

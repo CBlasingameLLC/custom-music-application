@@ -251,7 +251,7 @@ def test_a_name_that_is_not_a_plain_name_stops_the_app_from_being_made(tmp_path:
 def test_the_cookie_a_server_gives_lasts_the_login_days_and_one_for_the_desktop_ends_with_the_window(tmp_path: Path) -> None:
     server = build_web(tmp_path / "a", None, token=TOKEN, login_days=90)
     cookie = server.client.get("/", params={"token": TOKEN}).headers["set-cookie"].lower()
-    assert "max-age=7776000" in cookie and "httponly" in cookie and "samesite=strict" in cookie and "secure" not in cookie
+    assert "max-age=7776000" in cookie and "httponly" in cookie and "samesite=lax" in cookie and "secure" not in cookie
     desktop = build_web(tmp_path / "b", None, token=TOKEN)
     cookie = desktop.client.get("/", params={"token": TOKEN}).headers["set-cookie"].lower()
     assert "max-age" not in cookie and "expires" not in cookie

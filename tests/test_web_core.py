@@ -44,13 +44,13 @@ class TestAuth:
         assert web.client.get("/api/about", headers={"x-mtk-token": "wrong"}).status_code == 401
         assert web.client.get("/api/about", headers={"x-mtk-token": "s3cret"}).status_code == 200
 
-    def test_opening_with_the_token_sets_a_strict_cookie_that_unlocks_the_api(self, tmp_path) -> None:
+    def test_opening_with_the_token_sets_a_lax_cookie_that_unlocks_the_api(self, tmp_path) -> None:
         web = build_web(tmp_path, None, token="s3cret")
         assert web.client.get("/").status_code == 401  # no token: a page that explains how to open the app
         opened = web.client.get("/", params={"token": "s3cret"})
         assert opened.status_code == 200
         cookie = opened.headers["set-cookie"].lower()
-        assert "httponly" in cookie and "samesite=strict" in cookie
+        assert "httponly" in cookie and "samesite=lax" in cookie
         assert web.client.get("/api/about").status_code == 200  # the cookie rides along
 
     def test_a_wrong_token_does_not_open_the_app(self, tmp_path) -> None:

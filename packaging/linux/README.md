@@ -24,7 +24,7 @@ you listed (see *Sign in with Tailscale*).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.14.0 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.14.1 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -100,7 +100,9 @@ sudo -u mtk /opt/musictoolkit/venv/bin/mtk --config /var/lib/musictoolkit/config
 
 Open that link once on each device; it keeps the device signed in for `login_days` (90 by default), and the page then takes the
 token out of the address, so a bookmark of the page is just the page. A device that has only the address (or whose cookie ended) is shown a page with a
-box for the token: paste what `mtk token` prints there. Anyone who has the link or the token has the app, so do not post either anywhere.
+box for the token: paste what `mtk token` prints there. (The cookie is `HttpOnly` and `SameSite=Lax`. The app also keeps a key in the browser's own storage, and
+a device whose browser has lost the cookie but kept the key is signed in again before the page asks for anything: see *The Dock or Home Screen app asks for the
+token again* below. *Settings, How this device signs in* has a button that signs a device out, key and cookie.) Anyone who has the link or the token has the app, so do not post either anywhere.
 Eight wrong tokens in a minute make the server refuse every token for the rest of the minute (a device that is already signed in is not
 affected). If you would rather choose the token yourself, put `MTK_TOKEN=<openssl rand -hex 32>` in
 `/etc/musictoolkit.env` (mode 0600, owned by root): it wins over the file, and the link is then
@@ -159,7 +161,7 @@ not there (the drive is not mounted) is skipped, said in the journal, and given 
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.14.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.14.1` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:
@@ -247,6 +249,10 @@ What an iPhone does and does not do:
 - The phone is away from the server, so everything is streamed: on mobile data a song is its whole file (transcoding to a smaller one is planned).
 
 **Mac.** Safari (macOS Sonoma or later): *File, Add to Dock*. Chrome and Edge: the menu, then *Install*. It opens in a window of its own and answers the media keys.
+A Dock app is a browser of its own: Safari copies the site's cookies (not its storage) into it when it is added, and from then on the two are separate. If it asks for the token
+the first time, paste it once. It then stays signed in for `login_days`, and also after it is quit and opened again: the cookie lasts that long, and the app keeps a key that signs
+the device in again if the cookie is lost. The app's *Application URL* (the app's menu, *Settings*) should be the plain address, `https://musicpi.<your tailnet>.ts.net/`, not
+the sign-in link.
 
 ## An app that speaks Subsonic (iPhone, iPad, Mac)
 
@@ -311,6 +317,8 @@ The ids an app shows are the server's own and mean nothing outside it.
 | "Too many wrong tokens. Try again in N seconds." (`429`) | Eight wrong tokens came in within a minute (a typo, a program with an old token). Wait; devices that are signed in are not affected |
 | A page that says **Can't reach your music server**, with a *Try again* button | The phone or Mac got no answer from the server within eight seconds (the installed app shows this instead of the browser's own error). Tailscale is off on the phone, the phone is on a different account, or the server is off: check each, then press *Try again* |
 | The app on the Home Screen asks for the token | Its cookies are not Safari's: before iOS 17 they are not copied when the app is added, and a cookie that was cleared is gone. Paste the token once; the app then stays signed in for `login_days` |
+| The Dock or Home Screen app asks for the token again after it was quit and opened | Its browser did not keep the cookie, or did not send it (WebKit has open reports of web apps starting without the cookies they were closed with). Since 0.14.1 the app keeps a key in that browser's storage and signs the device in again by itself; the page it shows says *Signing this device in with the key it saved...* for a moment. If it still asks, open *Why does it ask for the token?* on the page and read the line under *For a report*: `cookie=none` means no cookie came with the request, `cookie=refused` that one came and the token was changed since, `preload=yes` that the browser itself made the request for the page. The line is also in the server's log (`journalctl -u musictoolkit \| grep "Sign-in page shown"`), with no token in it |
+| The sign-in page says *The key this device saved is no good any more* | The key ran out (90 days since the app was last opened) or the server's token was changed (that signs every device out). Type the token; the app then keeps a new key |
 | A Subsonic app says *Wrong username or password* | The password is the token (`mtk token`), or the API key box is the token with the user name empty. Not the Tailscale login |
 | A Subsonic app says *Too many wrong passwords. Try again in N seconds.* | Eight wrong ones came in within a minute (an app trying an old token again and again). The same limit as for the web page's sign-in. Wait, then fix the app's password |
 | A Subsonic app says *Server must upgrade* or *Client must upgrade* | The app speaks a version of the protocol that is not 1.x, or newer than 1.16. Tell me which app it is |

@@ -53,7 +53,7 @@ def test_a_listed_account_is_signed_in_by_opening_the_app_and_the_cookie_it_gets
     cookie = page.headers["set-cookie"]
     assert cookie.startswith(f"mtk_session={tailnet.session_cookie(TOKEN, YOU)};")
     lowered = cookie.lower()
-    assert "httponly" in lowered and "samesite=strict" in lowered and "max-age=7776000" in lowered and "path=/" in lowered and "; secure" not in lowered
+    assert "httponly" in lowered and "samesite=lax" in lowered and "max-age=7776000" in lowered and "path=/" in lowered and "; secure" not in lowered
     assert TOKEN not in cookie and YOU not in cookie
     assert device.get("/api/about").status_code == 200  # (the cookie alone: no header this time)
     assert "set-cookie" not in device.get("/api/about").headers  # (and nothing is handed out again)
@@ -332,18 +332,20 @@ def test_the_app_can_say_how_a_device_is_signed_in_and_what_tailscale_says_about
     web = _web(tmp_path)
     by_token = _device(web)
     by_token.get(f"/?token={TOKEN}")
-    assert by_token.get("/api/session").json() == {"by": "token", "tailscale": {"on": True, "login": None, "allowed": False, "own_page": True}}
+    assert by_token.get("/api/session").json() == {"by": "token", "remember_days": 90, "tailscale": {"on": True, "login": None, "allowed": False, "own_page": True}}
     both = by_token.get("/api/session", headers=ID).json()  # (the cookie got it in: that is how it is said to be signed in, though Tailscale would too)
     assert both["by"] == "token" and both["tailscale"] == {"on": True, "login": YOU, "allowed": True, "own_page": True}
     assert by_token.get("/api/session", headers={"tailscale-user-login": "mallory@example.com"}).json()["tailscale"] == {
         "on": True, "login": "mallory@example.com", "allowed": False, "own_page": True,
     }
-    assert by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site"}).json()["tailscale"]["own_page"] is False
+    assert by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site"}).json()["tailscale"]["own_page"] is False  # (a page of another site that only reads: not asked)
+    link = by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate"})  # (the cookie is Lax: it rides along on a link followed from another site)
+    assert link.status_code == 403 and link.json() == {"detail": "this request came from a page of another site"}
 
     by_tailscale = _device(web)
     first = by_tailscale.get("/api/session", headers=ID)
     assert first.json()["by"] == "tailscale" and first.headers["set-cookie"].startswith("mtk_session=tailnet.")
-    assert by_tailscale.get("/api/session").json() == {"by": "tailscale", "tailscale": {"on": True, "login": None, "allowed": False, "own_page": True}}
+    assert by_tailscale.get("/api/session").json() == {"by": "tailscale", "remember_days": 90, "tailscale": {"on": True, "login": None, "allowed": False, "own_page": True}}
 
     assert _device(web).get("/api/session").status_code == 401  # (nobody who is not signed in is told anything)
 
@@ -351,9 +353,9 @@ def test_the_app_can_say_how_a_device_is_signed_in_and_what_tailscale_says_about
 def test_a_server_that_signs_nobody_in_says_so_and_an_app_without_a_token_says_it_is_open(tmp_path: Path) -> None:
     off = _device(_web(tmp_path / "off", logins=[]))
     off.get(f"/?token={TOKEN}")
-    assert off.get("/api/session", headers=ID).json() == {"by": "token", "tailscale": {"on": False, "login": YOU, "allowed": False, "own_page": True}}
+    assert off.get("/api/session", headers=ID).json() == {"by": "token", "remember_days": 90, "tailscale": {"on": False, "login": YOU, "allowed": False, "own_page": True}}
     open_app = _device(_web(tmp_path / "open", token=None, logins=[]))
-    assert open_app.get("/api/session").json() == {"by": "open", "tailscale": {"on": False, "login": None, "allowed": False, "own_page": True}}
+    assert open_app.get("/api/session").json() == {"by": "open", "remember_days": 0, "tailscale": {"on": False, "login": None, "allowed": False, "own_page": True}}
 
 
 def test_an_app_that_is_given_a_login_that_is_not_one_is_not_made(tmp_path: Path) -> None:

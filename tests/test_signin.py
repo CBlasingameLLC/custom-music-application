@@ -79,7 +79,7 @@ def test_the_right_token_typed_into_the_form_signs_the_device_in_and_goes_to_the
     answer = web.client.post("/signin", data={"token": TOKEN}, follow_redirects=False)
     assert answer.status_code == 303 and answer.headers["location"] == "/"
     cookie = answer.headers["set-cookie"].lower()
-    assert "mtk_session=" in cookie and "httponly" in cookie and "samesite=strict" in cookie and "max-age=7776000" in cookie and "path=/" in cookie
+    assert "mtk_session=" in cookie and "httponly" in cookie and "samesite=lax" in cookie and "max-age=7776000" in cookie and "path=/" in cookie
     assert web.client.get("/api/about").status_code == 200  # (the cookie rides along)
     assert web.client.get("/").status_code == 200 and web.client.get("/").headers["content-type"].startswith("text/html")
 

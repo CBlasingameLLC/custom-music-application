@@ -7,6 +7,7 @@ import { setFavorite } from './tracks.js';
 import { describe, isStation, isTrack } from './items.js';
 import { setStationFavorite } from './radio.js';
 import { installOpenFiles } from './openfiles.js';
+import { keepSignedIn } from './remember.js';
 import { MiniPlayer, MoreSheet, PlayerBar, QueueDrawer, Sidebar, TabBar, TopBar } from './views/shell.js';
 import { AlbumsView, AlbumView, ArtistsView, ArtistView, HomeView, SearchView, SongsView } from './views/library.js';
 import { PlaylistsView, PlaylistView } from './views/playlists.js';
@@ -206,6 +207,7 @@ loadSettings().catch(() => {});
 loadFacets().catch(() => {});
 loadPlaylists().catch(() => {});
 restoreQueue();
+if (!window.mtk) keepSignedIn(); // (the desktop window has no sign-in to keep: its token is new at every launch)
 
 // Installed as an app (Home Screen, Dock), the page says what is wrong when the server cannot be reached (see sw.js). Not in the
 // desktop window, which has its own server on a port of its own each time and no need of it.

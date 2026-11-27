@@ -58,7 +58,7 @@ def test_a_device_that_tailscale_vouches_for_opens_the_app_with_no_token_and_sta
     expect(page.get_by_label("Access token")).to_have_count(0)  # (the page that asks for the token was never shown)
     cookie = next(c for c in context.cookies() if c["name"] == "mtk_session")
     assert cookie["value"].startswith("tailnet.") and TOKEN not in cookie["value"] and YOU not in cookie["value"]
-    assert cookie["httpOnly"] and cookie["sameSite"] == "Strict" and cookie["expires"] > time.time() + 80 * 86400  # (90 days)
+    assert cookie["httpOnly"] and cookie["sameSite"] == "Lax" and cookie["expires"] > time.time() + 80 * 86400  # (90 days)
 
     context.set_extra_http_headers({})  # (Tailscale is off, or the address is the local one: the cookie alone does it)
     page.reload()
@@ -93,7 +93,7 @@ def test_an_account_the_server_does_not_sign_in_is_named_on_the_sign_in_page_and
     page.goto(listed.base + "/")
     expect(page.get_by_role("heading", name="Music Toolkit")).to_be_visible()
     expect(page.locator(".sidebar")).to_have_count(0)
-    expect(page.locator("p.note").first).to_contain_text("Tailscale says this device belongs to mallory@example.com. This server does not sign in that account.")
+    expect(page.locator("p.note", has_text="Tailscale says")).to_contain_text("Tailscale says this device belongs to mallory@example.com. This server does not sign in that account.")
     expect(page.locator("body")).not_to_contain_text(YOU)  # (who is let in is not told to someone who is not)
     assert not any(c["name"] == "mtk_session" for c in context.cookies())
 

@@ -25,7 +25,7 @@ background, and installs it when you close the app (or right away from
 Settings, Updates, "Restart and install"). Switch it off in the same card.
 Installs of 0.2.0 or older have no updater: install 0.3.0 once by hand.
 
-## What it does (v0.14.0)
+## What it does (v0.14.1)
 
 | Area | Features |
 |---|---|
@@ -417,10 +417,16 @@ drive attached. The step-by-step guide, the systemd service and an example confi
   other address unless `[server] allowed_hosts` lists the names the devices reach it by (`musicpi.local`, a Tailscale name, an IP address): a request
   that names anything else gets `403 forbidden host`, which is what stops a web page on another site from using the app through your browser.
 - **The token** is `MTK_TOKEN` or the file `server.token` next to `config.toml` (made at the first start, readable by its owner only, never printed).
-  `mtk token --url https://NAME` shows the link to open once on each device; the device then stays signed in for `[server] login_days` (90), and the
-  cookie is marked Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`). A browser that has only the address (or
-  whose cookie ended) gets a page with a box for the token (`mtk token` prints it); eight wrong tokens in a minute make the server refuse all tokens for the
-  rest of the minute. Neither the token nor the link is ever written to a log.
+  `mtk token --url https://NAME` shows the link to open once on each device; the device then stays signed in for `[server] login_days` (90). The cookie is
+  `HttpOnly` and `SameSite=Lax` (Strict leaves a cookie out of a page opened from an icon or from a link in another app, and the device would be asked for a token
+  it already gave), and Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`); `/api` refuses a link followed from another
+  site, and any request that changes something, that the browser says a page of another site (or of another name under the same domain) made, whatever cookie
+  it carries. A web app on a Dock or Home Screen is a browser of its own, and WebKit's bug tracker has reports of
+  such apps starting without the cookies they were closed with, so the app also keeps a key in that browser's storage (made from the token and the day it ends, good
+  only at one address, where it is exchanged for the same cookie): a device whose cookie is gone signs itself in again before anyone is asked, and *Sign out of this
+  device* in Settings throws the key and the cookie away. A browser that has only the address (or whose cookie ended and has no key) gets a page with a box for the
+  token (`mtk token` prints it) and a fold-out, *Why does it ask for the token?*, that says what the request carried; eight wrong tokens or keys in a minute make
+  the server refuse all of them for the rest of the minute. Neither the token nor the link is ever written to a log.
 - **Sign in with Tailscale** (no token on any of your devices): `tailscale serve` tells the app which Tailscale account a request came from, and `[server]
   tailscale_logins = ["you@example.com"]` lists the accounts the server signs in. A phone or a Mac that opens the server's `https://NAME.ts.net` address is
   then in, with no sign-in link and no pasting; it keeps a cookie that is good only while its account is on the list and the token is the same, so taking an
