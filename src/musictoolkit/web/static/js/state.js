@@ -1,5 +1,6 @@
 // App-wide UI state: routing, toasts, background jobs, dialogs, context menu.
 import { api, createStore } from './lib.js';
+import { streamQuality } from './items.js';
 import { accentVars, normalizeAccent } from './appearance.js';
 
 // ------------------------------------------------------------ routing (hash based)
@@ -59,6 +60,7 @@ export const ui = createStore({
   jobsOpen: false,
   moreOpen: false, // the sheet of every other page, on a phone
   songColumns: prefs.songColumns || null,
+  streamKbps: streamQuality(prefs.streamKbps), // what this device asks the server to stream songs at (0: as stored)
 });
 
 // How the app looks: the theme, the accent colour (and the colours derived from it) and the density go on the page, and are
@@ -71,7 +73,7 @@ function applyLook(s) {
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', s.theme === 'light' ? '#f5f6fb' : '#0d0f14'); // the colour of the frame around the page on a phone: --bg
   try {
-    localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns, accent: s.accent, density: s.density, vars }));
+    localStorage.setItem('mtk.ui.v1', JSON.stringify({ theme: s.theme, songColumns: s.songColumns, accent: s.accent, density: s.density, streamKbps: s.streamKbps, vars }));
   } catch {
     /* storage unavailable */
   }
@@ -81,6 +83,7 @@ applyLook(ui.get());
 export const setTheme = (theme) => ui.set({ theme });
 export const setAccent = (accent) => ui.set({ accent: normalizeAccent(accent) });
 export const setDensity = (density) => ui.set({ density: density === 'compact' ? 'compact' : 'comfortable' });
+export const setStreamKbps = (kbps) => ui.set({ streamKbps: streamQuality(Number(kbps)) });
 
 // ------------------------------------------------------------ layout
 

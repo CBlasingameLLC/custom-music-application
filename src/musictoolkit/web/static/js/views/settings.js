@@ -3,7 +3,8 @@ import { api, fmt, Fragment, html, useAsync, useEffect, useState, useStore } fro
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
-import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setStreamKbps, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { STREAM_QUALITIES } from '../items.js';
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 import { checkForNewEpisodes } from '../podcasts.js';
 import { installAdvice, openedAsApp, signInAdvice } from '../install.js';
@@ -332,6 +333,27 @@ function InstallCard() {
   <//>`;
 }
 
+// ------------------------------------------------------------ how much of a song this device streams
+
+function StreamingCard() {
+  const { streamKbps } = useStore(ui);
+  const about = useStore(library, (s) => s.about);
+  const converting = about?.transcoding;
+  function choose(value) {
+    setStreamKbps(value);
+    toast(Number(value) > 0 ? `From the next song, songs are streamed at ${value} kbps or less.` : 'From the next song, songs are streamed as they are stored.', 'success', 3500);
+  }
+  return html`<${Card} icon="phone" title="Streaming quality" hint="How much of a song this device asks the server for. Away from home on mobile data, a lower quality uses a lot less of it.">
+    <label class="field narrow"><span>Quality on this device</span>
+      <select value=${streamKbps} onChange=${(e) => choose(e.target.value)}>
+        ${STREAM_QUALITIES.map((q) => html`<option key=${q.kbps} value=${q.kbps}>${q.label}</option>`)}
+      </select></label>
+    ${converting && (converting.available
+      ? html`<p class="subtle">The server can convert songs (ffmpeg ${converting.ffmpeg || ''}). A song that is bigger than the quality chosen is converted to MP3 on the way and kept on the server: the second time it plays at once, and the first time it can take a few seconds to start.</p>`
+      : html`<p class="note warn"><${Icon} name="alert" size=${14} /><span>This server cannot convert songs (${converting.reason}), so every song is sent as it is stored, whatever is chosen here.</span></p>`)}
+  <//>`;
+}
+
 // ------------------------------------------------------------ how this device signs in
 
 /** What the app does so that a device stays signed in, and the way out: the cookie lasts `days` days, and the key kept in this browser signs the device in again if the browser has lost the cookie. */
@@ -570,6 +592,7 @@ export function SettingsView() {
       <${UpdatesCard} settings=${settings} />
       ${desktop?.setCloseAction && html`<${WindowCard} settings=${settings} />`}
       ${!desktop && html`<${InstallCard} />`}
+      ${!desktop && html`<${StreamingCard} />`}
       ${!desktop && html`<${SignInCard} />`}
       <${AppearanceCard} />
       <${DiagnosticsCard} />

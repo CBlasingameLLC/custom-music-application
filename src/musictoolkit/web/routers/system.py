@@ -34,6 +34,7 @@ def about(ctx: AppContext = Depends(get_ctx)) -> dict:
         "log_dir": str(ctx.log_dir),
         "db_size": ctx.db_path.stat().st_size if ctx.db_path.exists() else 0,
         "auth": ctx.token is not None,
+        "transcoding": ctx.transcoder.status(),
     }
 
 

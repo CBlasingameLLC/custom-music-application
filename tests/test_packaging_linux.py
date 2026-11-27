@@ -6,7 +6,7 @@ import configparser
 import tomllib
 from pathlib import Path
 
-from musictoolkit import __version__, backup
+from musictoolkit import __version__, backup, transcode
 from musictoolkit import server as server_ops
 from musictoolkit.config import load_config
 
@@ -61,6 +61,15 @@ def test_the_example_config_puts_copies_of_the_database_on_the_music_drive_where
     make = "sudo install -d -o mtk -g music -m 2775 /srv/music/backups"
     assert make in (PACKAGING / "config.example.toml").read_text(encoding="utf-8") and make in (PACKAGING / "README.md").read_text(encoding="utf-8")
     assert _unit()["Service"]["SupplementaryGroups"] == "music"  # (the group the folder is made for)
+
+
+def test_the_example_config_has_the_settings_for_converting_songs_as_the_program_has_them_and_the_guide_names_them_and_the_folder_they_are_kept_in() -> None:
+    raw = tomllib.loads((PACKAGING / "config.example.toml").read_text(encoding="utf-8"))["server"]
+    assert (raw["ffmpeg"], raw["transcode_cache_mb"], raw["transcode_jobs"]) == ("", transcode.DEFAULT_CACHE_MB, transcode.DEFAULT_JOBS) == ("", 2048, 2)
+    assert transcode.settings_of(load_config(PACKAGING / "config.example.toml").server) == transcode.Settings()  # (and is a setting the server starts with)
+    guide = (PACKAGING / "README.md").read_text(encoding="utf-8")
+    for word in ("sudo apt install ffmpeg", "transcode_cache_mb", "transcode_jobs", "/var/lib/musictoolkit/cache/transcode", "*Streaming quality*"):
+        assert word in guide, word
 
 
 def test_the_example_environment_file_has_an_empty_token_and_says_how_to_make_one() -> None:

@@ -11,6 +11,7 @@ import pytest
 from PIL import Image
 
 from musictoolkit.media import lrclib
+from musictoolkit.transcode import Transcoder
 from mutagen.id3 import APIC, ID3
 
 from tests.conftest import FIXTURES_DIR, jpeg_bytes, make_stub, make_track
@@ -51,7 +52,8 @@ def test_a_client_that_seeks_gets_the_part_it_asks_for(rest: Rest, music_dir: Pa
     assert response.status_code == 206 and response.content == data[-50:]
 
 
-def test_download_is_the_same_file_and_so_is_stream_when_it_is_asked_to_convert(rest: Rest, music_dir: Path) -> None:
+def test_download_is_the_same_file_and_so_is_stream_when_it_is_asked_to_convert_and_there_is_no_ffmpeg(web: SimpleNamespace, rest: Rest, music_dir: Path, tmp_path: Path) -> None:
+    web.ctx.transcoder = Transcoder(ffmpeg=str(tmp_path / "no-ffmpeg"))  # (nothing to convert with, whatever this computer has: the song is sent as it is)
     data = (music_dir / GLACIER).read_bytes()
     number = glacier(rest)["id"]
     assert rest.get("download", id=number).content == data
@@ -105,6 +107,7 @@ def test_a_file_that_is_only_tags_has_nothing_to_play(tmp_path: Path, music_dir:
     with web.ctx.db() as conn:
         number = conn.execute("SELECT id FROM tracks WHERE title = 'Hidden Song'").fetchone()["id"]
     assert Rest(web.client).fails("stream", 70, id=str(number)) == "This file has tags but no audio in it, so there is nothing to play."
+    assert Rest(web.client).fails("download", 70, id=str(number)) == "This file has tags but no audio in it, so there is nothing to play."  # (the file as it is, of a file that is not one)
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------- the cover

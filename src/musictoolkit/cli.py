@@ -408,6 +408,7 @@ def serve(
         names = server_ops.allowed_names(bind, settings.allowed_hosts)
         logins = server_ops.tailscale_logins(bind, settings.tailscale_logins)
         server_ops.backup_settings(cfg.database)
+        server_ops.transcode_settings(settings)
         token, source = server_ops.server_token(_data_dir(), os.environ)
     except server_ops.ServeError as error:
         typer.echo(f"Cannot start the server: {error}", err=True)

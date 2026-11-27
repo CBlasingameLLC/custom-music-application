@@ -208,3 +208,40 @@ def test_the_worker_in_safaris_engine_has_the_browser_make_the_pages_request_whe
     assert [(m, s, preload, cookie) for m, s, preload, _, cookie in kept.pages] == [("GET", 200, "true" if can else "", True)], (can, kept.pages)
     context.close()
     assert not problems, problems
+
+
+def test_safaris_engine_asks_for_a_converted_song_the_way_the_server_answers_it(webkit, live, iphone):
+    """Safari asks for the first byte or two of a song before it plays anything, and wants the whole length in the answer. A song that is converted on the way
+    is not made yet when it asks, so the server holds that question until the song is whole and answers it from the kept file with its real length. That
+    is the one thing about converting that only Safari's engine can say; it is judged by what Safari was told and by the length it works out (the engine
+    in a test machine may have no way to play sound, so that it plays is not asked)."""
+    from musictoolkit.transcode import Transcoder
+
+    if not Transcoder().available():
+        pytest.skip("no ffmpeg with an MP3 encoder (sudo apt install ffmpeg)")
+    pages = signed_in_page(webkit, live, device=iphone)
+    page = next(pages)
+    seen: list[tuple[int, str, dict]] = []
+    page.on("response", lambda r: seen.append((r.status, r.url, r.headers)) if "/stream" in r.url else None)
+    page.evaluate("localStorage.setItem('mtk.ui.v1', JSON.stringify({ streamKbps: 32 }))")
+    page.reload()
+    page.wait_for_selector(".tabbar")
+    add_library(page, live)
+    page.evaluate(
+        """import('/static/js/player.js').then(async (m) => {
+          const { items } = await fetch('/api/tracks?limit=5&sort=title').then((r) => r.json());
+          await m.playQueue(items, 0).catch(() => {});
+        })"""
+    )
+    for _ in range(150):
+        if any(url.endswith("?kbps=32") and status in (200, 206) for status, url, _ in seen):
+            break
+        page.wait_for_timeout(100)
+    asked = [(status, headers) for status, url, headers in seen if url.endswith("?kbps=32")]
+    assert asked, seen
+    status, headers = asked[0]
+    assert status in (200, 206) and headers["content-type"] == "audio/mpeg"
+    if status == 206:  # (Safari's own question: the first bytes, and the length of the whole)
+        part, total = headers["content-range"].split(" ")[1].split("/")
+        assert part == "0-1" and 0.95 * 12.07 * 32 * 125 < int(total) < 1.05 * 12.07 * 32 * 125, headers
+    next(pages, None)

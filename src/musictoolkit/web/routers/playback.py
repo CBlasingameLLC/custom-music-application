@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from musictoolkit import transcode
 from musictoolkit.ingest.scanner import folder_unavailable_for
 from musictoolkit.media import art, info, lrclib, lyrics
+from musictoolkit.transcode import Source, TranscodeError
+from musictoolkit.web import streaming
 from musictoolkit.web.context import AppContext, get_ctx
 from musictoolkit.web.queries import (
     ALBUM_ARTIST_FIND,
@@ -18,6 +22,7 @@ from musictoolkit.web.queries import (
 )
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger("musictoolkit")
 
 MEDIA_TYPES = {
     ".mp3": "audio/mpeg",
@@ -42,10 +47,12 @@ UNPLAYABLE_FORMATS = {"wma", "ape"}
 NO_AUDIO_MESSAGE = "This file has tags but no audio in it, so there is nothing to play."
 
 
-def _track(ctx: AppContext, track_id: int) -> tuple[Path, bool]:
-    """The song's file, and whether it is only tags (a file the scan found no audio in)."""
+def _lookup(ctx: AppContext, track_id: int) -> tuple[Path, bool, Source]:
+    """The song's file, whether it is only tags (a file the scan found no audio in), and what is known of the file without opening it."""
     with ctx.db() as conn:
-        row = conn.execute("SELECT file_path, no_audio FROM tracks WHERE id = ? AND is_missing = 0", (track_id,)).fetchone()
+        row = conn.execute(
+            "SELECT file_path, no_audio, format, bitrate, file_size, duration_seconds FROM tracks WHERE id = ? AND is_missing = 0", (track_id,)
+        ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="track not found")
         path = Path(row["file_path"])
@@ -55,15 +62,20 @@ def _track(ctx: AppContext, track_id: int) -> tuple[Path, bool]:
             conn.execute("UPDATE tracks SET is_missing = 1 WHERE id = ?", (track_id,))
             conn.commit()
             raise HTTPException(status_code=404, detail="the file is missing from disk")
-    return path, bool(row["no_audio"])
+    return path, bool(row["no_audio"]), Source(row["format"], row["bitrate"], row["file_size"], row["duration_seconds"])
+
+
+def _track(ctx: AppContext, track_id: int) -> tuple[Path, bool]:
+    """The song's file, and whether it is only tags."""
+    path, no_audio, _source = _lookup(ctx, track_id)
+    return path, no_audio
 
 
 def _track_file(ctx: AppContext, track_id: int) -> Path:
     return _track(ctx, track_id)[0]
 
 
-@router.get("/tracks/{track_id}/stream")
-def stream(track_id: int, ctx: AppContext = Depends(get_ctx)) -> FileResponse:
+def original(ctx: AppContext, track_id: int) -> FileResponse:
     """The audio file itself; FileResponse answers Range requests, which is what seeking needs."""
     path, no_audio = _track(ctx, track_id)
     if no_audio:
@@ -73,6 +85,34 @@ def stream(track_id: int, ctx: AppContext = Depends(get_ctx)) -> FileResponse:
         media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
         headers={"Cache-Control": "private, max-age=3600"},
     )
+
+
+def send(ctx: AppContext, request: Request, track_id: int, *, max_kbps: int, format: str | None, offset: float, estimate: bool) -> Response:
+    """The song's file, or, when the listener asked for less than the file is (a bitrate to stay under, a format) and ffmpeg is there, the song converted to MP3 at
+    that bitrate (see streaming.py). Whenever converting cannot be done, the file: a listener is never left without the song."""
+    path, no_audio, source = _lookup(ctx, track_id)
+    if no_audio:
+        raise HTTPException(status_code=422, detail=NO_AUDIO_MESSAGE)
+    plan = transcode.decide(source, max_kbps, format)
+    transcoder = getattr(ctx, "transcoder", None)
+    if plan is not None and transcoder is not None and transcoder.available():
+        try:
+            answer = streaming.converted(transcoder, request, track_id, path, plan, source.duration, offset=offset, estimate=estimate)
+        except (TranscodeError, OSError) as error:
+            logger.warning("Song %s is sent as it is: it could not be converted (%s)", track_id, error)
+            answer = None
+        if answer is not None:
+            return answer
+    return original(ctx, track_id)
+
+
+@router.get("/tracks/{track_id}/stream")
+def stream(
+    track_id: int, request: Request, kbps: int = Query(0, ge=0, le=100_000), format: str | None = Query(None, max_length=12), ctx: AppContext = Depends(get_ctx),
+) -> Response:
+    """The audio file itself, which is what seeking needs (it answers Range requests). `kbps` is the most the listener wants to stream (a phone on mobile data):
+    a song that is bigger than that is converted to MP3 by ffmpeg, when it is there, and is the file as it is when it is not."""
+    return send(ctx, request, track_id, max_kbps=kbps, format=format, offset=0.0, estimate=False)
 
 
 @router.get("/tracks/{track_id}/info")

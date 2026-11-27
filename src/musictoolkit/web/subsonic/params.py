@@ -42,6 +42,19 @@ class Params:
             number = min(high, number)
         return number
 
+    def number(self, name: str, default: float = 0.0, *, low: float = 0.0) -> float:
+        """A number of seconds, not below `low` (a client that sends something that is not a number is told so)."""
+        value = self.get(name)
+        if value is None:
+            return default
+        try:
+            number = float(value)
+        except ValueError:
+            raise SubsonicError(GENERIC, f"{name} is not a number") from None
+        if number != number or number in (float("inf"), float("-inf")):  # (nan and infinity are not seconds)
+            raise SubsonicError(GENERIC, f"{name} is not a number")
+        return max(low, number)
+
     def boolean(self, name: str, default: bool = False) -> bool:
         value = self.get(name)
         if value is None:

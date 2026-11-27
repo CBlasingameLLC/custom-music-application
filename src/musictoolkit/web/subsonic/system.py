@@ -28,9 +28,13 @@ def get_license(call: Call) -> dict[str, Any]:
     return {"license": {"valid": True, "email": "", "licenseExpires": "2099-12-31T23:59:59.000Z"}}
 
 
+TRANSCODE_OFFSET = {"name": "transcodeOffset", "versions": [1]}  # (`timeOffset` starts a converted song from a time: said only when there is an ffmpeg to do it)
+
+
 @endpoint("getOpenSubsonicExtensions", public=True)
 def get_extensions(call: Call) -> dict[str, Any]:
-    return {"openSubsonicExtensions": EXTENSIONS}
+    transcoder = call.ctx.transcoder
+    return {"openSubsonicExtensions": [*EXTENSIONS, *([TRANSCODE_OFFSET] if transcoder is not None and transcoder.available() else [])]}
 
 
 @endpoint("tokenInfo")

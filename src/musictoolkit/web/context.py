@@ -30,6 +30,7 @@ class AppContext:
     podcasts: Any = None  # looks for new episodes every few hours when the person left that on (set up by create_app)
     rescan: Any = None  # looks for new songs every few hours on a server that was set up to (set up by create_app)
     backups: Any = None  # copies the database every day, and when the button is pressed (set up by create_app)
+    transcoder: Any = None  # makes songs at a lower bitrate, for a phone on mobile data (set up by create_app)
     stats_cache: dict[Any, Any] = field(default_factory=dict)  # worked-out statistics, kept while the listening history is unchanged
     mixes_cache: dict[Any, Any] = field(default_factory=dict)  # the shelf of mixes, kept while the library and history are unchanged
 
