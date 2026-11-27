@@ -24,7 +24,7 @@ you listed (see *Sign in with Tailscale*).
 
 ```bash
 sudo apt install -y python3-venv git
-git clone --depth 1 --branch v0.15.0 https://github.com/CBlasingameLLC/custom-music-application.git
+git clone --depth 1 --branch v0.15.1 https://github.com/CBlasingameLLC/custom-music-application.git
 cd custom-music-application
 sudo groupadd -f music
 sudo useradd --system --home-dir /var/lib/musictoolkit --shell /usr/sbin/nologin --groups music mtk
@@ -162,7 +162,7 @@ not there (the drive is not mounted) is skipped, said in the journal, and given 
 link that signs in, with the token in it, every time it started**, so a service that ran it wrote the token into the journal. `mtk serve` never
 prints it, and from 0.10.1 `dashboard` prints the link only when its output is a terminal. To move such a service over:
 
-1. Update the program to the release (`git fetch --tags && git checkout v0.15.0` in the folder it was installed from, then `pip install --upgrade .` with the service's
+1. Update the program to the release (`git fetch --tags && git checkout v0.15.1` in the folder it was installed from, then `pip install --upgrade .` with the service's
    virtual environment).
 2. In the unit file (`systemctl cat musictoolkit`), end the command with `serve` instead of `dashboard --port 4533`, keep `EnvironmentFile=` (the `MTK_TOKEN` in it is
    used as it is), and put in `config.toml` the address and the names the devices reach it by, written exactly:

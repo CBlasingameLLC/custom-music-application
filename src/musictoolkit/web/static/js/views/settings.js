@@ -1,9 +1,9 @@
 // Settings: music folders, accounts, folder layouts, appearance, data.
-import { api, fmt, Fragment, html, useAsync, useEffect, useState, useStore } from '../lib.js';
+import { api, fmt, Fragment, html, useAsync, useEffect, useRef, useState, useStore } from '../lib.js';
 import { Icon } from '../icons.js';
 import { Button, PageHeader, Spinner } from '../components.js';
 import { addMusicFolder, confirmDialog } from '../dialogs.js';
-import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, setAccent, setDensity, setStreamKbps, setTheme, toast, trackJob, ui, updates } from '../state.js';
+import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError, openModal, saveSettings, setAccent, setDensity, setStreamKbps, setTheme, toast, trackJob, ui, updates } from '../state.js';
 import { STREAM_QUALITIES } from '../items.js';
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 import { checkForNewEpisodes } from '../podcasts.js';
@@ -19,13 +19,29 @@ function Card({ icon, title, children, hint }) {
 }
 
 function Switch({ checked, onChange, children }) {
-  return html`<label class="switch"><input type="checkbox" checked=${checked} onChange=${(e) => onChange(e.target.checked)} /><span>${children}</span></label>`;
+  // The box shows what the person turned it to until the save has been answered, and what is kept after that. Without it, any draw of the page that still has the older value (the
+  // answer to a read of the settings asked for before the click, the refresh of something else on the page) puts the box back as it was, and a save that failed leaves it turned.
+  const [shown, setShown] = useState(checked);
+  const [, answered] = useState(0);
+  const saving = useRef(0);
+  useEffect(() => { if (!saving.current) setShown(checked); });
+  async function turned(event) {
+    const value = event.target.checked;
+    setShown(value);
+    saving.current += 1;
+    try {
+      await onChange(value);
+    } finally {
+      saving.current -= 1;
+      answered((count) => count + 1); // (draws it again, and what is kept is shown: the same when the save worked, the old one when it did not)
+    }
+  }
+  return html`<label class="switch"><input type="checkbox" checked=${shown} onChange=${turned} /><span>${children}</span></label>`;
 }
 
 async function save(patch, message = 'Saved') {
   try {
-    const settings = await api('/settings', { method: 'PUT', body: patch });
-    library.set((s) => ({ ...s, settings }));
+    const settings = await saveSettings(patch);
     toast(message, 'success', 2200);
     return settings;
   } catch (error) {

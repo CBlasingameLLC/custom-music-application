@@ -116,10 +116,27 @@ export async function loadFacets() {
   library.set((s) => ({ ...s, facets }));
   return facets;
 }
+// The settings in the store come from a read (loadSettings) and from a save, which answers with all the settings as they are after it. The answer to a read that was asked
+// for before a save began, or that was still on its way when the save ended, is older than what the save gave, and is not taken: it would put what the person just turned
+// back as it was.
+let settingsChanges = 0;
+
 export async function loadSettings() {
+  const asked = settingsChanges;
   const settings = await api('/settings');
-  library.set((s) => ({ ...s, settings }));
+  if (asked === settingsChanges) library.set((s) => ({ ...s, settings }));
   return settings;
+}
+
+export async function saveSettings(patch) {
+  settingsChanges += 1;
+  try {
+    const settings = await api('/settings', { method: 'PUT', body: patch });
+    library.set((s) => ({ ...s, settings }));
+    return settings;
+  } finally {
+    settingsChanges += 1;
+  }
 }
 export async function loadAbout() {
   const about = await api('/about');
