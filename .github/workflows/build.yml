@@ -104,7 +104,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install ffmpeg (what converts songs to a lower bitrate for a phone on mobile data: the tests of that run the real one)
+      - name: Install ffmpeg (it converts songs to a lower bitrate for a phone on mobile data, and the tests of that run the real one)
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install dependencies
