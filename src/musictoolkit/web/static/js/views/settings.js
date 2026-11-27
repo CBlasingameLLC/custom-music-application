@@ -7,6 +7,7 @@ import { bumpLibrary, desktop, go, library, loadAbout, loadSettings, notifyError
 import { ACCENTS, accentHex, readableOn } from '../appearance.js';
 import { checkForNewEpisodes } from '../podcasts.js';
 import { installAdvice, openedAsApp, signInAdvice } from '../install.js';
+import { savedKey, signOutHere } from '../remember.js';
 
 function Card({ icon, title, children, hint }) {
   return html`<section class="card-panel">
@@ -333,6 +334,23 @@ function InstallCard() {
 
 // ------------------------------------------------------------ how this device signs in
 
+/** What the app does so that a device stays signed in, and the way out: the cookie lasts `days` days, and the key kept in this browser signs the device in again if the browser has lost the cookie. */
+function KeptSignedIn({ days }) {
+  const saved = savedKey();
+  const until = saved ? new Date(saved.expires * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' }) : null;
+  async function signOut() {
+    try {
+      await signOutHere();
+    } catch (error) {
+      notifyError(error);
+    }
+  }
+  return html`<${Fragment}>
+    <p>It stays signed in for ${days} days. ${until ? html`This browser also keeps a key that signs the device in again if the browser loses the cookie; the key is good until <strong>${until}</strong> and is renewed each time the app is opened.` : 'This browser does not keep the key that would sign the device in again if it lost the cookie (its storage is blocked).'}</p>
+    <div class="row-actions"><${Button} icon="x" onClick=${signOut}>Sign out of this device<//></div>
+  <//>`;
+}
+
 function SignInCard() {
   const { data } = useAsync(() => api('/session'), []);
   const advice = signInAdvice(data); // (nothing yet, or an app that has no token: nothing to say)
@@ -357,6 +375,7 @@ function SignInCard() {
     <//>`}
     ${advice.state === 'remembered' && html`<p>Tailscale signed this device in, and it stays signed in for as long as that account is on the server's list. This visit did not come through <code>tailscale serve</code>, so Tailscale named no one now.</p>`}
     ${advice.state === 'token' && html`<p>${inToken} Tailscale did not say who it is, so the server cannot sign it in by itself. Open the server at its <code>tailscale serve</code> address (<code>https://</code> and the name ending in <code>.ts.net</code>), not at its local name or its IP address, and the server learns which account this is.</p>`}
+    ${data?.by === 'token' && data.remember_days > 0 && html`<${KeptSignedIn} days=${data.remember_days} />`}
   <//>`;
 }
 

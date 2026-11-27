@@ -6,9 +6,15 @@ must not be able to drive it):
     a server was told it is reached by (blocks DNS rebinding);
   * /api/* needs the token, delivered once via /?token=... (or typed into the
     sign-in page, which asks for it when a browser has no cookie) and kept in a
-    SameSite=Strict cookie (so <audio>/<img> requests carry it too). The desktop
-    app's token is new at every launch and its cookie ends with the window; a
-    server's token is the same every time and its cookie lasts `login_days`;
+    SameSite=Lax cookie (so <audio>/<img> requests carry it too, and so does the
+    request that opens the app from an icon or from a link in another app: Strict
+    leaves the cookie out of those, and a device would be asked for the token it
+    already gave). Lax lets a cookie ride along on a link that is followed from
+    another site, so /api/* refuses a request that the browser says came from
+    another site. The desktop app's token is new at every launch and its cookie
+    ends with the window; a server's token is the same every time and its cookie
+    lasts `login_days`, and the app keeps a key besides (remember.py) that gets
+    the cookie back when the browser has lost it;
   * a token that someone typed, followed in a link or sent from a program is
     counted when it is wrong, and after a few wrong ones none is looked at for
     a minute. A device that is already signed in is not affected;
@@ -25,6 +31,7 @@ must not be able to drive it):
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -68,14 +75,14 @@ from musictoolkit.web.routers import (
 )
 from musictoolkit.net.proxy import Slots
 from musictoolkit.radio.hub import RadioHub
-from musictoolkit.web import tailnet
+from musictoolkit.web import remember, tailnet
 from musictoolkit.web.backup_job import BackupSchedule
 from musictoolkit.web.hosts import LOOPBACK_HOSTS, clean_names, hostname_of
 from musictoolkit.web.podcast_job import PodcastSchedule
 from musictoolkit.web.radar_job import RadarSchedule
 from musictoolkit.web.rescan_job import RescanSchedule
 from musictoolkit.web.scrobbler import Scrobbler
-from musictoolkit.web.signin import GuessLimiter, same_token, sign_in_page
+from musictoolkit.web.signin import GuessLimiter, arrival, same_token, sign_in_page
 from musictoolkit.web.subsonic import router as subsonic_router
 
 logger = logging.getLogger("musictoolkit")
@@ -209,7 +216,7 @@ def create_app(
 
     def give_cookie(response: Response, request: Request, value: str | None = None) -> Response:
         response.set_cookie(
-            COOKIE_NAME, value or ctx.token, httponly=True, samesite="strict", path="/",
+            COOKIE_NAME, value or ctx.token, httponly=True, samesite="lax", path="/",
             secure=request.url.scheme == "https",  # (a browser keeps a Secure cookie only from an https page: uvicorn reports https when a proxy on this machine says so)
             max_age=login_days * 86400 if login_days > 0 else None,
         )
@@ -220,13 +227,22 @@ def create_app(
         return give_cookie(response, request, tailnet.session_cookie(ctx.token, login))
 
     def asking(request: Request, status: int, problem: str = "", wait: int = 0) -> HTMLResponse:
-        """The page with the box for the token (401), or the same page saying to wait (429)."""
+        """The page with the box for the token (401), or the same page saying to wait (429). The first visit's page says what the request carried, and the log
+        says it once (a device that is asked again, though it was told to stay signed in, is the thing to find out about)."""
         headers = {"Cache-Control": "no-store", **({"Retry-After": str(wait)} if wait else {})}
         said = seen(request)
+        arrived = arrival(request.headers, request.cookies.get(COOKIE_NAME)) if status == 401 and not problem else None
+        if arrived is not None and request.method == "GET":
+            logger.info("Sign-in page shown: %s", arrived.line())
         page = sign_in_page(
-            problem=problem, login_days=login_days, tailscale_login=said.login, tailscale_on=bool(logins), tailscale_allowed=said.allowed
+            problem=problem, login_days=login_days, tailscale_login=said.login, tailscale_on=bool(logins), tailscale_allowed=said.allowed, arrived=arrived
         )
         return HTMLResponse(page, status_code=status, headers=headers)
+
+    def from_another_site(request: Request) -> bool:
+        """Does the browser say that this request was made by a page of another site (or of a sibling name of this one: `Sec-Fetch-Site` says "same-site" then)?
+        What is not a browser's (a program, the desktop shell) does not say, and is not asked."""
+        return request.headers.get("sec-fetch-site") in ("cross-site", "same-site")
 
     def too_many(wait: int) -> str:
         return f"Too many wrong tokens. Try again in {wait} seconds."
@@ -238,6 +254,10 @@ def create_app(
         if hostname_of(request.headers.get("host", "")) not in answers_to:
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         vouched_for: str | None = None  # the login that Tailscale vouched for, when that is what lets this request in: it gets the cookie
+        if ctx.token and request.url.path.startswith("/api/") and signed_in(request) and from_another_site(request):
+            # (the cookie is Lax, which lets it ride along on a link that is followed from another site: the data is not for that page's reading, but nothing it can
+            # make this browser ask for is let in, and nothing is taken away from the device either: it is not told to forget the cookie)
+            return JSONResponse({"detail": "this request came from a page of another site"}, status_code=403)
         if ctx.token and request.url.path.startswith("/api/") and not signed_in(request):
             said = seen(request)
             if said.vouched:
@@ -313,16 +333,55 @@ def create_app(
             return asking(request, 401, "That is not the token.")
         return give_cookie(RedirectResponse("/", status_code=303), request)
 
+    @app.post("/signin/restore", include_in_schema=False)
+    def restore(request: Request, key: str = Form("")) -> Response:
+        """The sign-in page's script, for a device whose browser lost the cookie but kept the key (see remember.py): the right key gets the cookie that the token
+        buys (204), a wrong one nothing (401, and it is counted like a wrong token). 404 where devices are not kept signed in."""
+        if not ctx.token or login_days <= 0:
+            return JSONResponse({"detail": "this server does not keep devices signed in"}, status_code=404)
+        if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+            return JSONResponse({"detail": "a sign-in has to be made from this app's own page"}, status_code=403)
+        if signed_in(request):
+            return Response(status_code=204)
+        if pause := limiter.wait():
+            return JSONResponse({"detail": too_many(pause)}, status_code=429, headers={"Retry-After": str(pause)})
+        if not remember.valid(key, ctx.token, time.time()):
+            limiter.wrong()
+            return JSONResponse({"detail": "that key is not good"}, status_code=401)
+        return give_cookie(Response(status_code=204), request)
+
     @app.get("/api/session", include_in_schema=False)
     def session(request: Request) -> dict:
         """How this device is signed in, and what Tailscale says about it (for Settings): `by` is "token", "tailscale" or "open" (the app has
-        no token). `tailscale.login` is the login Tailscale put in this very request: the person's own, shown to the person."""
+        no token). `tailscale.login` is the login Tailscale put in this very request: the person's own, shown to the person. `remember_days` is how long
+        a device that signed in with the token is kept signed in (0: not at all, as in the desktop app), and so whether it should keep a key."""
         said = seen(request)
         if not ctx.token:
             by = "open"
         else:
             by = signed_in_by(request) or ("tailscale" if said.vouched else None)
-        return {"by": by, "tailscale": {"on": bool(logins), "login": said.login, "allowed": said.allowed, "own_page": said.own_page}}
+        return {
+            "by": by, "remember_days": login_days if ctx.token else 0,
+            "tailscale": {"on": bool(logins), "login": said.login, "allowed": said.allowed, "own_page": said.own_page},
+        }
+
+    @app.post("/api/session/remember", include_in_schema=False)
+    def remember_key(request: Request) -> JSONResponse:
+        """A key for this device to keep (see remember.py), for a device that is signed in with the token (one that Tailscale signs in has no use for it) where
+        devices are kept signed in. It is made again each time, so the one a device keeps never runs out while the device is in use."""
+        if not ctx.token or login_days <= 0:
+            return JSONResponse({"detail": "this server does not keep devices signed in"}, status_code=404)
+        if signed_in_by(request) != "token":
+            return JSONResponse({"detail": "only a device that is signed in with the token keeps a key"}, status_code=403)
+        expires = int(time.time()) + login_days * 86400
+        return JSONResponse({"key": remember.make(ctx.token, expires), "expires": expires, "days": login_days}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/session/signout", include_in_schema=False)
+    def sign_out() -> Response:
+        """Take this device's cookie away (its page forgets the key, and the device is asked for the token the next time)."""
+        response = Response(status_code=204)
+        response.delete_cookie(COOKIE_NAME, path="/")
+        return response
 
     @app.get("/sw.js", include_in_schema=False)
     def service_worker() -> Response:

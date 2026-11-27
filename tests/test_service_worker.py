@@ -3,6 +3,8 @@
 It must do three things and nothing else: pass a page that the server answers through as it is (a refusal and a sign-in page too), say
 that the server cannot be reached when a page load fails or gets no answer, and leave everything that is not a page load alone. It must
 never keep anything (no Cache Storage: a stored copy of a signed-in page, or of an address with a token in it, is what it must not be).
+The page it passes on is, where the browser can do it, the request that the browser itself started (navigation preload): a request that
+the worker makes by itself is taken for another one by some browsers, which can leave a SameSite cookie out of it.
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -27,7 +28,7 @@ import fs from 'node:fs';
 const source = fs.readFileSync(process.argv[2], 'utf8').replace('__VERSION__', process.argv[3]);
 
 /** Run the worker's file in a scope that has what a worker has, and return the handlers it set and what it asked of the scope. */
-function load({ fetchImpl, timer }) {
+function load({ fetchImpl, timer, registration }) {
   const handlers = {};
   const touched = [];
   const calls = { skipWaiting: 0, claim: 0, timers: [] };
@@ -36,6 +37,7 @@ function load({ fetchImpl, timer }) {
     skipWaiting: () => { calls.skipWaiting += 1; },
     clients: { claim: async () => { calls.claim += 1; } },
     location: { origin: 'https://music.example' },
+    ...(registration ? { registration } : {}),
   };
   const sandbox = {
     self: scope, Response, Promise, Error, Headers, URL,
@@ -51,9 +53,9 @@ function load({ fetchImpl, timer }) {
 }
 
 /** What a fetch event makes the worker answer: { intercepted, response } (response is what respondWith was given, awaited). */
-async function ask(worker, request) {
+async function ask(worker, request, preloadResponse) {
   let given;
-  worker.handlers.fetch({ request, respondWith: (value) => { given = value; } });
+  worker.handlers.fetch({ request, preloadResponse, respondWith: (value) => { given = value; } });
   if (given === undefined) return { intercepted: false };
   const response = await given;
   return { intercepted: true, response };
@@ -95,6 +97,36 @@ for (const status of [200, 401, 403, 500]) {
   out.late = { same: answer.response === sent };
 }
 
+// the browser has started the page's request (navigation preload): its answer is the page, and the worker asks for nothing more
+{
+  const sent = new Response('the browser asked', { status: 200 });
+  let fetched = 0;
+  const worker = load({ fetchImpl: async () => { fetched += 1; return new Response('the worker asked'); } });
+  const answer = await ask(worker, navigation, Promise.resolve(sent));
+  out.preloaded = { same: answer.response === sent, fetched, timers: worker.calls.timers };
+}
+
+// no request was started early (the promise says nothing, or there is no such promise): the worker fetches the page itself
+{
+  const sent = new Response('the worker asked', { status: 200 });
+  const unused = await ask(load({ fetchImpl: async () => sent }), navigation, Promise.resolve(undefined));
+  const absent = await ask(load({ fetchImpl: async () => sent }), navigation, undefined);
+  out.preload_unused = { same: unused.response === sent, absent: absent.response === sent };
+}
+
+// the request that was started early fails: the server cannot be reached, and the worker does not ask again
+{
+  let fetched = 0;
+  const worker = load({ fetchImpl: async () => { fetched += 1; return new Response('x'); } });
+  out.preload_failed = { ...(await summary(await ask(worker, navigation, Promise.reject(new TypeError('Failed to fetch'))))), fetched };
+}
+
+// the request that was started early gets no answer: the wait runs out
+{
+  const worker = load({ fetchImpl: async () => new Response('x'), timer: (fn) => queueMicrotask(fn) });
+  out.preload_silent = await summary(await ask(worker, navigation, new Promise(() => {})));
+}
+
 // what is not a page load is not touched
 {
   const worker = load({ fetchImpl: async () => { throw new Error('the worker must not fetch for these'); } });
@@ -120,6 +152,22 @@ for (const status of [200, 401, 403, 500]) {
   worker.handlers.activate({ waitUntil: (value) => { waited = value; } });
   await waited;
   out.lifecycle = { skipWaiting: worker.calls.skipWaiting, claim: worker.calls.claim, events: Object.keys(worker.handlers).sort(), routes, bareSkipWaiting: bare.calls.skipWaiting };
+}
+
+// taking over: the browser is asked to start the page's request early where it can be asked, and the worker takes over whatever the browser says
+{
+  let enabled = 0;
+  const waitFor = async (worker) => {
+    let waited;
+    worker.handlers.activate({ waitUntil: (value) => { waited = value; } });
+    await waited;
+  };
+  const offered = load({ fetchImpl: async () => new Response('x'), registration: { navigationPreload: { enable: async () => { enabled += 1; } } } });
+  const refused = load({ fetchImpl: async () => new Response('x'), registration: { navigationPreload: { enable: async () => { throw new Error('not allowed'); } } } });
+  const without = load({ fetchImpl: async () => new Response('x'), registration: {} });
+  const bare = load({ fetchImpl: async () => new Response('x') });
+  for (const worker of [offered, refused, without, bare]) await waitFor(worker);
+  out.preload_enabled = { enabled, offered: offered.calls.claim, refused: refused.calls.claim, without: without.calls.claim, bare: bare.calls.claim };
 }
 
 // across all of it, the worker never reached for storage or for anything but fetch
@@ -171,6 +219,27 @@ def test_a_server_that_answers_late_but_in_time_is_not_given_up_on(results: dict
     assert results["late"]["same"] is True
 
 
+def test_the_page_is_the_answer_to_the_request_the_browser_started_for_it_and_the_worker_asks_for_nothing_more(results: dict) -> None:
+    assert results["preloaded"] == {"same": True, "fetched": 0, "timers": [8000]}
+
+
+def test_where_no_request_was_started_early_the_worker_fetches_the_page_itself(results: dict) -> None:
+    assert results["preload_unused"] == {"same": True, "absent": True}
+
+
+def test_a_request_started_early_that_fails_shows_that_the_server_cannot_be_reached_and_is_not_made_again(results: dict) -> None:
+    got = results["preload_failed"]
+    assert got["intercepted"] and got["status"] == 200 and "Can't reach your music server" in got["body"] and got["fetched"] == 0
+
+
+def test_a_request_started_early_that_gets_no_answer_is_given_up_on(results: dict) -> None:
+    assert results["preload_silent"]["intercepted"] and "Can't reach your music server" in results["preload_silent"]["body"]
+
+
+def test_it_asks_the_browser_to_start_the_pages_request_and_takes_over_whatever_the_browser_says(results: dict) -> None:
+    assert results["preload_enabled"] == {"enabled": 1, "offered": 1, "refused": 1, "without": 1, "bare": 1}
+
+
 def test_only_a_page_load_is_taken_over(results: dict) -> None:
     """Scripts, the API, songs (with Range), covers, a form posted and a request that is not a navigation go straight to the network."""
     assert results["not_intercepted"] == {name: False for name in ("script", "api", "audio", "image", "form", "subresource")}
@@ -189,8 +258,8 @@ def test_it_keeps_nothing(results: dict) -> None:
     assert results["touched"] == []
     source = (STATIC_DIR / "sw.js").read_text(encoding="utf-8")
     code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("//"))
-    for word in ("caches", "indexedDB", "localStorage", "importScripts", "XMLHttpRequest", "postMessage", "navigationPreload"):
-        assert word not in code, word
+    for word in ("caches", "indexedDB", "localStorage", "importScripts", "XMLHttpRequest", "postMessage"):
+        assert word not in code, word  # (navigation preload keeps nothing either: the browser's own request for the page, passed on)
 
 
 def test_the_worker_file_is_small(results: dict) -> None:

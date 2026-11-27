@@ -8,6 +8,9 @@
 // address with a token in it) stored in the browser. Only the page itself is looked at; scripts, the API, songs and covers go straight
 // to the network, as they would without it.
 //
+// The page's request is the browser's own (navigation preload): one that the worker makes itself is taken for another by some browsers
+// (WebKit bugs 226386, 233640: a SameSite cookie goes missing).
+//
 // The word below is replaced with the app's version when the server sends this file, so that a new version of the app is a new file
 // and the browser installs it.
 const VERSION = '__VERSION__';
@@ -20,7 +23,10 @@ self.addEventListener('install', (event) => {
   // load goes to the network without the worker being asked at all.
   if (typeof event.addRoutes === 'function') event.addRoutes({ condition: { not: { requestMode: 'navigate' } }, source: 'network' });
 });
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) => event.waitUntil((async () => {
+  try { await self.registration.navigationPreload?.enable(); } catch { /* not offered */ }
+  await self.clients.claim();
+})()));
 
 const OFFLINE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -45,12 +51,13 @@ const unreachable = () =>
   new Response(OFFLINE, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 
 /** The page from the server, or the page that says it cannot be reached. A server that answers at all (a refusal, a sign-in page) is passed on as it is. */
-function page(request) {
+function page(event) {
   const waiting = new Promise((_, giveUp) => setTimeout(() => giveUp(new Error('no answer')), WAIT));
-  return Promise.race([fetch(request), waiting]).catch(unreachable);
+  const answer = Promise.resolve(event.preloadResponse).then((started) => started || fetch(event.request));
+  return Promise.race([answer, waiting]).catch(unreachable);
 }
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.mode === 'navigate' && request.method === 'GET') event.respondWith(page(request));
+  if (request.mode === 'navigate' && request.method === 'GET') event.respondWith(page(event));
 });

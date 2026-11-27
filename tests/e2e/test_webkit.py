@@ -1,11 +1,13 @@
 """The app in Safari's own engine (Playwright's WebKit build), as on an iPhone. Chromium stands in for Safari everywhere else in these tests; this
 is the one place that asks the engine itself: that the app starts and every screen fits, that signing in works, that the worker installs and says
-when the server cannot be reached, and, because the protection of a Tailscale sign-in rests on it, that Safari says where each request came from.
+when the server cannot be reached, that a device whose cookie went is signed in again by the key the app kept, that a link from another site opens the app signed in,
+and, because the protection of a Tailscale sign-in rests on it, that Safari says where each request came from.
 
 It skips where WebKit is not installed (`playwright install webkit`, and on Linux `playwright install-deps webkit`), unless MTK_REQUIRE_WEBKIT is set."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -70,7 +72,7 @@ def test_the_page_that_asks_for_the_token_signs_a_device_in_in_safaris_engine(we
     page.wait_for_selector(".tabbar")
     assert page.url == live.base + "/"
     cookie = next(c for c in context.cookies() if c["name"] == "mtk_session")
-    assert cookie["httpOnly"] and cookie["sameSite"] == "Strict"
+    assert cookie["httpOnly"] and cookie["sameSite"] == "Lax"
     context.close()
     assert not problems, problems
 
@@ -105,7 +107,7 @@ def test_a_device_tailscale_vouches_for_is_signed_in_in_safaris_engine_and_stays
     page.wait_for_selector(".tabbar")
     expect(page.get_by_label("Access token")).to_have_count(0)
     cookie = next(c for c in context.cookies() if c["name"] == "mtk_session")
-    assert cookie["value"].startswith("tailnet.") and cookie["httpOnly"] and cookie["sameSite"] == "Strict" and TOKEN not in cookie["value"]
+    assert cookie["value"].startswith("tailnet.") and cookie["httpOnly"] and cookie["sameSite"] == "Lax" and TOKEN not in cookie["value"]
     context.set_extra_http_headers({})
     page.reload()
     page.wait_for_selector(".tabbar")  # (the cookie alone)
@@ -134,5 +136,75 @@ def test_safari_says_a_request_came_from_another_site_and_so_such_a_page_cannot_
     page.goto(listed.base + "/")
     page.wait_for_selector(".tabbar")
     assert listed.log and {status for _, _, status, _, _ in listed.log} == {200}
+    context.close()
+    assert not problems, problems
+
+
+# ---------------------------------------------------------------------------------------------------- staying signed in
+
+KEY = "mtk.remember.v1"
+
+
+@pytest.fixture
+def kept(tmp_path: Path):
+    """A server that keeps devices signed in for 90 days."""
+    served = serve_app(tmp_path)
+    yield served
+    stop_app(served)
+
+
+def _signed_in(page, served) -> None:
+    page.goto(f"{served.base}/?token={TOKEN}")
+    page.wait_for_selector(".tabbar")
+    wait_until(page, f"localStorage.getItem('{KEY}') !== null", 10)
+
+
+def test_a_device_whose_safari_lost_the_cookie_is_signed_in_again_by_the_key_the_app_kept(webkit, kept, iphone):
+    context, page, problems = _device(webkit, iphone)
+    _signed_in(page, kept)
+    context.clear_cookies()
+    page.reload()
+    page.wait_for_selector(".tabbar")  # (nobody typed: the key signed the device in)
+    cookie = next(c for c in context.cookies() if c["name"] == "mtk_session")
+    assert cookie["httpOnly"] and cookie["sameSite"] == "Lax" and cookie["expires"] > time.time() + 80 * 86400
+    expect(page.get_by_label("Access token")).to_have_count(0)
+    context.close()
+    assert not problems, problems
+
+
+def test_safari_opens_the_app_signed_in_from_a_link_on_another_site_and_a_link_to_its_api_gets_nothing(webkit, kept, iphone):
+    context, page, problems = _device(webkit, iphone)
+    _signed_in(page, kept)
+    wait_until(page, "navigator.serviceWorker.controller !== null", 10)  # (the worker is in charge, as it is when the app is opened from its icon)
+    elsewhere = Elsewhere(kept.base, links=True)
+    try:
+        kept.pages.clear()
+        page.goto(elsewhere.url)
+        page.click("#app")
+        page.wait_for_selector(".tabbar")
+        assert [(m, s, site, cookie) for m, s, _, site, cookie in kept.pages] == [("GET", 200, "cross-site", True)], kept.pages
+        page.goto(elsewhere.url)
+        kept.log.clear()
+        with page.expect_response(lambda response: response.url.endswith("/api/about")) as asked:
+            page.click("#api")
+        assert asked.value.status == 403
+        assert kept.log == [("GET", "/api/about", 403, "cross-site", False)], kept.log
+    finally:
+        elsewhere.stop()
+    context.close()
+    assert not problems, problems
+
+
+def test_the_worker_in_safaris_engine_has_the_browser_make_the_pages_request_where_the_engine_can_and_never_asks_twice(webkit, kept, iphone):
+    context, page, problems = _device(webkit, iphone)
+    _signed_in(page, kept)
+    wait_until(page, "navigator.serviceWorker.controller !== null", 10)
+    can = page.evaluate("'navigationPreload' in ServiceWorkerRegistration.prototype")
+    if can:
+        wait_until(page, "navigator.serviceWorker.ready.then(r => r.navigationPreload.getState()).then(s => s.enabled)", 10)
+    kept.pages.clear()
+    page.reload()
+    page.wait_for_selector(".tabbar")
+    assert [(m, s, preload, cookie) for m, s, preload, _, cookie in kept.pages] == [("GET", 200, "true" if can else "", True)], (can, kept.pages)
     context.close()
     assert not problems, problems
