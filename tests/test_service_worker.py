@@ -263,4 +263,5 @@ def test_it_keeps_nothing(results: dict) -> None:
 
 
 def test_the_worker_file_is_small(results: dict) -> None:
-    assert (STATIC_DIR / "sw.js").stat().st_size < 4096  # (it is all there is to read: keep it that way)
+    size = len((STATIC_DIR / "sw.js").read_bytes().replace(b"\r\n", b"\n"))  # (a checkout that makes two bytes of every line end, as Windows' does, has not made the file longer)
+    assert size < 4096  # (it is all there is to read: keep it that way)
