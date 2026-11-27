@@ -419,8 +419,9 @@ drive attached. The step-by-step guide, the systemd service and an example confi
 - **The token** is `MTK_TOKEN` or the file `server.token` next to `config.toml` (made at the first start, readable by its owner only, never printed).
   `mtk token --url https://NAME` shows the link to open once on each device; the device then stays signed in for `[server] login_days` (90). The cookie is
   `HttpOnly` and `SameSite=Lax` (Strict leaves a cookie out of a page opened from an icon or from a link in another app, and the device would be asked for a token
-  it already gave), and Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`); `/api` refuses a request that the browser
-  says a page of another site made, whatever cookie it carries. A web app on a Dock or Home Screen is a browser of its own, and WebKit's bug tracker has reports of
+  it already gave), and Secure when a proxy on the same computer says the page came over https (`X-Forwarded-Proto`); `/api` refuses a link followed from another
+  site, and any request that changes something, that the browser says a page of another site (or of another name under the same domain) made, whatever cookie
+  it carries. A web app on a Dock or Home Screen is a browser of its own, and WebKit's bug tracker has reports of
   such apps starting without the cookies they were closed with, so the app also keeps a key in that browser's storage (made from the token and the day it ends, good
   only at one address, where it is exchanged for the same cookie): a device whose cookie is gone signs itself in again before anyone is asked, and *Sign out of this
   device* in Settings throws the key and the cookie away. A browser that has only the address (or whose cookie ended and has no key) gets a page with a box for the

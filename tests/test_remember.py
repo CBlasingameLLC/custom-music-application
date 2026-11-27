@@ -316,22 +316,44 @@ def test_signing_out_takes_the_cookie_away(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------------------------------- a request from another site
 
 
+REFUSED = {"detail": "this request came from a page of another site"}
+
+
 @pytest.mark.parametrize("site", ["cross-site", "same-site"])
-def test_a_request_to_the_api_that_a_browser_says_another_site_made_is_refused_though_the_cookie_rides_along(tmp_path: Path, site: str) -> None:
+def test_a_link_followed_from_another_site_and_a_request_that_changes_something_are_refused_though_the_cookie_rides_along(tmp_path: Path, site: str) -> None:
     web = _web(tmp_path)
     device = _signed_in(web)
-    said = {"sec-fetch-site": site}
-    for answer in (device.get("/api/about", headers=said), device.post("/api/session/signout", headers=said), device.get("/api/session", headers=said)):
-        assert answer.status_code == 403 and answer.json() == {"detail": "this request came from a page of another site"}
-        assert "set-cookie" not in answer.headers  # (nothing is taken away from the device: a link on another site must not sign it out)
+    link = {"sec-fetch-site": site, "sec-fetch-mode": "navigate", "sec-fetch-dest": "document"}
+    answers = [device.get("/api/about", headers=link), device.head("/api/about", headers=link), device.get("/api/session", headers=link)]
+    answers += [device.request(method, "/api/session/signout", headers={"sec-fetch-site": site, "sec-fetch-mode": "cors"}) for method in ("POST", "PUT", "PATCH", "DELETE")]
+    for answer in answers:
+        assert answer.status_code == 403 and "set-cookie" not in answer.headers  # (nothing is taken away from the device: a link on another site must not sign it out)
+        assert answer.request.method == "HEAD" or answer.json() == REFUSED
     assert device.get("/api/about").status_code == 200  # (the device is as signed in as it was)
-    assert device.get("/api/about", headers={"sec-fetch-site": "cross-site", "x-mtk-token": TOKEN}).status_code == 403  # (whatever else it carries)
+    assert device.get("/api/about", headers={**link, "x-mtk-token": TOKEN}).status_code == 403  # (whatever else it carries)
 
 
-@pytest.mark.parametrize("site", ["same-origin", "none", ""])
-def test_the_apps_own_requests_and_those_of_a_program_are_answered(tmp_path: Path, site: str) -> None:
+@pytest.mark.parametrize(
+    ("site", "method", "mode", "refused"),
+    [
+        ("cross-site", "GET", "navigate", True), ("same-site", "GET", "navigate", True), ("cross-site", "HEAD", "navigate", True), ("same-site", "HEAD", "navigate", True),
+        ("cross-site", "POST", "cors", True), ("same-site", "POST", "no-cors", True), ("cross-site", "POST", "", True), ("same-site", "POST", "navigate", True),
+        ("cross-site", "PUT", "cors", True), ("cross-site", "PATCH", "cors", True), ("same-site", "DELETE", "cors", True),
+        # a page of another site that only reads (a song, a cover, a call that changes nothing): it cannot read the answer, and music must not stop for a browser's mistake
+        ("cross-site", "GET", "cors", False), ("cross-site", "GET", "no-cors", False), ("same-site", "GET", "same-origin", False), ("cross-site", "GET", "", False),
+        ("same-site", "HEAD", "no-cors", False),
+        # the app's own requests, an address typed or an icon, and a program (which says nothing)
+        ("same-origin", "GET", "navigate", False), ("none", "GET", "navigate", False), ("same-origin", "POST", "cors", False), ("none", "POST", "", False),
+        ("", "POST", "", False), ("", "GET", "navigate", False), ("", "GET", "", False),
+    ],
+)
+def test_what_a_browser_says_of_where_a_request_came_from_decides_whether_it_is_answered(tmp_path: Path, site: str, method: str, mode: str, refused: bool) -> None:
     device = _signed_in(_web(tmp_path))
-    assert device.get("/api/about", headers={"sec-fetch-site": site} if site else {}).status_code == 200
+    said = {name: value for name, value in {"sec-fetch-site": site, "sec-fetch-mode": mode}.items() if value}
+    answer = device.request(method, "/api/about", headers=said)
+    assert (answer.status_code == 403) is refused, answer.status_code
+    if refused and method != "HEAD":
+        assert answer.json() == REFUSED
 
 
 def test_a_request_without_a_cookie_from_another_site_is_refused_as_before(tmp_path: Path) -> None:

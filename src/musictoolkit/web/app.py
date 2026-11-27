@@ -10,8 +10,9 @@ must not be able to drive it):
     request that opens the app from an icon or from a link in another app: Strict
     leaves the cookie out of those, and a device would be asked for the token it
     already gave). Lax lets a cookie ride along on a link that is followed from
-    another site, so /api/* refuses a request that the browser says came from
-    another site. The desktop app's token is new at every launch and its cookie
+    another site, so /api/* refuses a link followed from another site, and any
+    request that changes something, that the browser says another site (or another
+    name under the same domain) made. The desktop app's token is new at every launch and its cookie
     ends with the window; a server's token is the same every time and its cookie
     lasts `login_days`, and the app keeps a key besides (remember.py) that gets
     the cookie back when the browser has lost it;
@@ -240,9 +241,12 @@ def create_app(
         return HTMLResponse(page, status_code=status, headers=headers)
 
     def from_another_site(request: Request) -> bool:
-        """Does the browser say that this request was made by a page of another site (or of a sibling name of this one: `Sec-Fetch-Site` says "same-site" then)?
-        What is not a browser's (a program, the desktop shell) does not say, and is not asked."""
-        return request.headers.get("sec-fetch-site") in ("cross-site", "same-site")
+        """Does the browser say that this request is a link followed from, or a change asked for by, a page of another site (or of a sibling name of this one, under the
+        same domain: `Sec-Fetch-Site` says "same-site" then)? A song, a cover or a call that only reads, loaded by such a page, is not asked about: the page cannot read
+        the answer, nothing is changed, and a browser that was wrong about where a song's request came from must not stop the music. What is not a browser's (a program,
+        the desktop shell) does not say, and is not asked."""
+        elsewhere = request.headers.get("sec-fetch-site") in ("cross-site", "same-site")
+        return elsewhere and (request.method not in ("GET", "HEAD") or request.headers.get("sec-fetch-mode") == "navigate")
 
     def too_many(wait: int) -> str:
         return f"Too many wrong tokens. Try again in {wait} seconds."
@@ -255,8 +259,8 @@ def create_app(
             return JSONResponse({"detail": "forbidden host"}, status_code=403)
         vouched_for: str | None = None  # the login that Tailscale vouched for, when that is what lets this request in: it gets the cookie
         if ctx.token and request.url.path.startswith("/api/") and signed_in(request) and from_another_site(request):
-            # (the cookie is Lax, which lets it ride along on a link that is followed from another site: the data is not for that page's reading, but nothing it can
-            # make this browser ask for is let in, and nothing is taken away from the device either: it is not told to forget the cookie)
+            # (the cookie is Lax, which lets it ride along on a link that is followed from another site; and a page on a sibling name under the same domain, which
+            # Strict and Lax both count as the same site, could ask for a change. Neither is let in, and nothing is taken away from the device: it is not told to forget the cookie)
             return JSONResponse({"detail": "this request came from a page of another site"}, status_code=403)
         if ctx.token and request.url.path.startswith("/api/") and not signed_in(request):
             said = seen(request)

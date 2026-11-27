@@ -338,10 +338,9 @@ def test_the_app_can_say_how_a_device_is_signed_in_and_what_tailscale_says_about
     assert by_token.get("/api/session", headers={"tailscale-user-login": "mallory@example.com"}).json()["tailscale"] == {
         "on": True, "login": "mallory@example.com", "allowed": False, "own_page": True,
     }
-    refused = by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site"})  # (the cookie is Lax: it rides along on a link that is followed from another site)
-    assert refused.status_code == 403 and refused.json() == {"detail": "this request came from a page of another site"}
-    program = _device(web).get("/api/session", headers={**ID, "sec-fetch-site": "cross-site", "x-mtk-token": TOKEN})  # (no cookie: the token, from a program that is told another site made it)
-    assert program.status_code == 200 and program.json()["tailscale"]["own_page"] is False
+    assert by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site"}).json()["tailscale"]["own_page"] is False  # (a page of another site that only reads: not asked)
+    link = by_token.get("/api/session", headers={**ID, "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate"})  # (the cookie is Lax: it rides along on a link followed from another site)
+    assert link.status_code == 403 and link.json() == {"detail": "this request came from a page of another site"}
 
     by_tailscale = _device(web)
     first = by_tailscale.get("/api/session", headers=ID)
