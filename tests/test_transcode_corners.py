@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from musictoolkit import transcode
@@ -318,9 +319,9 @@ def test_a_song_made_for_one_listener_has_a_place_or_is_refused_and_the_program_
     heard = made.direct(path, 64, 5.0)
     assert next(heard).startswith(b"[64|5.000|0000]")  # (it began: the stand-in gave a piece, and now sleeps for a minute)
     pid = int(pids.read_text(encoding="utf-8").split()[-1])
+    assert psutil.pid_exists(pid)
     heard.close()  # (the listener goes)
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert not psutil.pid_exists(pid)  # (the program was stopped, and its end was waited for: not even a dead one is left)
     assert made._slots.acquire(blocking=False)  # (and the place is free again)
     made._slots.release()
     made.close()
@@ -420,6 +421,7 @@ def test_what_ffmpeg_complained_of_is_the_last_four_hundred_characters_of_it_rea
     made.close()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not let a file that is open be taken away")
 def test_a_half_made_file_that_was_taken_away_by_someone_is_no_trouble_when_the_program_fails(tmp_path: Path) -> None:
     made = Transcoder(cache_dir=tmp_path / "cache", command=STUB)
     path = song(tmp_path, "crash 5 200")
