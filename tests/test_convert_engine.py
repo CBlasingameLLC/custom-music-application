@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import re
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
@@ -409,34 +410,7 @@ def test_running_out_of_room_is_said_in_words_and_leaves_nothing(tmp_path: Path,
     assert not out.exists()
 
 
-@pytest.mark.parametrize("exc,full", [
-    (OSError(errno.ENOSPC, "No space left on device"), True),
-    (OSError(errno.ENOSPC, "Il n'y a plus de place sur le disque"), True),  # (the number, when the words are another language's)
-    (RuntimeError("System error : No space left on device."), True),  # (the words, when only they come through)
-    (RuntimeError("Error opening '/music/Outer Space/01.flac': Format not recognised."), False),  # (a folder called Space is not a full drive)
-    (OSError(errno.ENOENT, "No such file or directory", "/music/Outer Space/01.flac"), False),
-    (OSError(errno.EIO, "Input/output error"), False),
-])
-def test_what_counts_as_the_drive_running_full(exc: BaseException, full: bool) -> None:
-    assert engine.no_room(exc) is full
-
-
-@pytest.mark.parametrize("free,full", [(0, True), (300 * 1024, True), (engine.LOW_ROOM - 1, True), (engine.LOW_ROOM, False), (100 * 1024**2, False), (50 * 1024**3, False)])
-def test_the_audio_librarys_bare_system_error_is_a_full_drive_when_the_drive_is_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, free: int, full: bool) -> None:
-    monkeypatch.setattr(engine.shutil, "disk_usage", lambda folder: SimpleNamespace(total=10**12, used=10**12 - free, free=free))
-    refused = sf.LibsndfileError(2)  # (all that libsndfile says of a write that the system refused: found on a drive that was really full)
-    assert str(refused) == "System error."
-    assert engine.no_room(refused, tmp_path) is full
-    assert engine.no_room(refused) is False  # (with no folder there is no drive to look at)
-    assert engine.no_room(RuntimeError("Something else went wrong."), tmp_path) is False  # (and only that one message is taken for it)
-
-
-def test_a_drive_that_cannot_be_looked_at_is_not_taken_for_a_full_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def gone(folder: Path) -> None:
-        raise FileNotFoundError(errno.ENOENT, "No such file or directory")
-
-    monkeypatch.setattr(engine.shutil, "disk_usage", gone)
-    assert engine.no_room(sf.LibsndfileError(2), tmp_path) is False
+# (what counts as the drive running full is tested where `no_room` lives: tests/test_media_room.py)
 
 
 @pytest.mark.parametrize("full,said", [
@@ -463,7 +437,7 @@ def test_a_write_the_audio_library_refuses_is_a_full_drive_only_if_the_drive_is_
         return SimpleNamespace(total=10**12, used=10**12 - free, free=free)
 
     monkeypatch.setattr(engine, "_open_writer", lambda *args, **kwargs: Refusing())
-    monkeypatch.setattr(engine.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
     with pytest.raises(ConvertError, match=said):
         convert(src, out, Spec("mp3"))
     assert not out.exists()

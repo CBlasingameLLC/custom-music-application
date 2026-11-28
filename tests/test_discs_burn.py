@@ -375,6 +375,16 @@ def test_running_out_of_room_for_the_temporary_copy_is_said_in_words(tmp_path: P
         decode_to_pcm(song(tmp_path, "f.wav", noise(FIVE_SECONDS), subtype="PCM_16"), tmp_path / "f.pcm")
 
 
+def test_a_folder_called_outer_space_is_not_taken_for_a_full_drive(tmp_path: Path) -> None:
+    """The check reads what the system says of the failure, never the file's name (which is in the whole message): a missing folder called "Outer Space" is not
+    a drive without room."""
+    song_file = song(tmp_path, "f.wav", noise(FIVE_SECONDS), subtype="PCM_16")
+    target = tmp_path / "Outer Space" / "gone" / "f.pcm"
+    with pytest.raises(BurnError, match=r"^f\.wav: the song could not be converted \(.*Outer Space.*\)\.$") as refused:
+        decode_to_pcm(song_file, target)
+    assert "not enough room" not in str(refused.value) and not target.exists()
+
+
 def test_a_file_that_turns_out_to_hold_no_sound_is_refused_and_leaves_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = song(tmp_path, "liar.wav", noise(FIVE_SECONDS), subtype="PCM_16")  # (its header promises sound; the decoder finds none)
     monkeypatch.setattr(sf.SoundFile, "read", lambda self, *a, **k: np.zeros((0, self.channels), dtype=np.int16))

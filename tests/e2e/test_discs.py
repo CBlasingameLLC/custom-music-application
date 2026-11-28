@@ -16,11 +16,13 @@ import soundfile as sf
 from playwright.sync_api import expect
 
 from musictoolkit.discs import helper as disc_helper
+from musictoolkit.discs.encode import NO_ROOM
 from musictoolkit.discs.toc import Toc, Track
 from tests.e2e.conftest import add_library, wait_until
 from tests.fake_disc_helper import add_drive, audio, audio_disc, set_control
 from tests.fake_musicbrainz import musicbrainz_script, release_xml
 from tests.fake_streams import serve_script
+from tests.full_drive import drive_fills_up
 
 expect.set_options(timeout=15_000)
 
@@ -468,6 +470,49 @@ def test_a_rip_can_be_stopped_and_what_was_done_is_kept_and_can_be_taken_back(pa
     wait_until(page, "fetch('/api/discs/rips').then(r => r.json()).then(d => !!d.rips[0].undone_at)", 30)
     assert sorted(Path(p).name for p in recycle) == kept
     assert not list(live.library.rglob("*.flac"))
+
+
+def test_a_drive_that_fills_up_ends_the_rip_and_the_page_says_why_of_every_song_that_was_not_ripped(page, live, world, monkeypatch) -> None:
+    drive_fills_up(monkeypatch, "02 - Two.flac.part")  # (song 1 fits; the room runs out in the middle of song 2)
+    add_library(page, live)
+    with musicbrainz(live, monkeypatch, *albums("The Real Name")):
+        open_discs(page)
+        start_button(page).click()
+        callout = page.locator(".callout", has_text="Ripped 1 song of 3")  # (of the three that were asked for, not of the one that was ripped)
+        expect(callout).to_be_visible(timeout=60_000)
+        expect(callout).to_contain_text(NO_ROOM)
+    songs = page.locator(".rip-tracks li")
+    expect(songs.nth(0)).to_contain_text("Done")
+    for number in (1, 2):  # the song the room ran out on, and the one that was never reached: both are not ripped, and both say why
+        expect(songs.nth(number)).to_contain_text("Not ripped")
+        expect(songs.nth(number)).to_contain_text(NO_ROOM)
+    assert [p.name for p in album_dir(live).iterdir()] == ["01 - One.flac"], "the song that did not fit is not left half written"
+
+    page.get_by_role("tab", name="History").click()
+    row = page.locator(".rip-row").first
+    expect(row).to_contain_text("Partly done")
+    row.get_by_role("button", name="Details").click()
+    expect(row.locator(".rip-tracks li")).to_have_count(3)
+    for number in (1, 2):
+        expect(row.locator(".rip-tracks li").nth(number)).to_contain_text("Not ripped")
+        expect(row.locator(".rip-tracks li").nth(number)).to_contain_text(NO_ROOM)
+
+
+def test_a_song_the_person_left_out_is_still_left_out_when_the_drive_fills_up(page, live, world, monkeypatch) -> None:
+    drive_fills_up(monkeypatch, "02 - Two.flac.part")
+    add_library(page, live)
+    with musicbrainz(live, monkeypatch, *albums("The Real Name")):
+        open_discs(page)
+        expect(page.get_by_label("Title of song 2")).to_have_value("Two")
+        page.get_by_label("Rip song 3").uncheck()
+        page.get_by_role("button", name="Rip 2 songs").click()
+        callout = page.locator(".callout", has_text="Ripped 1 song of 2")  # (two were asked for: the song left out is not one of them)
+        expect(callout).to_be_visible(timeout=60_000)
+        expect(callout).to_contain_text(NO_ROOM)
+    songs = page.locator(".rip-tracks li")
+    expect(songs.nth(1)).to_contain_text("Not ripped")
+    expect(songs.nth(2)).to_contain_text("Left out")
+    expect(songs.nth(2)).not_to_contain_text(NO_ROOM)  # (it was not left out for want of room)
 
 
 def test_a_rip_that_is_still_going_is_picked_up_again_after_the_page_is_reloaded(page, live, world, monkeypatch) -> None:

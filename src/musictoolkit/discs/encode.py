@@ -14,6 +14,7 @@ from typing import BinaryIO, Callable
 import numpy as np
 
 from musictoolkit.discs.helper import SECTOR_BYTES
+from musictoolkit.media.room import no_room
 
 FORMATS = ("flac", "mp3")
 EXTENSIONS = {"flac": "flac", "mp3": "mp3"}
@@ -24,12 +25,25 @@ DEFAULT_QUALITY = {"flac": "standard", "mp3": "256"}
 SAMPLE_RATE = 44100
 CHANNELS = 2
 CHUNK_BYTES = SECTOR_BYTES * 256  # about 600 KB at a time
+NO_ROOM = "There is not enough room on the drive for the music."
 
 
 class EncodeError(Exception):
     """The file could not be written; the message says why, in words for the person."""
 
     for_the_person = True
+
+
+class NoRoomError(EncodeError):
+    """The drive has run out of room. Every song after this one would fail the same way, so a rip ends here and says so."""
+
+
+def _failed(exc: BaseException, folder: Path, what: str) -> EncodeError:
+    """The error for a write that failed: the drive running full if that is what it was, else whatever it was, in the library's own words. This has to
+    be called while what was half written is still on the drive: taking it away gives its room back, and the drive then looks as if it had plenty."""
+    if no_room(exc, folder):
+        return NoRoomError(NO_ROOM)
+    return EncodeError(f"The file could not be {what} ({exc}).")
 
 
 def check_choice(fmt: str, quality: str) -> None:
@@ -66,7 +80,7 @@ class Encoder:
                     bitrate_mode="CONSTANT", compression_level=MP3_LEVELS[quality],
                 )
         except (OSError, RuntimeError) as exc:
-            raise EncodeError(f"The file could not be created ({exc}).") from None
+            raise _failed(exc, self.path.parent, "created") from None
 
     def write(self, pcm: bytes) -> None:
         if len(pcm) % 4:
@@ -79,15 +93,13 @@ class Encoder:
         try:
             self._file.write(samples)
         except (OSError, RuntimeError) as exc:
-            if "space" in str(exc).lower():
-                raise EncodeError("There is not enough room on the drive for the music.") from None
-            raise EncodeError(f"The file could not be written ({exc}).") from None
+            raise _failed(exc, self.path.parent, "written") from None
 
     def close(self) -> None:
         try:
             self._file.close()
         except (OSError, RuntimeError) as exc:
-            raise EncodeError(f"The file could not be finished ({exc}).") from None
+            raise _failed(exc, self.path.parent, "finished") from None
 
     def __enter__(self) -> "Encoder":
         return self
